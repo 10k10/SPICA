@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Simulation outputs
+mc_results/
+mc_results_mock/
+figures/
+chunks/
+*.raw
+*.op.raw
+*.db
+*.log
+
+# Generated reports
+*.pdf
+mc_report_*.html
+
+# But keep the Jinja2 template
+!templates/
+
+# Test circuit files (not part of source)
+circuit_test.*
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Claude Code
+.claude/

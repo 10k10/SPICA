@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Monte Carlo Analysis Report — {{ project.name }}</title>
+<style>
+/* ------------------------------------------------------------------ */
+/* Reset e base                                                         */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 10pt;
+  color: #222;
+  background: #fff;
+  line-height: 1.4;
+}
+
+/* ------------------------------------------------------------------ */
+/* Paginação                                                            */
+/* ------------------------------------------------------------------ */
+@page {
+  size: A4;
+  margin: 18mm 16mm 18mm 16mm;
+  @bottom-right { content: "Pág. " counter(page) " / " counter(pages); font-size: 8pt; color: #888; }
+  @bottom-left  { content: "{{ project.name }} — v{{ project.version }}"; font-size: 8pt; color: #888; }
+}
+
+.page-break-before { page-break-before: always; }
+.page-break-after  { page-break-after:  always; }
+.avoid-break       { page-break-inside: avoid; }
+
+/* ------------------------------------------------------------------ */
+/* Capa                                                                 */
+/* ------------------------------------------------------------------ */
+.cover {
+  display: flex;
+  flex-direction: column;
+  min-height: 240mm;
+  justify-content: flex-start;
+  padding-top: 20mm;
+}
+
+.cover-logo {
+  width: 60mm; height: 20mm;
+  background: #e0e0e0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12pt; color: #888; font-weight: bold;
+  margin-bottom: 16mm;
+  border: 1px solid #ccc;
+}
+
+.cover h1 {
+  font-size: 22pt;
+  color: #1a3a5c;
+  margin-bottom: 4mm;
+}
+
+.cover h2 {
+  font-size: 14pt;
+  color: #444;
+  font-weight: normal;
+  margin-bottom: 12mm;
+}
+
+.cover-meta {
+  display: grid;
+  grid-template-columns: 120pt auto;
+  gap: 3pt 12pt;
+  font-size: 9pt;
+  margin-bottom: 12mm;
+}
+
+.cover-meta .key   { font-weight: bold; color: #1a3a5c; }
+.cover-meta .value { color: #333; }
+
+/* ------------------------------------------------------------------ */
+/* Tipografia                                                           */
+/* ------------------------------------------------------------------ */
+h1 { font-size: 15pt; color: #1a3a5c; margin: 6mm 0 2mm; border-bottom: 1.5pt solid #1a3a5c; padding-bottom: 1mm; }
+h2 { font-size: 12pt; color: #1a3a5c; margin: 5mm 0 2mm; }
+h3 { font-size: 10pt; color: #333; margin: 4mm 0 1.5mm; border-bottom: 0.5pt solid #ccc; padding-bottom: 1mm; }
+
+p  { margin-bottom: 2mm; }
+
+/* ------------------------------------------------------------------ */
+/* Tabelas                                                              */
+/* ------------------------------------------------------------------ */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8.5pt;
+  margin-bottom: 4mm;
+  page-break-inside: avoid;
+}
+
+th {
+  background: #1a3a5c;
+  color: #fff;
+  font-weight: bold;
+  padding: 3pt 5pt;
+  text-align: center;
+  border: 0.5pt solid #1a3a5c;
+}
+
+td {
+  padding: 2.5pt 5pt;
+  border: 0.5pt solid #ccc;
+  vertical-align: middle;
+}
+
+tr:nth-child(even) td { background: #f5f5f5; }
+tr:nth-child(odd)  td { background: #fff; }
+
+.td-center { text-align: center; }
+.td-right  { text-align: right; }
+.td-mono   { font-family: "Courier New", monospace; font-size: 8pt; }
+
+/* ------------------------------------------------------------------ */
+/* Status badges                                                        */
+/* ------------------------------------------------------------------ */
+.badge {
+  display: inline-block;
+  padding: 1pt 5pt;
+  border-radius: 3pt;
+  font-weight: bold;
+  font-size: 8pt;
+}
+.badge-pass     { background: #d4edda; color: #2d7a2d; border: 0.5pt solid #2d7a2d; }
+.badge-fail     { background: #f8d7da; color: #a00000; border: 0.5pt solid #a00000; }
+.badge-marginal { background: #fff3cd; color: #b85c00; border: 0.5pt solid #b85c00; }
+
+/* ------------------------------------------------------------------ */
+/* Verdict final                                                        */
+/* ------------------------------------------------------------------ */
+.verdict-box {
+  text-align: center;
+  padding: 8mm;
+  margin: 8mm 0;
+  border-radius: 4pt;
+  font-size: 24pt;
+  font-weight: bold;
+  page-break-inside: avoid;
+}
+.verdict-PASS     { background: #d4edda; color: #2d7a2d; border: 2pt solid #2d7a2d; }
+.verdict-FAIL     { background: #f8d7da; color: #a00000; border: 2pt solid #a00000; }
+.verdict-MARGINAL { background: #fff3cd; color: #b85c00; border: 2pt solid #b85c00; }
+
+/* ------------------------------------------------------------------ */
+/* Figuras                                                              */
+/* ------------------------------------------------------------------ */
+.figure-wrap {
+  page-break-inside: avoid;
+  margin-bottom: 3mm;
+}
+
+.figure-wrap img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border: 0.5pt solid #ddd;
+}
+
+.figure-row {
+  display: flex;
+  gap: 4mm;
+  margin-bottom: 3mm;
+  page-break-inside: avoid;
+}
+
+.figure-row .figure-wrap { flex: 1; }
+
+/* ------------------------------------------------------------------ */
+/* Caixa de aviso                                                       */
+/* ------------------------------------------------------------------ */
+.warn-box {
+  background: #fff3cd;
+  border: 1pt solid #b85c00;
+  border-radius: 3pt;
+  padding: 4mm 5mm;
+  font-size: 8.5pt;
+  color: #5a3000;
+  margin: 3mm 0;
+  page-break-inside: avoid;
+}
+
+.warn-box strong { color: #b85c00; }
+
+.info-box {
+  background: #d1ecf1;
+  border: 1pt solid #0c6278;
+  border-radius: 3pt;
+  padding: 4mm 5mm;
+  font-size: 8.5pt;
+  color: #0c4a5a;
+  margin: 3mm 0;
+  page-break-inside: avoid;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tabela de estatísticas 2 colunas                                    */
+/* ------------------------------------------------------------------ */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 6mm;
+  margin-bottom: 4mm;
+}
+.stats-grid table { margin: 0; }
+
+/* ------------------------------------------------------------------ */
+/* Sumário de runs                                                      */
+/* ------------------------------------------------------------------ */
+.run-summary-bar {
+  display: flex;
+  gap: 6mm;
+  align-items: center;
+  background: #f0f4fa;
+  border: 0.5pt solid #b0c4de;
+  padding: 3mm 5mm;
+  border-radius: 3pt;
+  margin-bottom: 4mm;
+  font-size: 9pt;
+}
+.run-summary-bar .metric { text-align: center; }
+.run-summary-bar .metric .val { font-size: 14pt; font-weight: bold; color: #1a3a5c; }
+.run-summary-bar .metric .lbl { font-size: 7.5pt; color: #666; }
+</style>
+</head>
+<body>
+
+<!-- ================================================================ -->
+<!-- CAPA                                                              -->
+<!-- ================================================================ -->
+<div class="cover page-break-after">
+  <div class="cover-logo">LOGO</div>
+  <h1>Monte Carlo Analysis Report</h1>
+  <h2>{{ project.name }}</h2>
+
+  <div class="cover-meta">
+    <span class="key">Versão:</span>      <span class="value">{{ project.version }}</span>
+    <span class="key">Autor:</span>       <span class="value">{{ project.author or "—" }}</span>
+    <span class="key">Data geração:</span><span class="value">{{ generated_at }}</span>
+    <span class="key">Arquivo .asc:</span><span class="value td-mono">{{ project.asc_path or "—" }}</span>
+    <span class="key">Total de runs:</span>
+    <span class="value">{{ n_runs_total }}
+      {% if n_runs_failed > 0 %}
+        <span style="color:#a00000;">({{ n_runs_failed }} falhas descartadas)</span>
+      {% endif %}
+    </span>
+    <span class="key">Cores utilizados:</span><span class="value">{{ project.n_cores }}</span>
+  </div>
+
+  <!-- Resumo executivo -->
+  <h2>Resumo Executivo</h2>
+  <table class="avoid-break">
+    <thead>
+      <tr>
+        <th>Par</th>
+        <th>Runs válidos</th>
+        <th>Sigma Level</th>
+        <th>Cpk</th>
+        <th>Yield Obs. (%)</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in pairs %}
+      {% set st = item.stats %}
+      {% set sigma = st.sigma_level %}
+      {% if sigma is not none and sigma >= 4 %}
+        {% set badge = "badge-pass" %}{% set verdict = "PASS" %}
+      {% elif sigma is not none and sigma >= 3 %}
+        {% set badge = "badge-marginal" %}{% set verdict = "MARGINAL" %}
+      {% elif st.yield_observed_pct is not none and st.yield_observed_pct >= 99.73 %}
+        {% set badge = "badge-pass" %}{% set verdict = "PASS" %}
+      {% elif st.yield_observed_pct is not none and st.yield_observed_pct >= 99.0 %}
+        {% set badge = "badge-marginal" %}{% set verdict = "MARGINAL" %}
+      {% else %}
+        {% set badge = "badge-fail" %}{% set verdict = "FAIL" %}
+      {% endif %}
+      <tr>
+        <td>{{ item.pair.label }}</td>
+        <td class="td-center">{{ (n_runs_total - n_runs_failed) if st.mean is not none else "—" }}</td>
+        <td class="td-center">{{ "%.2f"|format(sigma) if sigma is not none else "—" }}</td>
+        <td class="td-center">{{ "%.3f"|format(st.cpk) if st.cpk is not none else "—" }}</td>
+        <td class="td-center">{{ "%.2f"|format(st.yield_observed_pct) if st.yield_observed_pct is not none else "—" }}</td>
+        <td class="td-center"><span class="badge {{ badge }}">{{ verdict }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Verdict global -->
+  <div class="verdict-box verdict-{{ summary.verdict }}">
+    {{ summary.verdict }}
+    <div style="font-size:12pt; font-weight:normal; margin-top:2mm;">
+      {{ summary.pairs_pass }} PASS · {{ summary.pairs_marginal }} MARGINAL · {{ summary.pairs_fail }} FAIL
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- ANÁLISE POR PAR                                                   -->
+<!-- ================================================================ -->
+{% for item in pairs %}
+{% set p = item.pair %}
+{% set st = item.stats %}
+{% set nm = item.normality %}
+{% set figs = item.figures %}
+
+<div class="page-break-before">
+  <h1>Análise: {{ p.label }}</h1>
+  <p style="color:#555; font-size:9pt;">
+    <code>{{ p.meas_in }}</code> → <code>{{ p.meas_out }}</code>
+    via <strong>{{ p.tf_type }}</strong>
+    {% if p.unit %} · Unidade: <strong>{{ p.unit }}</strong>{% endif %}
+    {% if p.spec.lsl is not none %} · LSL: {{ p.spec.lsl }}{% endif %}
+    {% if p.spec.usl is not none %} · USL: {{ p.spec.usl }}{% endif %}
+  </p>
+
+  <!-- ---- Scatter -------------------------------------------------- -->
+  <h3>Scatter Input × Output</h3>
+  {% if figs.scatter %}
+  <div class="figure-wrap avoid-break">
+    <img src="{{ figs.scatter }}" alt="Scatter {{ p.label }}">
+  </div>
+  {% endif %}
+  {% if item.tf and item.tf.fit_coeffs %}
+  <table class="avoid-break" style="width:auto; min-width:300pt;">
+    <thead><tr><th>Parâmetro</th><th>Valor</th></tr></thead>
+    <tbody>
+      {% for k, v in item.tf.fit_coeffs.items() %}
+      <tr><td>{{ k }}</td><td class="td-mono td-right">{{ "%.6g"|format(v) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <!-- ---- Erro × Entrada ------------------------------------------- -->
+  <h3>Erro × Entrada</h3>
+  {% if figs.error_vs_input %}
+  <div class="figure-wrap avoid-break">
+    <img src="{{ figs.error_vs_input }}" alt="Erro vs Entrada {{ p.label }}">
+  </div>
+  {% endif %}
+
+  <!-- ---- Distribuição e Q-Q --------------------------------------- -->
+  <h3>Distribuição do Erro</h3>
+  <div class="figure-row avoid-break">
+    {% if figs.histogram %}
+    <div class="figure-wrap"><img src="{{ figs.histogram }}" alt="Histograma {{ p.label }}"></div>
+    {% endif %}
+    {% if figs.qq %}
+    <div class="figure-wrap"><img src="{{ figs.qq }}" alt="Q-Q {{ p.label }}"></div>
+    {% endif %}
+  </div>
+
+  <!-- Testes de normalidade -->
+  <table class="avoid-break">
+    <thead>
+      <tr><th>Teste</th><th>Estatística</th><th>p-value / Crit.</th><th>Resultado</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Shapiro-Wilk</td>
+        <td class="td-mono td-center">{{ "%.5f"|format(nm.shapiro.stat) }}</td>
+        <td class="td-mono td-center">{{ "%.4f"|format(nm.shapiro.p) }}</td>
+        <td class="td-center">
+          <span class="badge {{ 'badge-pass' if nm.shapiro.passed else 'badge-fail' }}">
+            {{ 'NORMAL' if nm.shapiro.passed else 'NÃO-NORMAL' }}
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td>Kolmogorov-Smirnov</td>
+        <td class="td-mono td-center">{{ "%.5f"|format(nm.ks.stat) }}</td>
+        <td class="td-mono td-center">{{ "%.4f"|format(nm.ks.p) }}</td>
+        <td class="td-center">
+          <span class="badge {{ 'badge-pass' if nm.ks.passed else 'badge-fail' }}">
+            {{ 'NORMAL' if nm.ks.passed else 'NÃO-NORMAL' }}
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td>Anderson-Darling</td>
+        <td class="td-mono td-center">{{ "%.5f"|format(nm.anderson.stat) }}</td>
+        <td class="td-mono td-center">Crit. 5%: {{ "%.4f"|format(nm.anderson.critical_5pct) }}</td>
+        <td class="td-center">
+          <span class="badge {{ 'badge-pass' if nm.anderson.passed else 'badge-fail' }}">
+            {{ 'NORMAL' if nm.anderson.passed else 'NÃO-NORMAL' }}
+          </span>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="3"><strong>Conclusão:</strong>
+          {{ 'Distribuição normal (≥2/3 testes passaram)' if nm.is_normal
+             else 'Distribuição não-normal (<2/3 testes passaram)' }}
+          {% if nm.note %} — <em>{{ nm.note }}</em>{% endif %}
+        </td>
+        <td class="td-center">
+          <span class="badge {{ 'badge-pass' if nm.is_normal else 'badge-marginal' }}">
+            {{ 'NORMAL' if nm.is_normal else 'NÃO-NORMAL' }}
+          </span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ---- Estatísticas Descritivas --------------------------------- -->
+  <h3>Estatísticas Descritivas</h3>
+  <div class="stats-grid avoid-break">
+    <table>
+      <thead><tr><th>Métrica</th><th>Valor</th></tr></thead>
+      <tbody>
+        <tr><td>Média</td>        <td class="td-mono td-right">{{ "%.6g"|format(st.mean) }}</td></tr>
+        <tr><td>Desvio Padrão</td><td class="td-mono td-right">{{ "%.6g"|format(st.std) }}</td></tr>
+        <tr><td>Mediana</td>      <td class="td-mono td-right">{{ "%.6g"|format(st.median) }}</td></tr>
+        <tr><td>Mínimo</td>       <td class="td-mono td-right">{{ "%.6g"|format(st.min) }}</td></tr>
+        <tr><td>Máximo</td>       <td class="td-mono td-right">{{ "%.6g"|format(st.max) }}</td></tr>
+        <tr><td>Assimetria</td>   <td class="td-mono td-right">{{ "%.4f"|format(st.skewness) }}</td></tr>
+        <tr><td>Curtose</td>      <td class="td-mono td-right">{{ "%.4f"|format(st.kurtosis) }}</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>Percentil</th><th>Valor</th></tr></thead>
+      <tbody>
+        {% for key, val in st.percentiles.items() %}
+        <tr><td>{{ key }}</td><td class="td-mono td-right">{{ "%.6g"|format(val) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ---- Capability ----------------------------------------------- -->
+  <h3>Análise de Capability</h3>
+  <div class="figure-row avoid-break">
+    {% if figs.sigma_gauge %}
+    <div class="figure-wrap" style="max-width: 200pt;">
+      <img src="{{ figs.sigma_gauge }}" alt="Sigma Gauge {{ p.label }}">
+    </div>
+    {% endif %}
+    <div style="flex:1;">
+      <table>
+        <thead><tr><th>Métrica</th><th>Valor</th></tr></thead>
+        <tbody>
+          <tr><td>LSL</td><td class="td-mono td-right">{{ p.spec.lsl if p.spec.lsl is not none else "—" }}</td></tr>
+          <tr><td>USL</td><td class="td-mono td-right">{{ p.spec.usl if p.spec.usl is not none else "—" }}</td></tr>
+          <tr><td>Cp</td> <td class="td-mono td-right">{{ "%.3f"|format(st.cp) if st.cp is not none else "—" }}</td></tr>
+          <tr><td>Cpk</td><td class="td-mono td-right">{{ "%.3f"|format(st.cpk) if st.cpk is not none else "—" }}</td></tr>
+          <tr><td>Sigma Level</td><td class="td-mono td-right">{{ "%.2f"|format(st.sigma_level) if st.sigma_level is not none else "—" }}</td></tr>
+          <tr><td>Yield Observado</td>
+              <td class="td-mono td-right">{{ "%.4f"|format(st.yield_observed_pct) ~ "%" if st.yield_observed_pct is not none else "—" }}</td></tr>
+          <tr><td>Fora de spec (n)</td>
+              <td class="td-mono td-right">{{ st.n_out_of_spec }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ---- Extrapolação --------------------------------------------- -->
+  <h3>Extrapolação</h3>
+
+  {% if st.gaussian_extrapolation %}
+  <p style="font-size:8.5pt; color:#2d7a2d;"><strong>Distribuição normal confirmada.</strong>
+    Yield extrapolado: <strong>{{ "%.4f"|format(st.gaussian_extrapolation.yield_pct) }}%</strong>
+    — DPM: <strong>{{ "%.1f"|format(st.gaussian_extrapolation.dpm) }}</strong>
+  </p>
+  {% if figs.extrapolation %}
+  <div class="figure-wrap avoid-break">
+    <img src="{{ figs.extrapolation }}" alt="Extrapolação {{ p.label }}">
+  </div>
+  {% endif %}
+  <table class="avoid-break">
+    <thead>
+      <tr><th>Sigma</th><th>Yield (%)</th><th>DPM</th></tr>
+    </thead>
+    <tbody>
+      {% for lv, row in st.gaussian_extrapolation.sigma_table.items() %}
+      <tr>
+        <td class="td-center">{{ lv }}</td>
+        <td class="td-mono td-right">{{ "%.6f"|format(row.yield) }}</td>
+        <td class="td-mono td-right">{{ "%.2f"|format(row.dpm) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% elif st.alt_extrapolation %}
+  <div class="warn-box">
+    <strong>Distribuição não-normal.</strong>
+    Extrapolação via <strong>{{ st.alt_extrapolation.dist_name }}</strong>.<br>
+    Yield estimado: <strong>{{ "%.4f"|format(st.alt_extrapolation.yield_pct) }}%</strong>
+    — DPM: <strong>{{ "%.1f"|format(st.alt_extrapolation.dpm) }}</strong><br>
+    <em>{{ st.alt_extrapolation.warning }}</em>
+  </div>
+
+  {% else %}
+  <div class="warn-box">
+    <strong>Atenção:</strong> {{ st.extrapolation_note }}
+  </div>
+  {% endif %}
+
+  {% if st.extrapolation_note and st.gaussian_extrapolation %}
+  <p style="font-size:8pt; color:#555; margin-top:1mm;"><em>{{ st.extrapolation_note }}</em></p>
+  {% endif %}
+
+</div>
+{% endfor %}
+
+<!-- ================================================================ -->
+<!-- SUMÁRIO CONSOLIDADO                                               -->
+<!-- ================================================================ -->
+<div class="page-break-before">
+  <h1>Sumário Consolidado</h1>
+
+  <table class="avoid-break">
+    <thead>
+      <tr>
+        <th>Par</th>
+        <th>TF Type</th>
+        <th>Média</th>
+        <th>Std</th>
+        <th>Skew</th>
+        <th>Cp</th>
+        <th>Cpk</th>
+        <th>Sigma</th>
+        <th>Yield Obs.</th>
+        <th>Normal?</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in pairs %}
+      {% set st = item.stats %}
+      {% set sigma = st.sigma_level %}
+      {% if sigma is not none and sigma >= 4 %}
+        {% set badge = "badge-pass" %}{% set verdict = "PASS" %}
+      {% elif sigma is not none and sigma >= 3 %}
+        {% set badge = "badge-marginal" %}{% set verdict = "MGRL" %}
+      {% elif st.yield_observed_pct is not none and st.yield_observed_pct >= 99.73 %}
+        {% set badge = "badge-pass" %}{% set verdict = "PASS" %}
+      {% elif st.yield_observed_pct is not none and st.yield_observed_pct >= 99.0 %}
+        {% set badge = "badge-marginal" %}{% set verdict = "MGRL" %}
+      {% else %}
+        {% set badge = "badge-fail" %}{% set verdict = "FAIL" %}
+      {% endif %}
+      <tr>
+        <td>{{ item.pair.label }}</td>
+        <td class="td-center td-mono" style="font-size:7.5pt;">{{ item.pair.tf_type }}</td>
+        <td class="td-mono td-right">{{ "%.4g"|format(st.mean) }}</td>
+        <td class="td-mono td-right">{{ "%.4g"|format(st.std) }}</td>
+        <td class="td-mono td-right">{{ "%.3f"|format(st.skewness) }}</td>
+        <td class="td-mono td-right">{{ "%.3f"|format(st.cp) if st.cp is not none else "—" }}</td>
+        <td class="td-mono td-right">{{ "%.3f"|format(st.cpk) if st.cpk is not none else "—" }}</td>
+        <td class="td-mono td-right">{{ "%.2f"|format(sigma) if sigma is not none else "—" }}</td>
+        <td class="td-mono td-right">{{ "%.2f"|format(st.yield_observed_pct) ~ "%" if st.yield_observed_pct is not none else "—" }}</td>
+        <td class="td-center">
+          <span class="badge {{ 'badge-pass' if item.normality.is_normal else 'badge-marginal' }}">
+            {{ 'SIM' if item.normality.is_normal else 'NÃO' }}
+          </span>
+        </td>
+        <td class="td-center">
+          <span class="badge {{ badge }}">{{ verdict }}</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Verdict final -->
+  <div class="verdict-box verdict-{{ summary.verdict }}">
+    VERDICT: {{ summary.verdict }}
+    <div style="font-size:11pt; font-weight:normal; margin-top:3mm;">
+      {{ summary.pairs_pass }} par(es) PASS &nbsp;·&nbsp;
+      {{ summary.pairs_marginal }} par(es) MARGINAL &nbsp;·&nbsp;
+      {{ summary.pairs_fail }} par(es) FAIL
+    </div>
+    <div style="font-size:9pt; font-weight:normal; margin-top:2mm; color:#555;">
+      Total de runs: {{ n_runs_total }}
+      {% if n_runs_failed > 0 %} ({{ n_runs_failed }} falhas descartadas){% endif %}
+    </div>
+  </div>
+
+  <p style="font-size:7.5pt; color:#999; margin-top:6mm; text-align:center;">
+    Relatório gerado automaticamente por SPICA — Spice Parallel Instance Circuit Analyzer em {{ generated_at }}
+  </p>
+</div>
+
+</body>
+</html>
