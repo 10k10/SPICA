@@ -1,0 +1,10 @@
+customtkinter
+spicelib
+numpy
+scipy
+matplotlib
+jinja2
+reportlab
+xhtml2pdf
+scikit-learn
+pyinstaller
