@@ -9,25 +9,30 @@ dist/
 build/
 *.spec
 
-# Simulation outputs
-mc_results/
-mc_results_mock/
-figures/
-chunks/
+# LTSpice schematics and circuit files (user-specific, not part of the app)
+*.asc
+*.asy
+
+# LTSpice simulation outputs
 *.raw
 *.op.raw
 *.db
 *.log
+*.net
 
-# Generated reports
+# App simulation outputs
+mc_results/
+mc_results_mock/
+figures/
+chunks/
+
+# Generated reports / exports
 *.pdf
 mc_report_*.html
+mc_data_*.csv
 
 # But keep the Jinja2 template
 !templates/
-
-# Test circuit files (not part of source)
-circuit_test.*
 
 # IDE / OS
 .vscode/
