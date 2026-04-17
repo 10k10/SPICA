@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from datetime import datetime
 
 import numpy as np
@@ -28,6 +29,14 @@ from plotter import (
     plot_sigma_gauge,
     plot_extrapolation_table,
 )
+
+
+def _get_templates_dir() -> Path:
+    """Returns the templates directory regardless of whether running from source or frozen .exe."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller sets sys.executable to the .exe path
+        return Path(sys.executable).parent / "templates"
+    return Path(__file__).parent / "templates"
 
 
 def _save_fig(fig: Optional[plt.Figure], path: Path) -> Optional[str]:
@@ -154,7 +163,7 @@ def generate_report(
         })
 
     # 3. Renderizar template Jinja2
-    templates_dir = Path(__file__).parent / "templates"
+    templates_dir = _get_templates_dir()
     env = Environment(
         loader=FileSystemLoader(str(templates_dir)),
         autoescape=False,

@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 *.spec
+!SPICA.spec
 
 # LTSpice schematics and circuit files (user-specific, not part of the app)
 *.asc
