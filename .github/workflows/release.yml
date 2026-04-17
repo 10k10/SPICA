@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write   # needed to create GitHub Release and upload assets
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -25,13 +28,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: "requirements.txt"
 
       # ── 3. Install dependencies
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install customtkinter spicelib numpy scipy matplotlib jinja2 reportlab xhtml2pdf scikit-learn
-          pip install pyinstaller
+          pip install -r requirements.txt
 
       # ── 4. Build with PyInstaller
       - name: Build SPICA.exe
