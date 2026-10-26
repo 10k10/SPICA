@@ -1,0 +1,34 @@
+; SPICA setup - Spice Parallel Instancer Circuit Analysis
+[Campaign]
+Schematic=classd_amp.asc
+Runs=500
+Seed=0
+Paired=0
+ClockReseed=1
+KeepRaw=0
+
+[Temperature]
+Mode=Default
+Corners=-40, 25, 90
+Min=-40
+Max=90
+
+[Save]
+Mode=Selected
+Signals=V(in) V(out) I(Rload)
+
+[Spec gain]
+LSL=11.5
+USL=12.5
+
+[Spec vout_dc]
+LSL=-0.25
+USL=0.25
+
+[Transfer]
+X=vin_rms
+Y=vout_rms
+Theory=12*x
+Budget=2
+BudgetUnit=%
+K=3

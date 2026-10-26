@@ -1,10 +1,11 @@
 name: Build & Release SPICA.exe
 
-# Triggers when a tag matching v* is pushed (e.g. v1.0.0, v2.3.1)
+# Triggers when a tag matching v* is pushed (e.g. v0.1.0)
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write   # needed to create GitHub Release and upload assets
@@ -15,52 +16,36 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
-      # ── 1. Checkout source
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Set up Python
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
         with:
-          python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: "requirements.txt"
+          dotnet-version: "8.0.x"
 
-      # ── 3. Install dependencies
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      # ── 4. Build with PyInstaller
+      # net48 WinForms app: the whole program is a single SPICA.exe
       - name: Build SPICA.exe
-        run: pyinstaller SPICA.spec
+        run: dotnet build src/SPICA/SPICA.csproj -c Release -o out
 
-      # ── 5. Zip the output directory
-      - name: Zip dist/SPICA
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          Compress-Archive -Path dist\SPICA\* -DestinationPath "SPICA-$tag-windows.zip"
+      - name: Build smoke tests
+        run: dotnet build tests/SPICA.Smoke/SPICA.Smoke.csproj -c Release
 
-      # ── 6. Create GitHub Release and upload the zip
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: "SPICA ${{ github.ref_name }}"
           body: |
-            ## SPICA — Spice Parallel Instance Circuit Analyzer
+            ## SPICA — Spice Parallel Instancer Circuit Analysis
 
-            ### Installation
-            1. Download `SPICA-${{ github.ref_name }}-windows.zip`
-            2. Extract to any folder
-            3. Run `SPICA.exe`
+            Download `SPICA.exe` and run it. No installation needed — it is the whole app.
+            Settings (`SPICA.ini`) and profiles (`SPICA.profiles`) are written next to the exe.
 
-            LTSpice 24 must be installed separately.
-          files: SPICA-${{ github.ref_name }}-windows.zip
+            Requires Windows with .NET Framework 4.8 (built into Windows 10/11) and LTspice installed.
+          files: out/SPICA.exe
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

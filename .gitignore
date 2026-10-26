@@ -1,46 +1,21 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
+﻿bin/
+obj/
 dist/
-build/
-*.spec
-!SPICA.spec
-
-# LTSpice schematics and circuit files (user-specific, not part of the app)
-*.asc
-*.asy
-
-# LTSpice simulation outputs
+*.user
+.vs/
+samples/*_SPICA/
+SPICA.ini
+SPICA.profiles
+*_SPICA/
+__pycache__/
 *.raw
-*.op.raw
 *.db
 *.log
 *.net
-
-# App simulation outputs
+samples/*.ini
+.claude/
+# leftovers from the old Python version
+figures/
 mc_results/
 mc_results_mock/
-figures/
-chunks/
-
-# Generated reports / exports
-*.pdf
-mc_report_*.html
-mc_data_*.csv
-
-# But keep the Jinja2 template
-!templates/
-
-# IDE / OS
-.vscode/
-.idea/
-*.swp
-Thumbs.db
-.DS_Store
-
-# Claude Code
-.claude/
+mc_report_*
