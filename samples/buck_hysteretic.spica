@@ -1,0 +1,42 @@
+; SPICA setup - Spice Parallel Instancer Circuit Analysis
+[Campaign]
+Schematic=buck_hysteretic.asc
+Runs=500
+Seed=0
+Paired=0
+ClockReseed=1
+KeepRaw=0
+
+[Temperature]
+Mode=Default
+Corners=-40, 25, 90
+Min=-40
+Max=90
+
+[Save]
+Mode=Selected
+Signals=V(out) V(sw) V(vin) I(V1)
+
+[Spec vout]
+LSL=3.25
+USL=3.35
+
+[Spec ripple]
+LSL=
+USL=0.05
+
+[Spec eff]
+LSL=90
+USL=
+
+[Spec droop]
+LSL=
+USL=0.04
+
+[Transfer]
+X=
+Y=
+Theory=
+Budget=
+BudgetUnit=%
+K=3

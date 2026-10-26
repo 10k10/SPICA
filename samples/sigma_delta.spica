@@ -1,0 +1,30 @@
+; SPICA setup - Spice Parallel Instancer Circuit Analysis
+[Campaign]
+Schematic=sigma_delta.asc
+Runs=500
+Seed=0
+Paired=0
+ClockReseed=1
+KeepRaw=0
+
+[Temperature]
+Mode=Default
+Corners=-40, 25, 90
+Min=-40
+Max=90
+
+[Save]
+Mode=Selected
+Signals=V(in) V(q) V(b)
+
+[Spec vb_pk]
+LSL=
+USL=9
+
+[Transfer]
+X=vin
+Y=code
+Theory=x
+Budget=0.005
+BudgetUnit=abs
+K=3

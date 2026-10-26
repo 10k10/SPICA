@@ -1,0 +1,34 @@
+; SPICA setup - Spice Parallel Instancer Circuit Analysis
+[Campaign]
+Schematic=colpitts_osc.asc
+Runs=200
+Seed=0
+Paired=1
+ClockReseed=1
+KeepRaw=0
+
+[Temperature]
+Mode=Corners
+Corners=-40, 25, 90
+Min=-40
+Max=90
+
+[Save]
+Mode=Selected
+Signals=V(c)
+
+[Spec freq]
+LSL=9800000
+USL=10800000
+
+[Spec vpp]
+LSL=6
+USL=
+
+[Transfer]
+X=
+Y=
+Theory=
+Budget=
+BudgetUnit=%
+K=3
