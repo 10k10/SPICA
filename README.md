@@ -134,9 +134,6 @@ completed with 0 failures.
 
 The ΣΔ needs an absolute budget: with a bipolar input, a % budget explodes near 0 V.
 
-`samples/mux507/` holds a TI MUX507 model fitted to its datasheet (transmission-gate topology),
-with a symbol and a demo of switching an RC-filtered input. See its README.
-
 ## Build
 
 ```
