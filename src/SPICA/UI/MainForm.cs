@@ -52,6 +52,7 @@ namespace Spica.UI
         Win98ProgressBar progress;
         readonly Dictionary<string, Label> stat = new Dictionary<string, Label>();
         Win98Graph graph;
+        Win98ResourceMeter meter;
         ListView lvWorkers;
         TextBox txtLog;
 
@@ -72,7 +73,7 @@ namespace Spica.UI
 
         public MainForm()
         {
-            Text = "SPICA - Spice Parallel Instancer Circuit Analysis";
+            Text = AppTitle;
             ClientSize = new Size(1080, 780);
             MinimumSize = new Size(900, 660);
             StartPosition = FormStartPosition.CenterScreen;
@@ -141,7 +142,7 @@ namespace Spica.UI
 
             var mTools = new ToolStripMenuItem("&Tools");
             mTools.DropDownItems.Add(new ToolStripMenuItem("&Hardware Information...", Win98.Icon("hw16"), (s, e) => ShowHardware()));
-            mTools.DropDownItems.Add(new ToolStripMenuItem("&Forget Scheduler Profiles", null, (s, e) => ForgetProfiles()));
+            mTools.DropDownItems.Add(new ToolStripMenuItem("&Forget Saved Run Times", null, (s, e) => ForgetProfiles()));
 
             var mHelp = new ToolStripMenuItem("&Help");
             mHelp.DropDownItems.Add(new ToolStripMenuItem("&About SPICA...", Win98.Icon("help16"), (s, e) => ShowAbout()));
@@ -197,7 +198,12 @@ namespace Spica.UI
             tabs.AddPage(pageSetup);
             tabs.AddPage(pageMonitor);
             tabs.AddPage(pageResults);
-            tabs.SelectedIndexChanged += (s, e) => { if (tabs.SelectedIndex == 2 && engine != null && resultsView.Data == null) RefreshResults(); };
+            tabs.SelectedIndexChanged += (s, e) =>
+            {
+                if (tabs.SelectedIndex != 2) return;
+                if (engine != null && resultsView.Data == null) RefreshResults();
+                liveDone = -1; nextLiveRefresh = DateTime.MinValue;     // catch up at once when the tab is opened
+            };
         }
 
         void FillRecent()
@@ -278,7 +284,7 @@ namespace Spica.UI
             var spacerT = new Panel { Dock = DockStyle.Top, Height = 6, BackColor = Win98.Face };
 
             var grpPar = new Win98GroupBox { Text = "Parallelism", Dock = DockStyle.Top, Height = 112 };
-            rbAuto = new Win98RadioButton { Text = "Automatic: tune instances and threads while running", Location = new Point(10, 20) };
+            rbAuto = new Win98RadioButton { Text = "Automatic: one instance per core, ~2-minute chunks", Location = new Point(10, 20) };
             rbManual = new Win98RadioButton { Text = "Manual:", Location = new Point(10, 44) };
             txtInstances = new Win98TextField { Location = new Point(144, 42), Width = 40 };
             txtThreads = new Win98TextField { Location = new Point(290, 42), Width = 40 };
@@ -431,8 +437,18 @@ namespace Spica.UI
                 }
             };
 
+            // throughput graph with the resource meter beside it
+            var graphRow = new Panel { Dock = DockStyle.Top, Height = 132, BackColor = Win98.Face };
             graph = new Win98Graph { Dock = DockStyle.Fill, Caption = "Throughput (runs/min)" };
-            var graphWell = new Win98Well(graph, Color.Black) { Dock = DockStyle.Top, Height = 92 };
+            graphRow.Controls.Add(new Win98Well(graph, Color.Black) { Dock = DockStyle.Fill });
+            graphRow.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 6, BackColor = Win98.Face });
+            meter = new Win98ResourceMeter { Dock = DockStyle.Fill };
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = Win98Chart.Navy, Icon = Win98.Icon("hw16") });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "RAM", Color = Win98Chart.Teal, Icon = Win98.Icon("memory16") });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "Disk", Color = Win98Chart.Purple, Icon = Win98.Icon("disk16") });
+            var meterBox = new Win98GroupBox { Text = "Resources", Dock = DockStyle.Right, Width = 228, Padding = new Padding(6, 18, 6, 4) };
+            meterBox.Controls.Add(meter);
+            graphRow.Controls.Add(meterBox);
 
             lvWorkers = MakeListView();
             foreach (var (t, w) in new[] { ("Instance", 70), ("PID", 64), ("Runs", 120), ("State", 80), ("Time", 70), ("Memory", 80), ("Threads", 60) })
@@ -444,7 +460,7 @@ namespace Spica.UI
 
             p.Controls.Add(lvWell);
             p.Controls.Add(Gap(DockStyle.Top));
-            p.Controls.Add(graphWell);
+            p.Controls.Add(graphRow);
             p.Controls.Add(top);
             p.Controls.Add(Gap(DockStyle.Bottom));
             p.Controls.Add(logWell);
@@ -637,11 +653,19 @@ namespace Spica.UI
             UpdateTitle();
         }
 
+        /// <summary>Version without the build metadata the SDK appends ("0.2.0+abc123" -> "0.2.0").</summary>
+        public static string AppVersion =>
+            (typeof(MainForm).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion
+             ?? typeof(MainForm).Assembly.GetName().Version.ToString()).Split('+')[0];
+
+        public static string AppTitle => $"SPICA {AppVersion} - Spice Parallel Instancer Circuit Analysis";
+
         void UpdateTitle()
         {
             string name = ascPath != null ? Path.GetFileName(ascPath) : null;
             string setup = project.FilePath != null ? Path.GetFileName(project.FilePath) : null;
-            Text = "SPICA" + (name != null ? " - " + name : "") + (setup != null ? $"  [{setup}{(project.Dirty ? "*" : "")}]" : project.Dirty && name != null ? "  [unsaved setup]" : "");
+            Text = AppTitle + (name != null ? " - " + name : "") + (setup != null ? $"  [{setup}{(project.Dirty ? "*" : "")}]" : project.Dirty && name != null ? "  [unsaved setup]" : "");
         }
 
         /// <summary>Copies the Setup tab into the project.</summary>
@@ -872,7 +896,7 @@ namespace Spica.UI
 
             SetStatus("Converting schematic with LTspice -netlist...");
             UseWaitCursor = true;
-            Enabled = false;
+            SetBusy(true);
             try
             {
                 var nl = await Task.Run(() =>
@@ -935,10 +959,19 @@ namespace Spica.UI
             }
             finally
             {
-                Enabled = true;
+                SetBusy(false);
                 UseWaitCursor = false;
                 UpdateCommandState();
             }
+        }
+
+        /// <summary>
+        /// Blocks input while a file loads. Disables the menu, toolbar and tabs, not the form itself:
+        /// disabling the active top-level window makes Windows activate another one, which sent SPICA to the background.
+        /// </summary>
+        void SetBusy(bool busy)
+        {
+            menu.Enabled = toolbar.Enabled = tabs.Enabled = !busy;
         }
 
         static string DescribeCircuit(Netlist nl)
@@ -996,7 +1029,7 @@ namespace Spica.UI
                 Win98MessageBox.Show(this, "Enter a number of runs between 1 and 10,000,000.", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
                 return;
             }
-            AdaptiveScheduler.Config? manual = null;
+            RunScheduler.Config? manual = null;
             if (rbManual.Checked)
             {
                 if (!int.TryParse(txtInstances.Text, out int inst) || inst < 1 || !int.TryParse(txtThreads.Text, out int thr) || thr < 1)
@@ -1004,7 +1037,7 @@ namespace Spica.UI
                     Win98MessageBox.Show(this, "Enter the number of instances and threads per instance (1 or more).", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
                     return;
                 }
-                manual = new AdaptiveScheduler.Config(inst, thr);
+                manual = new RunScheduler.Config(inst, thr);
             }
 
             if (resumeDir == null && File.Exists(ascPath) && File.GetLastWriteTimeUtc(ascPath) != ascStamp)
@@ -1256,6 +1289,7 @@ namespace Spica.UI
         void UpdateUi()
         {
             status.SetText(3, DateTime.Now.ToString("HH:mm"));
+            if (++meterTick % 4 == 0) UpdateMeter();
             if (engine == null) return;
 
             var sb = new StringBuilder();
@@ -1309,17 +1343,46 @@ namespace Spica.UI
             }
             lvWorkers.EndUpdate();
 
-            if (tabs.SelectedIndex == 2 && graphTick % 4 == 0 && !s.Finished) RefreshResults();
+            // Live Results: only with new runs, and at 20x the cost of the last refresh (at least 1 s), so the analysis
+            // never takes more than ~5 % of one core (100k runs cost 0.2 .. 0.6 s per refresh).
+            if (tabs.SelectedIndex == 2 && !s.Finished && s.Done != liveDone && !resultsView.LivePaused && DateTime.UtcNow >= nextLiveRefresh)
+            {
+                var sw = Stopwatch.StartNew();
+                RefreshResults();
+                liveDone = s.Done;
+                nextLiveRefresh = DateTime.UtcNow.AddSeconds(Math.Max(1, 20 * sw.Elapsed.TotalSeconds));
+            }
             if (!s.Finished) status.SetText(0, $"Running: {s.Done:N0}/{s.Total:N0} runs, {s.Config}");
+        }
+
+        int meterTick;
+        int liveDone = -1;
+        DateTime nextLiveRefresh = DateTime.MinValue;
+
+        /// <summary>Resource meter, once a second: CPU and RAM of the whole machine, space on the output drive.</summary>
+        void UpdateMeter()
+        {
+            double cpu = HardwareInfo.CpuLoadPercent(), ram = HardwareInfo.MemoryLoadPercent();
+            HardwareInfo.RefreshMemory(hw);
+            meter.Set(0, cpu, $"CPU in use, whole machine ({hw.LogicalProcessors} threads)");
+            meter.Set(1, ram, $"RAM in use: {(hw.TotalMemory - hw.AvailableMemory) / (double)(1L << 30):0.0} of {hw.TotalMemory / (double)(1L << 30):0.0} GB");
+            try
+            {
+                string dir = engine?.Options.OutputDir ?? txtOut.Text.Trim();
+                if (dir.Length == 0) dir = Application.StartupPath;
+                var d = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(dir)));
+                double used = 100.0 * (d.TotalSize - d.AvailableFreeSpace) / d.TotalSize;
+                meter.Set(2, used, $"Drive {d.Name} (output folder): {FormatBytes(d.AvailableFreeSpace)} free of {FormatBytes(d.TotalSize)}");
+            }
+            catch { meter.Set(2, double.NaN, "Output drive unknown"); }
         }
 
         static string PhaseText(string phase)
         {
             switch (phase)
             {
-                case "WarmUp": return "Measuring baseline";
-                case "Probing": return "Probing configuration";
-                case "Converged": return "Converged";
+                case "Measuring": return "Measuring run time";
+                case "Running": return "Running";
                 case "Manual": return "Manual";
                 default: return phase;
             }
@@ -1362,8 +1425,8 @@ namespace Spica.UI
             HardwareInfo.RefreshMemory(hw);
             lines.AppendLine($"Memory:\t{hw.TotalMemory / (double)(1L << 30):0.0} GB ({hw.AvailableMemory / (double)(1L << 30):0.0} GB free)");
             lines.AppendLine();
-            lines.AppendLine($"Automatic mode starts with {hw.PhysicalCores} instances x 1 thread");
-            lines.AppendLine("and tunes from there while the campaign runs.");
+            lines.AppendLine($"Automatic mode runs {hw.PhysicalCores} instances x 1 thread (one per physical core),");
+            lines.AppendLine("fewer if free RAM is short, with chunks of about 2 minutes of simulation.");
             Win98MessageBox.Show(this, lines.ToString().Replace("\t", "  "), "Hardware Information", MessageBoxButtons.OK, Win98Icon.Information);
         }
 
@@ -1373,7 +1436,7 @@ namespace Spica.UI
             {
                 var path = KeyValueFile.Resolve("SPICA.profiles");
                 if (File.Exists(path)) File.Delete(path);
-                Win98MessageBox.Show(this, "Saved scheduler profiles were deleted.\nThe next campaign starts tuning from scratch.", "SPICA");
+                Win98MessageBox.Show(this, "Saved run times were deleted.\nThe next campaign measures them again.", "SPICA");
             }
             catch (Exception ex) { Win98MessageBox.Show(this, ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); }
         }
@@ -1381,10 +1444,10 @@ namespace Spica.UI
         void ShowAbout()
         {
             Win98MessageBox.Show(this,
-                "SPICA  version " + Application.ProductVersion + "\n" +
+                "SPICA  version " + AppVersion + "\n" +
                 "Spice Parallel Instancer Circuit Analysis\n\n" +
                 "Runs LTspice Monte Carlo campaigns as many parallel batch\n" +
-                "instances, tuning the parallelism to this machine.\n\n" +
+                "instances, one per processor core.\n\n" +
                 "Icons: alexh/vintage-icons (MIT).\n" +
                 "LTspice is a trademark of Analog Devices, Inc.",
                 "About SPICA", MessageBoxButtons.OK, Win98Icon.Information);

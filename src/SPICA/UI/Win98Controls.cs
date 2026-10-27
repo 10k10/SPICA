@@ -592,6 +592,99 @@ namespace Spica.UI
     }
 
     // =====================================================================================
+    //  Resource meter: vertical segmented bars (Windows 98 setup / Resource Meter style)
+    // =====================================================================================
+    public class Win98ResourceMeter : Control
+    {
+        public sealed class Bar
+        {
+            public string Label;
+            public Color Color;
+            public Image Icon;
+            public double Value = double.NaN;    // 0..100 %, NaN = unknown
+            public string Tip = "";
+        }
+
+        public readonly List<Bar> Bars = new List<Bar>();
+        readonly ToolTip tip = new ToolTip();
+        int tipBar = -1;
+
+        public Win98ResourceMeter()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Win98.Face;
+            Font = Win98.Font;
+        }
+
+        public void Set(int i, double value, string tipText = null)
+        {
+            if (i < 0 || i >= Bars.Count) return;
+            Bars[i].Value = value;
+            if (tipText != null) Bars[i].Tip = tipText;
+            Invalidate();
+        }
+
+        int ColumnWidth => Bars.Count == 0 ? Width : Width / Bars.Count;
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int i = Math.Min(Bars.Count - 1, e.X / Math.Max(1, ColumnWidth));
+            if (i == tipBar) return;
+            tipBar = i;
+            tip.SetToolTip(this, i >= 0 ? Bars[i].Tip : "");
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(Win98.Face);
+            if (Bars.Count == 0) return;
+            int cw = ColumnWidth;
+            const int segH = 7, gap = 2, wellW = 24, footer = 38;
+            for (int i = 0; i < Bars.Count; i++)
+            {
+                var b = Bars[i];
+                int x0 = i * cw;
+                if (i > 0) Win98.EtchedVLine(g, x0, 4, Height - 4);
+
+                // the well: sunken white column holding the segments
+                var well = new Rectangle(x0 + (cw - wellW) / 2, 6, wellW, Math.Max(20, Height - 6 - footer));
+                using (var w = new SolidBrush(Color.White)) g.FillRectangle(w, well);
+                Win98.Sunken(g, well);
+                var inner = Rectangle.Inflate(well, -3, -3);
+                int n = Math.Max(1, (inner.Height + gap) / (segH + gap));
+                int lit = double.IsNaN(b.Value) ? 0 : (int)Math.Round(Math.Max(0, Math.Min(100, b.Value)) / 100.0 * n);
+                int y = inner.Bottom;
+                using (var on = new SolidBrush(b.Color))
+                    for (int k = 0; k < n; k++)
+                    {
+                        y -= segH;
+                        if (k < lit) g.FillRectangle(on, inner.Left, y, inner.Width, segH);
+                        y -= gap;
+                    }
+
+                // icon and caption under the well
+                int fy = well.Bottom + 4;
+                string val = double.IsNaN(b.Value) ? "-" : $"{b.Value:0}%";
+                string cap = $"{b.Label} {val}";
+                var sz = TextRenderer.MeasureText(cap, Font);
+                int iconW = b.Icon != null ? 18 : 0;
+                int cx = x0 + (cw - iconW - sz.Width) / 2;
+                if (b.Icon != null) Win98.DrawIcon(g, b.Icon, cx, fy + 4);
+                TextRenderer.DrawText(g, cap, Font, new Point(cx + iconW, fy + 6), Color.Black);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) tip.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    // =====================================================================================
     //  Scrolling throughput graph (black/green, Task Manager style)
     // =====================================================================================
     public class Win98Graph : Control

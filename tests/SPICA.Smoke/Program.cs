@@ -41,6 +41,12 @@ static class Program
             return 0;
         }
 
+        // SPICA.Smoke --bench <runs> : cost of the live Results refresh and of the per-second results.csv
+        if (args.Length > 1 && args[0] == "--bench") return Bench(int.Parse(args[1]));
+
+        // SPICA.Smoke --charttest : drive the chart's mouse handlers (zoom box, wheel, legend toggle, reset)
+        if (args.Length > 0 && args[0] == "--charttest") return ChartTest();
+
         // SPICA.Smoke --stats <campaign folder> <meas> [lsl usl] : print the analysis of saved results
         if (args.Length > 0 && args[0] == "--stats")
         {
@@ -64,7 +70,7 @@ static class Program
 
         string asc = Path.GetFullPath(args.Length > 0 ? args[0] : @"..\..\samples\rc_mc.asc");
         int runs = args.Length > 1 ? int.Parse(args[1]) : 200;
-        AdaptiveScheduler.Config? manual = args.Length > 3 ? new AdaptiveScheduler.Config(int.Parse(args[2]), int.Parse(args[3])) : (AdaptiveScheduler.Config?)null;
+        RunScheduler.Config? manual = args.Length > 3 ? new RunScheduler.Config(int.Parse(args[2]), int.Parse(args[3])) : (RunScheduler.Config?)null;
 
         string lt = Ltspice.Locate();
         Console.WriteLine($"LTspice: {lt} {Ltspice.Version(lt)}");
@@ -261,6 +267,64 @@ static class Program
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         t.Join();
+        return 0;
+    }
+
+    [STAThread]
+    static int Bench(int runs)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var meas = new[] { "vout", "ripple", "vmin", "headroom", "ipk" };
+        var rnd = new Random(1);
+        var list = new System.Collections.Generic.List<RunResult>();
+        for (int r = 1; r <= runs; r++)
+            list.Add(new RunResult { Run = r, Status = RunStatus.Ok, Values = meas.ToDictionary(m => m, m => (rnd.NextDouble() * 10).ToString("R", inv)) });
+        var mc = new McPlan();
+        for (int i = 1; i <= 10; i++) mc.Sites.Add(new McSite { Index = i, Kind = SiteKind.Uniform, Label = "R" + i });
+        var opt = new CampaignOptions { AscPath = "x.asc", OutputDir = Path.GetTempPath(), Runs = runs, Mc = mc, Seed = 7 };
+        var setup = new SpicaProject();
+        double T(Action a, int n = 3) { var sw = System.Diagnostics.Stopwatch.StartNew(); for (int i = 0; i < n; i++) a(); return sw.Elapsed.TotalMilliseconds / n; }
+        string tmp = Path.Combine(Path.GetTempPath(), "spica_bench.csv");
+        Console.WriteLine($"{runs} runs x {meas.Length} measurements, 10 random parameters");
+        Console.WriteLine($"  copy results (engine lock)   {T(() => list.ToList()),8:0.0} ms");
+        Console.WriteLine($"  results.csv write             {T(() => CampaignEngine.WriteCsv(tmp, list, meas)),8:0.0} ms   (engine, every second while running)");
+        ResultSet rs = null;
+        Console.WriteLine($"  build result set              {T(() => rs = ResultSet.FromResults(list, meas, opt, setup)),8:0.0} ms");
+        var form = new System.Windows.Forms.Form { ClientSize = new System.Drawing.Size(1280, 800) };
+        var view = new Spica.UI.ResultsView();
+        form.Controls.Add(view);
+        form.CreateControl(); view.CreateControl();
+        var names = new[] { "Table", "Statistics", "Histogram", "Scatter", "Sensitivity", "Temperature", "Convergence" };
+        for (int pg = 0; pg < view.PageCount; pg++)
+        {
+            view.SelectPage(pg);
+            view.SetData(rs, false);
+            Console.WriteLine($"  refresh {names[pg],-20} {T(() => view.SetData(ResultSet.FromResults(list, meas, opt, setup), true)),8:0.0} ms   (build + page)");
+        }
+        File.Delete(tmp);
+        return 0;
+    }
+
+    static int ChartTest()
+    {
+        var c = new Spica.UI.Win98Chart { Width = 600, Height = 400 };
+        c.Add(new Spica.UI.ChartSeries { Kind = Spica.UI.SeriesKind.Line, X = new[] { 0.0, 10 }, Y = new[] { 0.0, 10 }, Label = "a" });
+        c.Add(new Spica.UI.ChartSeries { Kind = Spica.UI.SeriesKind.Line, X = new[] { 0.0, 10 }, Y = new[] { 100.0, 100 }, Label = "b" });
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        void Paint() { using (var b = new System.Drawing.Bitmap(600, 400)) using (var g = System.Drawing.Graphics.FromImage(b)) c.Render(g, new System.Drawing.Rectangle(0, 0, 600, 400), true); }
+        void Call(string m, object a) => typeof(System.Windows.Forms.Control).GetMethod(m, flags).Invoke(c, new[] { a });
+        double Get(string f) => (double)typeof(Spica.UI.Win98Chart).GetField(f, flags).GetValue(c);
+        string Range() => $"x {Get("x0"):0.##}..{Get("x1"):0.##}  y {Get("y0"):0.##}..{Get("y1"):0.##}";
+        System.Windows.Forms.MouseEventArgs M(System.Windows.Forms.MouseButtons b, int x, int y, int d = 0) => new System.Windows.Forms.MouseEventArgs(b, 1, x, y, d);
+        Paint(); Console.WriteLine("full:       " + Range());
+        Call("OnMouseDown", M(System.Windows.Forms.MouseButtons.Left, 150, 150)); Call("OnMouseMove", M(System.Windows.Forms.MouseButtons.Left, 350, 300));
+        Call("OnMouseUp", M(System.Windows.Forms.MouseButtons.Left, 350, 300)); Paint(); Console.WriteLine("box zoom:   " + Range() + "  zoomed=" + c.IsZoomed);
+        Call("OnMouseWheel", M(System.Windows.Forms.MouseButtons.None, 300, 200, -120)); Paint(); Console.WriteLine("wheel out:  " + Range());
+        Call("OnMouseDoubleClick", M(System.Windows.Forms.MouseButtons.Left, 300, 200)); Paint(); Console.WriteLine("reset:      " + Range() + "  zoomed=" + c.IsZoomed);
+        var hits = (System.Collections.IList)typeof(Spica.UI.Win98Chart).GetField("legendHits", flags).GetValue(c);
+        var hb = (System.Collections.Generic.KeyValuePair<System.Drawing.Rectangle, string>)hits[1];
+        Call("OnMouseDown", M(System.Windows.Forms.MouseButtons.Left, hb.Key.X + 5, hb.Key.Y + 5)); Paint(); Console.WriteLine("hide 'b':   " + Range());
+        c.ResetView(); Paint(); Console.WriteLine("ResetView:  " + Range());
         return 0;
     }
 

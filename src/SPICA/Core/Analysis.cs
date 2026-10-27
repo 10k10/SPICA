@@ -94,7 +94,19 @@ namespace Spica.Core
         }
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-        public static string F(double v) => double.IsNaN(v) ? "-" : double.IsInfinity(v) ? (v > 0 ? "inf" : "-inf") : v.ToString("G6", Inv);
+        /// <summary>6 significant digits; below 1m or from 100k up in engineering notation with SPICE suffixes (219.488u).</summary>
+        public static string F(double v)
+        {
+            if (double.IsNaN(v)) return "-";
+            if (double.IsInfinity(v)) return v > 0 ? "inf" : "-inf";
+            double a = Math.Abs(v);
+            if (a == 0 || (a >= 1e-3 && a < 1e5)) return v.ToString("G6", Inv);
+            string[] pre = { "f", "p", "n", "u", "m", "", "k", "Meg", "G", "T" };
+            int e3 = Math.Max(-5, Math.Min(4, (int)Math.Floor(Math.Log10(a) / 3)));
+            double m = v / Math.Pow(1000, e3);
+            if (Math.Abs(Math.Round(m, 3)) >= 1000 && e3 < 4) { e3++; m /= 1000; }   // 999.9996u -> 1m
+            return m.ToString("G6", Inv) + pre[e3 + 5];
+        }
         public static string Pct(double v) => double.IsNaN(v) ? "-" : (100 * v).ToString(v > 0.9999 && v < 1 ? "0.0000" : "0.00", Inv) + " %";
         public static string PctFine(double v) => double.IsNaN(v) ? "-" : (100 * v).ToString(v > 0.999999 ? "0.0000000" : "0.0000", Inv) + " %";
         public static string P(double p) => double.IsNaN(p) ? "-" : p < 0.0001 ? "< 0.0001" : p.ToString("0.0000", Inv);

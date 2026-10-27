@@ -105,6 +105,9 @@ namespace Spica.Core
         // ------------------------------------------------------------------ values
 
         /// <summary>The value of a site for a run: uniform in [-1, 1] or standard normal.</summary>
+        /// <summary>Column name of a site in samples.csv and in the results analysis.</summary>
+        public static string ColumnName(McSite site) => $"{site.Label} [{(site.Kind == SiteKind.Gaussian ? "gauss" : "uniform")}]";
+
         public static double Value(uint seed, McSite site, int run)
         {
             double u = Uniform01(seed, (ulong)site.Index, run);

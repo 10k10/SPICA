@@ -13,8 +13,8 @@ using Spica.Core;
 namespace Spica.UI
 {
     /// <summary>
-    /// The Results tab: Table | Statistics | Histogram | Scatter & TF | Temperature | Convergence,
-    /// for the running campaign or any campaign folder opened from disk.
+    /// The Results tab: Table | Statistics | Histogram | Scatter & TF | Sensitivity | Temperature | Convergence,
+    /// for the running campaign (refreshed while it runs, unless paused) or any campaign folder opened from disk.
     /// </summary>
     public sealed class ResultsView : Panel
     {
@@ -30,6 +30,11 @@ namespace Spica.UI
         readonly Label lblTitle;
         readonly Win98TabControl tabs;
         Win98Button btnReport, btnCsv, btnFolder;
+        Win98CheckBox chkLive;
+        Panel topBar;
+        Win98Button[] topButtons;
+        string titleText = "";
+        readonly List<Win98Chart> charts = new List<Win98Chart>();
 
         // table
         Win98ListView lvTable;
@@ -46,7 +51,7 @@ namespace Spica.UI
         List<MeasStats> statRows = new List<MeasStats>();
 
         // histogram
-        ComboBox cbHistMeas, cbHistGroup;
+        ComboBox cbHistMeas, cbHistGroup, cbHistView, cbHistBins;
         Win98CheckBox chkHistNormal;
         Win98Chart chHist;
         Label lblHist;
@@ -55,6 +60,13 @@ namespace Spica.UI
         ComboBox cbTfX, cbTfY, cbTfGroup, cbTfUnit;
         TextBox txtTheory, txtBudget, txtK, txtTf;
         Win98Chart chTf, chTfErr;
+
+        // sensitivity
+        ComboBox cbSensMeas, cbSensGroup, cbSensInputs, cbSensShow;
+        Win98Chart chSens;
+        Win98ListView lvSens;
+        TextBox txtSens;
+        SensitivityReport sensRep;
 
         // temperature
         ComboBox cbTempMeas, cbTempRef;
@@ -77,7 +89,7 @@ namespace Spica.UI
             Dock = DockStyle.Fill;
 
             var top = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = Win98.Face };
-            lblTitle = new Label { AutoSize = false, Location = new Point(0, 8), Height = 16, BackColor = Win98.Face, Text = "No results yet. Run a campaign, or open a campaign folder.", AutoEllipsis = true };
+            lblTitle = new Label { AutoSize = false, Location = new Point(2, 8), Height = 16, BackColor = Win98.Face, Text = "No results yet. Run a campaign, or open a campaign folder.", AutoEllipsis = true };
             var btnOpen = new Win98Button { Text = "&Open Results...", Image = Win98.Icon("open16"), Size = new Size(118, 25) };
             btnCsv = new Win98Button { Text = "Export &CSV...", Image = Win98.Icon("save16"), Size = new Size(108, 25) };
             btnReport = new Win98Button { Text = "&Report...", Image = Win98.Icon("doc16"), Size = new Size(96, 25) };
@@ -86,19 +98,19 @@ namespace Spica.UI
             btnCsv.Click += (s, e) => ExportCsv();
             btnReport.Click += (s, e) => ExportReport();
             btnFolder.Click += (s, e) => OpenFolderRequested?.Invoke();
-            top.Controls.AddRange(new Control[] { lblTitle, btnOpen, btnCsv, btnReport, btnFolder });
-            top.Resize += (s, e) =>
-            {
-                int x = top.Width;
-                foreach (var b in new[] { btnFolder, btnReport, btnCsv, btnOpen }) { x -= b.Width; b.Location = new Point(x, 2); x -= 4; }
-                lblTitle.Width = Math.Max(10, x - 8);
-            };
+            chkLive = new Win98CheckBox { Text = "&Live update", Checked = true, Visible = false, Width = 96 };
+            chkLive.CheckedChanged += (s, e) => UpdateTitle();
+            top.Controls.AddRange(new Control[] { lblTitle, chkLive, btnOpen, btnCsv, btnReport, btnFolder });
+            topBar = top;
+            topButtons = new[] { btnFolder, btnReport, btnCsv, btnOpen };
+            top.Resize += (s, e) => LayoutTop();
 
             tabs = new Win98TabControl { Dock = DockStyle.Fill };
             tabs.AddPage(BuildTablePage());
             tabs.AddPage(BuildStatsPage());
             tabs.AddPage(BuildHistPage());
             tabs.AddPage(BuildTfPage());
+            tabs.AddPage(BuildSensPage());
             tabs.AddPage(BuildTempPage());
             tabs.AddPage(BuildConvPage());
             tabs.SelectedIndexChanged += (s, e) => RefreshPage();
@@ -111,6 +123,9 @@ namespace Spica.UI
 
         public ResultSet Data => rs;
 
+        /// <summary>The user froze the live view: building new result sets would be wasted work.</summary>
+        public bool LivePaused => live && !chkLive.Checked;
+
         public int PageCount => tabs.Pages.Count;
         public void SelectPage(int i) => tabs.SelectedIndex = i;
 
@@ -121,13 +136,17 @@ namespace Spica.UI
         /// <summary>Shows a result set. <paramref name="isLive"/>: the campaign is still running.</summary>
         public void SetData(ResultSet set, bool isLive)
         {
+            // paused: keep analysing the snapshot on screen while the campaign goes on
+            if (isLive && live && rs != null && set != null && !chkLive.Checked) return;
             rs = set;
             live = isLive;
-            lblTitle.Text = set == null ? "No results." :
+            if (chkLive.Visible != isLive) { chkLive.Visible = isLive; chkLive.Checked = true; LayoutTop(); }
+            titleText = set == null ? "No results." :
                 $"{set.Title}    {set.Rows.Count(r => r.Status == RunStatus.Ok)} of {set.Rows.Count} rows with data" +
                 (set.Mode == TempMode.Corners ? $", {set.Corners.Count} temperatures" : set.Mode == TempMode.Random ? ", random temperature" : "") +
-                (set.Paired ? ", paired samples" : "") + (isLive ? "   (running...)" : "");
-            string key = set == null ? "" : string.Join("|", set.NumericColumns()) + "#" + string.Join(",", set.GroupNames());
+                (set.Paired ? $", paired samples ({set.Params.Count} random parameters)" : "");
+            UpdateTitle();
+            string key = set == null ? "" : string.Join("|", set.AxisColumns()) + "#" + string.Join(",", set.GroupNames());
             if (key != columnsKey)
             {
                 columnsKey = key;
@@ -135,6 +154,20 @@ namespace Spica.UI
             }
             UpdateButtons();
             RefreshPage();
+        }
+
+        void LayoutTop()
+        {
+            int x = topBar.Width;
+            foreach (var b in topButtons) { x -= b.Width; b.Location = new Point(x, 2); x -= 4; }
+            x -= 8;
+            if (chkLive.Visible) { x -= chkLive.Width; chkLive.Location = new Point(x, 6); x -= 8; }
+            lblTitle.Width = Math.Max(10, x - 4);
+        }
+
+        void UpdateTitle()
+        {
+            lblTitle.Text = titleText + (!live ? "" : chkLive.Checked ? "   (running: updates every second)" : "   (running: paused - tick Live update to resume)");
         }
 
         void UpdateButtons()
@@ -149,9 +182,11 @@ namespace Spica.UI
             var meas = rs?.Meas ?? new List<string>();
             var cols = rs?.NumericColumns() ?? new List<string>();
             var groups = rs?.GroupNames() ?? new List<string> { "All runs" };
-            Fill(cbHistMeas, meas); Fill(cbConvMeas, meas); Fill(cbTempMeas, meas); Fill(cbSpecMeas, meas);
-            Fill(cbStatGroup, groups); Fill(cbHistGroup, groups); Fill(cbTfGroup, groups); Fill(cbConvGroup, groups);
-            Fill(cbTfX, cols); Fill(cbTfY, cols);
+            Fill(cbHistMeas, meas); Fill(cbConvMeas, meas); Fill(cbTempMeas, meas); Fill(cbSpecMeas, meas); Fill(cbSensMeas, meas);
+            Fill(cbStatGroup, groups); Fill(cbHistGroup, groups); Fill(cbTfGroup, groups); Fill(cbConvGroup, groups); Fill(cbSensGroup, groups);
+            var axes = rs?.AxisColumns() ?? new List<string>();
+            Fill(cbTfX, axes); Fill(cbTfY, axes);
+            if (rs != null && cbSensInputs.Items.Count > 0) cbSensInputs.SelectedIndex = rs.Params.Count > 0 || rs.Mode == TempMode.Random ? 0 : 1;
             var tf = rs?.Setup.Tf;
             if (tf != null)
             {
@@ -199,8 +234,9 @@ namespace Spica.UI
                 case 1: RefreshStats(); break;
                 case 2: RefreshHist(); break;
                 case 3: RefreshTf(); break;
-                case 4: RefreshTemp(); break;
-                case 5: RefreshConv(); break;
+                case 4: RefreshSens(); break;
+                case 5: RefreshTemp(); break;
+                case 6: RefreshConv(); break;
             }
         }
 
@@ -220,7 +256,7 @@ namespace Spica.UI
         ComboBox Combo(int x, int y, int w)
         {
             var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(x, y), Width = w, Font = Win98.Font, FlatStyle = FlatStyle.Standard };
-            cb.SelectedIndexChanged += (s, e) => RefreshPage();
+            cb.SelectedIndexChanged += (s, e) => { if (!filling) foreach (var c in charts) c.ResetView(); RefreshPage(); };
             return cb;
         }
 
@@ -235,7 +271,13 @@ namespace Spica.UI
         static Panel Bar(int h) => new Panel { Dock = DockStyle.Top, Height = h, BackColor = Win98.Face };
         static Panel Gap(DockStyle d, int size = 6) => new Panel { Dock = d, Height = size, Width = size, BackColor = Win98.Face };
 
-        static Win98Well ChartWell(Win98Chart c) => new Win98Well(c, Color.White) { Dock = DockStyle.Fill };
+        Win98Well ChartWell(Win98Chart c) => new Win98Well(Track(c), Color.White) { Dock = DockStyle.Fill };
+
+        /// <summary>Charts on the pages: their zoom is reset when the selection changes.</summary>
+        Win98Chart Track(Win98Chart c) { charts.Add(c); return c; }
+
+        /// <summary>Grey hint text on a toolbar row.</summary>
+        static Label Hint(string text, int x, int y) => new Label { Text = text, Location = new Point(x, y + 3), AutoSize = true, BackColor = Win98.Face, ForeColor = Win98.Shadow };
 
         static string F(double v) => MeasStats.F(v);
 
@@ -260,6 +302,9 @@ namespace Spica.UI
             cbFilter.SelectedIndex = 0;
             lblTable = new Label { AutoSize = true, Location = new Point(222, 7), BackColor = Win98.Face };
             bar.Controls.AddRange(new Control[] { Lbl("Show:", 0, 2), cbFilter, lblTable });
+            var tableHint = Hint("Click a column to sort. Values in engineering notation; Export CSV keeps full precision.", 0, 2);
+            bar.Controls.Add(tableHint);
+            bar.Resize += (s, e) => tableHint.Left = Math.Max(lblTable.Right + 24, bar.Width - tableHint.Width - 4);
 
             lvTable = new Win98ListView(true);
             lvTable.RetrieveVirtualItem += (s, e) => e.Item = TableItem(e.ItemIndex);
@@ -348,7 +393,7 @@ namespace Spica.UI
             if (r == null) return it;
             if (rs.HasTemp) it.SubItems.Add(double.IsNaN(r.Temp) ? "" : r.Temp.ToString("0.##", Inv));
             it.SubItems.Add(r.Status.ToString());
-            for (int c = 0; c < rs.Meas.Count; c++) it.SubItems.Add(r.Text[c]);
+            for (int c = 0; c < rs.Meas.Count; c++) it.SubItems.Add(double.IsNaN(r.V[c]) ? r.Text[c] : F(r.V[c]));
             if (rs.AnySpec) { var p = rs.RowPasses(r); it.SubItems.Add(p == null ? "" : p.Value ? "pass" : "FAIL"); }
             it.SubItems.Add(r.Note);
             return it;
@@ -378,8 +423,7 @@ namespace Spica.UI
             var bar = Bar(30);
             cbStatGroup = Combo(44, 2, 160);
             bar.Controls.AddRange(new Control[] { Lbl("Group:", 0, 2), cbStatGroup,
-                new Label { AutoSize = true, Location = new Point(216, 7), BackColor = Win98.Face, ForeColor = Win98.Shadow,
-                            Text = "Select a row for its sigma analysis. Yield CI: exact binomial 95 %. Normal: Anderson-Darling." } });
+                Hint("Select a row for its full analysis below. Yield CI: exact binomial 95 %. Normal p: Anderson-Darling.", 216, 2) });
 
             lvStats = new Win98ListView();
             foreach (var (t, w) in new[] { ("Measurement", 120), ("n", 50), ("Mean", 84), ("Std dev", 84), ("Min", 84), ("Max", 84), ("Median", 84),
@@ -506,9 +550,16 @@ namespace Spica.UI
             var bar = Bar(30);
             cbHistMeas = Combo(82, 2, 150);
             cbHistGroup = Combo(290, 2, 150);
-            chkHistNormal = new Win98CheckBox { Text = "Normal fit && 3 sigma", Location = new Point(456, 5), Checked = true };
+            cbHistView = Combo(490, 2, 150);
+            cbHistView.Items.AddRange(new object[] { "Histogram", "Cumulative (CDF)", "Normal probability" });
+            cbHistView.SelectedIndex = 0;
+            cbHistBins = Combo(682, 2, 64);
+            cbHistBins.Items.AddRange(new object[] { "Auto", "10", "20", "30", "50", "100" });
+            cbHistBins.SelectedIndex = 0;
+            chkHistNormal = new Win98CheckBox { Text = "Normal fit && 3 sigma", Location = new Point(762, 5), Checked = true };
             chkHistNormal.CheckedChanged += (s, e) => RefreshHist();
-            bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbHistMeas, Lbl("Group:", 246, 2), cbHistGroup, chkHistNormal });
+            bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbHistMeas, Lbl("Group:", 246, 2), cbHistGroup,
+                Lbl("View:", 454, 2), cbHistView, Lbl("Bins:", 650, 2), cbHistBins, chkHistNormal });
             chHist = new Win98Chart();
             lblHist = new Label { Dock = DockStyle.Bottom, Height = 18, BackColor = Win98.Face, TextAlign = ContentAlignment.MiddleLeft };
             p.Controls.Add(ChartWell(chHist));
@@ -522,13 +573,17 @@ namespace Spica.UI
         {
             if (rs == null || !(cbHistMeas.SelectedItem is string m)) { chHist.Clear(); lblHist.Text = ""; return; }
             int g = Math.Max(0, cbHistGroup.SelectedIndex);
-            var s = BuildHistogram(chHist, m, g, chkHistNormal.Checked);
+            int bins = cbHistBins.SelectedIndex > 0 ? int.Parse((string)cbHistBins.SelectedItem, Inv) : 0;
+            cbHistBins.Enabled = cbHistView.SelectedIndex == 0;
+            var s = BuildHistogram(chHist, m, g, chkHistNormal.Checked, cbHistView.SelectedIndex, bins);
             lblHist.Text = s == null ? "" :
                 $"n = {s.D.N}   mean = {F(s.D.Mean)}   sigma = {F(s.D.Std)}   normal p = {MeasStats.P(s.AdP)}" +
                 (s.Cap.N > 0 && s.Spec?.IsSet == true ? $"   yield = {MeasStats.Pct(s.Cap.Yield)}   Cpk = {Num(s.Cap.Cpk, "0.000")}" : "");
         }
 
-        MeasStats BuildHistogram(Win98Chart ch, string meas, int group, bool normal)
+        /// <param name="view">0 histogram, 1 cumulative distribution, 2 normal probability plot</param>
+        /// <param name="bins">histogram bins, 0 = automatic</param>
+        MeasStats BuildHistogram(Win98Chart ch, string meas, int group, bool normal, int view = 0, int bins = 0)
         {
             ch.Clear();
             var groups = rs.GroupNames();
@@ -538,7 +593,10 @@ namespace Spica.UI
             ch.YLabel = "runs";
             ch.YFromZero = true;
             if (s.D.N == 0) return s;
-            var edges = Stats.HistogramEdges(s.D);
+            if (view == 1 || view == 2) { BuildDistribution(ch, s, normal, view == 2); return s; }
+            var edges = bins > 0 && s.D.Max > s.D.Min
+                ? Enumerable.Range(0, bins + 1).Select(i => s.D.Min + (s.D.Max - s.D.Min) * i / bins).ToArray()
+                : Stats.HistogramEdges(s.D);
             var counts = Stats.Histogram(s.D.Sorted, edges);
             ch.Add(new ChartSeries { Kind = SeriesKind.Bars, Edges = edges, Y = counts.Select(c => (double)c).ToArray(), X = edges, Color = Win98Chart.Navy, Label = "runs", InLegend = false });
             if (normal && s.D.Std > 0)
@@ -553,6 +611,40 @@ namespace Spica.UI
             if (s.Spec != null && s.Spec.IsSet)
                 ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { s.Spec.Lsl, s.Spec.Usl }.Where(v => !double.IsNaN(v)).ToArray(), Color = Win98Chart.Red, Label = "spec limits" });
             return s;
+        }
+
+        /// <summary>Cumulative distribution, or normal probability plot (a straight line when the data are normal).</summary>
+        void BuildDistribution(Win98Chart ch, MeasStats s, bool normal, bool probit)
+        {
+            var a = s.D.Sorted;
+            int n = a.Length;
+            ch.YFromZero = false;
+            bool fit = normal && s.D.Std > 0;
+            if (probit)
+            {
+                ch.Title = $"{s.Meas}  -  {s.Group}: normal probability plot";
+                ch.YLabel = "normal quantile (sigma)";
+                ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = a, Y = Enumerable.Range(0, n).Select(i => Stats.NormalInv((i + 0.5) / n)).ToArray(), Color = Win98Chart.Navy, Size = 3, Label = "runs" });
+                if (fit)
+                {
+                    var lx = new[] { a[0], a[n - 1] };
+                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = lx, Y = lx.Select(x => (x - s.D.Mean) / s.D.Std).ToArray(), Color = Win98Chart.Teal, Size = 2, Label = "normal (same mean, sigma)" });
+                }
+            }
+            else
+            {
+                ch.Title = $"{s.Meas}  -  {s.Group}: cumulative distribution";
+                ch.YLabel = "% of runs below";
+                ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = a, Y = Enumerable.Range(0, n).Select(i => 100.0 * (i + 1) / n).ToArray(), Color = Win98Chart.Navy, Size = 2, Label = "runs" });
+                if (fit)
+                {
+                    double lo = Math.Min(a[0], s.D.Mean - 4 * s.D.Std), hi = Math.Max(a[n - 1], s.D.Mean + 4 * s.D.Std);
+                    var xs = Enumerable.Range(0, 161).Select(i => lo + (hi - lo) * i / 160).ToArray();
+                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = xs, Y = xs.Select(x => 100 * Stats.NormalCdf((x - s.D.Mean) / s.D.Std)).ToArray(), Color = Win98Chart.Teal, Dashed = true, Label = "normal fit" });
+                }
+            }
+            if (s.Spec != null && s.Spec.IsSet)
+                ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { s.Spec.Lsl, s.Spec.Usl }.Where(v => !double.IsNaN(v)).ToArray(), Color = Win98Chart.Red, Label = "spec limits" });
         }
 
         // =====================================================================================
@@ -572,24 +664,26 @@ namespace Spica.UI
             cbTfUnit.Items.AddRange(new object[] { "%", "abs" });
             cbTfUnit.SelectedIndex = 0;
             txtK = Field(578, 32, 36);
-            var btn = new Win98Button { Text = "A&nalyze", Location = new Point(624, 30), Size = new Size(80, 24) };
+            var btn = new Win98Button { Text = "&Apply TF", Location = new Point(624, 30), Size = new Size(84, 24) };
             btn.Click += (s, e) => ApplyTf();
             foreach (var t in new[] { txtTheory, txtBudget, txtK }) t.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyTf(); e.SuppressKeyPress = true; } };
             bar.Controls.AddRange(new Control[] { Lbl("X:", 0, 2), cbTfX, Lbl("Y:", 158, 2), cbTfY, Lbl("Group:", 316, 2), cbTfGroup,
-                Lbl("Theoretical TF  y =", 0, 32), txtTheory, Lbl("Budget +/-", 344, 32), txtBudget, cbTfUnit, Lbl("k sigma", 534, 32), txtK, btn });
+                Hint("X and Y can be measurements, TEMP, a random parameter or the run number.", 512, 2),
+                Lbl("Theoretical TF  y =", 0, 32), txtTheory, Lbl("Budget +/-", 344, 32), txtBudget, cbTfUnit, Lbl("k sigma", 534, 32), txtK, btn,
+                Hint("Enter or Apply TF saves these fields.", 716, 32) });
 
             chTf = new Win98Chart();
-            chTfErr = new Win98Chart();
+            chTfErr = Track(new Win98Chart());
             txtTf = Memo();
             var right = new Win98Well(txtTf) { Dock = DockStyle.Right, Width = 470 };
-            var charts = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            var body = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
             var errWell = new Win98Well(chTfErr, Color.White) { Dock = DockStyle.Bottom, Height = 200 };
-            charts.Controls.Add(ChartWell(chTf));
-            charts.Controls.Add(Gap(DockStyle.Bottom));
-            charts.Controls.Add(errWell);
-            charts.Resize += (s, e) => errWell.Height = Math.Max(120, charts.Height * 2 / 5);
+            body.Controls.Add(ChartWell(chTf));
+            body.Controls.Add(Gap(DockStyle.Bottom));
+            body.Controls.Add(errWell);
+            body.Resize += (s, e) => errWell.Height = Math.Max(120, body.Height * 2 / 5);
 
-            p.Controls.Add(charts);
+            p.Controls.Add(body);
             p.Controls.Add(Gap(DockStyle.Right));
             p.Controls.Add(right);
             p.Controls.Add(Gap(DockStyle.Top));
@@ -672,6 +766,104 @@ namespace Spica.UI
         }
 
         // =====================================================================================
+        //  Sensitivity
+        // =====================================================================================
+
+        Win98TabPage BuildSensPage()
+        {
+            var p = new Win98TabPage("Sensitivity", Win98.Icon("chart16"));
+            var bar = Bar(30);
+            cbSensMeas = Combo(82, 2, 150);
+            cbSensGroup = Combo(290, 2, 150);
+            cbSensInputs = Combo(500, 2, 150);
+            cbSensInputs.Items.AddRange(new object[] { "Random parameters", "Other measurements" });
+            cbSensInputs.SelectedIndex = 0;
+            cbSensShow = Combo(704, 2, 150);
+            cbSensShow.Items.AddRange(new object[] { "Share of variance", "Signed effect" });
+            cbSensShow.SelectedIndex = 0;
+            bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbSensMeas, Lbl("Group:", 246, 2), cbSensGroup,
+                Lbl("Inputs:", 454, 2), cbSensInputs, Lbl("Show:", 664, 2), cbSensShow, Hint("Double-click a row to plot it.", 866, 2) });
+
+            chSens = new Win98Chart();
+            txtSens = Memo();
+            lvSens = new Win98ListView();
+            foreach (var (t, w) in new[] { ("#", 34), ("Input", 220), ("Share of variance", 110), ("Signed effect (SRC)", 116), ("Correlation r", 90), ("Slope (per unit)", 100), ("Shift at limit", 100), ("Limit", 150) })
+                lvSens.Columns.Add(t, w, t == "Input" || t == "Limit" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
+            lvSens.DoubleClick += (s, e) =>
+            {
+                if (sensRep == null || lvSens.SelectedIndices.Count == 0 || lvSens.SelectedIndices[0] >= sensRep.Items.Count) return;
+                ShowScatter(sensRep.Items[lvSens.SelectedIndices[0]].Name, sensRep.Meas);
+            };
+            var right = new Win98Well(txtSens) { Dock = DockStyle.Right, Width = 440 };
+            var listWell = new Win98Well(lvSens) { Dock = DockStyle.Bottom, Height = 170 };
+            var body = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            body.Controls.Add(ChartWell(chSens));
+            body.Controls.Add(Gap(DockStyle.Right));
+            body.Controls.Add(right);
+            p.Controls.Add(body);
+            p.Controls.Add(Gap(DockStyle.Top));
+            p.Controls.Add(bar);
+            p.Controls.Add(Gap(DockStyle.Bottom));
+            p.Controls.Add(listWell);
+            listWell.SendToBack();
+            return p;
+        }
+
+        /// <summary>Opens the Scatter tab with this X and Y.</summary>
+        void ShowScatter(string x, string y)
+        {
+            filling = true;
+            Select(cbTfX, x);
+            Select(cbTfY, y);
+            cbTfGroup.SelectedIndex = Math.Min(Math.Max(0, cbSensGroup.SelectedIndex), cbTfGroup.Items.Count - 1);
+            filling = false;
+            chTf.ResetView(); chTfErr.ResetView();
+            tabs.SelectedIndex = 3;
+            RefreshTf();
+        }
+
+        void RefreshSens()
+        {
+            if (rs == null || !(cbSensMeas.SelectedItem is string m)) { chSens.Clear(); lvSens.Items.Clear(); txtSens.Text = ""; return; }
+            sensRep = BuildSensitivity(chSens, m, Math.Max(0, cbSensGroup.SelectedIndex), cbSensInputs.SelectedIndex == 0, cbSensShow.SelectedIndex == 1);
+            txtSens.Text = sensRep.Narrative().Replace("\n", "\r\n").Replace("\r\r\n", "\r\n");
+            lvSens.BeginUpdate();
+            lvSens.Items.Clear();
+            int k = 1;
+            foreach (var it in sensRep.Items)
+            {
+                var row = new ListViewItem((k++).ToString(Inv));
+                foreach (var x in new[] { it.Name, double.IsNaN(it.Share) ? "" : (100 * it.Share).ToString("0.0", Inv) + " %", Num(it.Src, "+0.000;-0.000"),
+                                          Num(it.R, "+0.000;-0.000"), double.IsNaN(it.Slope) ? "" : F(it.Slope), double.IsNaN(it.AtLimit) ? "" : F(it.AtLimit), it.LimitText })
+                    row.SubItems.Add(x);
+                lvSens.Items.Add(row);
+            }
+            lvSens.EndUpdate();
+        }
+
+        SensitivityReport BuildSensitivity(Win98Chart ch, string m, int group, bool onParams, bool signed, int top = 20)
+        {
+            ch.Clear();
+            var rep = onParams ? SensitivityReport.Parameters(rs, m, group) : SensitivityReport.Measurements(rs, m, group);
+            var items = rep.Items.Where(i => !double.IsNaN(i.Share)).Take(top).ToList();
+            ch.Title = onParams ? $"What drives {m}" : $"Correlation of {m} with the other measurements";
+            if (items.Count == 0) { ch.EmptyText = rep.Error ?? "Nothing to show."; ch.Invalidate(); return rep; }
+            ch.YCategories = items.Select(i => i.Name).ToArray();
+            if (signed)
+            {
+                ch.XLabel = onParams ? $"standardized effect: sigmas of {m} per sigma of the input" : "correlation r";
+                ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(i => i.Src).ToArray(), Color = Win98Chart.Navy, NegColor = Win98Chart.Maroon, InLegend = false });
+            }
+            else
+            {
+                ch.XLabel = onParams ? $"share of the variance of {m} (%)" : "r squared (%)";
+                ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(i => 100 * i.Share).ToArray(), Color = Win98Chart.Navy, InLegend = false });
+            }
+            ch.Invalidate();
+            return rep;
+        }
+
+        // =====================================================================================
         //  Temperature
         // =====================================================================================
 
@@ -714,6 +906,7 @@ namespace Spica.UI
                 lblTempMode.Text = "";
                 chTemp.EmptyText = "This campaign ran at the schematic's own temperature.\n\nChoose temperature corners or a random temperature range on the Setup tab to analyse temperature effects.";
                 chTemp.Invalidate();
+                txtTemp.Text = "No temperature data in this campaign.";
                 return;
             }
             if (!(cbTempMeas.SelectedItem is string m)) return;
@@ -885,7 +1078,7 @@ namespace Spica.UI
             cbConvGroup = Combo(290, 2, 150);
             bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbConvMeas, Lbl("Group:", 246, 2), cbConvGroup });
             chConvMean = new Win98Chart();
-            chConvSigma = new Win98Chart();
+            chConvSigma = Track(new Win98Chart());
             lblConv = new Label { Dock = DockStyle.Bottom, Height = 34, BackColor = Win98.Face };
             var body = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
             var sigmaWell = new Win98Well(chConvSigma, Color.White) { Dock = DockStyle.Bottom, Height = 200 };
@@ -997,87 +1190,166 @@ namespace Spica.UI
         string BuildReport()
         {
             string H(string s) => WebUtility.HtmlEncode(s ?? "");
-            string Img(Win98Chart c, int w = 760, int h = 340)
-            {
-                using (var bmp = c.ToBitmap(w, h))
-                using (var ms = new MemoryStream())
-                {
-                    bmp.Save(ms, ImageFormat.Png);
-                    return $"<img src=\"data:image/png;base64,{Convert.ToBase64String(ms.ToArray())}\" width=\"{w}\" height=\"{h}\">";
-                }
-            }
-            string Pre(string s) => "<pre>" + H(s) + "</pre>";
+            string Fig(Win98Chart c, string caption, int w = 760, int h = 340) =>
+                $"<figure>{c.ToSvg(w, h)}" + (caption != null ? $"<figcaption>{H(caption)}</figcaption>" : "") + "</figure>";
+            string Pre(string s) => string.IsNullOrWhiteSpace(s) ? "" : "<pre>" + H(s.TrimEnd()) + "</pre>";
+            string Card(string label, string value) => $"<div class=\"card\"><span>{H(label)}</span><b>{H(value)}</b></div>";
+
+            var st = rs.Setup;
+            var groups = rs.GroupNames();
+            bool anySpec = rs.Meas.Any(m => st.Spec(m)?.IsSet == true);
+            var tf = st.Tf;
+            bool hasTf = tf.X.Length > 0 && tf.Y.Length > 0 && rs.Col(tf.Y) >= 0;
+            string schematic = string.IsNullOrEmpty(st.Schematic) ? "" : Path.GetFileName(st.Schematic);
 
             var sb = new StringBuilder();
-            sb.Append("<!doctype html><html><head><meta charset=\"utf-8\"><title>SPICA report</title><style>")
-              .Append("body{background:#c0c0c0;font:12px 'Microsoft Sans Serif',Tahoma,Arial,sans-serif;margin:16px;color:#000}")
-              .Append("h1{background:linear-gradient(90deg,#000080,#1084d0);color:#fff;font-size:14px;padding:4px 8px;margin:0 0 12px}")
-              .Append("h2{font-size:13px;border-bottom:1px solid #808080;box-shadow:0 1px 0 #fff;padding-bottom:2px;margin-top:22px}")
-              .Append("table{border-collapse:collapse;background:#fff;border:2px inset #fff}td,th{border:1px solid #c0c0c0;padding:2px 6px;text-align:right;white-space:nowrap}")
-              .Append("th{background:#c0c0c0;border:2px outset #fff}td:first-child{text-align:left}pre{background:#fff;border:2px inset #fff;padding:6px;font:11px 'Lucida Console',monospace;overflow:auto}")
-              .Append("img{border:2px inset #fff;background:#fff;display:block;margin:6px 0}.box{max-width:100%;overflow-x:auto}</style></head><body>");
-            sb.Append($"<h1>SPICA analysis report</h1>");
-            var st = rs.Setup;
-            sb.Append("<table>");
-            void Row(string k, string v) => sb.Append($"<tr><td>{H(k)}</td><td style=\"text-align:left\">{H(v)}</td></tr>");
-            Row("Campaign", rs.Title);
-            Row("Folder", rs.Folder);
+            sb.Append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+              .Append($"<title>SPICA report - {H(rs.Title)}</title><style>")
+              .Append(":root{--ink:#1d1d1f;--muted:#5f5f5f;--line:#dedede;--accent:#000080;--soft:#f5f5f7}")
+              .Append("*{box-sizing:border-box}body{margin:0;background:#e9e9e6;color:var(--ink);font:13px/1.5 'Segoe UI',Tahoma,Arial,sans-serif}")
+              .Append(".page{max-width:1020px;margin:24px auto;background:#fff;padding:36px 44px 28px;box-shadow:0 1px 4px rgba(0,0,0,.18)}")
+              .Append("header{border-bottom:3px solid var(--accent);padding-bottom:14px;margin-bottom:8px}")
+              .Append("header .brand{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}")
+              .Append("h1{margin:4px 0 2px;font-size:24px;font-weight:600}header .sub{color:var(--muted)}")
+              .Append("h2{font-size:18px;font-weight:600;margin:36px 0 10px;padding-top:14px;border-top:1px solid var(--line)}")
+              .Append("h3{font-size:14px;font-weight:600;margin:22px 0 6px}")
+              .Append("table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums;margin:6px 0 4px}")
+              .Append("th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}")
+              .Append("th{background:var(--soft);font-weight:600;border-bottom:2px solid #c4c4c4}td:first-child,th:first-child{text-align:left}")
+              .Append("table.kv{width:auto}table.kv td{text-align:left;border:none;padding:2px 14px 2px 0}table.kv td:first-child{color:var(--muted)}")
+              .Append(".wide{overflow-x:auto}.note{color:var(--muted);font-size:12px;margin:2px 0 10px}")
+              .Append("figure{margin:12px 0 6px}figure svg{display:block;width:100%;height:auto;border:1px solid var(--line)}")
+              .Append("figcaption{color:var(--muted);font-size:12px;margin-top:5px}")
+              .Append("pre{background:var(--soft);border-left:3px solid var(--accent);padding:9px 13px;margin:8px 0;font:12px/1.45 Consolas,'Lucida Console',monospace;white-space:pre-wrap}")
+              .Append("nav{background:var(--soft);padding:10px 16px;margin:18px 0}nav b{font-size:12px}nav ol{columns:2;margin:4px 0 0;padding-left:20px}nav a{color:var(--accent);text-decoration:none}")
+              .Append(".cards{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 4px}.card{border:1px solid var(--line);border-top:3px solid var(--accent);padding:6px 12px;min-width:120px}")
+              .Append(".card span{display:block;color:var(--muted);font-size:11px}.card b{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}")
+              .Append("footer{margin-top:36px;padding-top:8px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}")
+              .Append("@media print{body{background:#fff}.page{box-shadow:none;margin:0;max-width:none;padding:0}nav{display:none}")
+              .Append("section.meas{break-before:page}figure,pre,table,.cards{break-inside:avoid}}")
+              .Append("</style></head><body><div class=\"page\">");
+
+            // ---------------------------------------------------------------- header + campaign
+            sb.Append("<header><div class=\"brand\">SPICA - Spice Parallel Instancer Circuit Analysis</div>")
+              .Append($"<h1>Monte Carlo report: {H(schematic.Length > 0 ? schematic : rs.Title)}</h1>")
+              .Append($"<div class=\"sub\">Campaign {H(rs.Title)} &middot; generated {DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv)} by SPICA {H(MainForm.AppVersion)}</div></header>");
+
+            sb.Append("<table class=\"kv\">");
+            void Row(string k, string v) => sb.Append($"<tr><td>{H(k)}</td><td>{H(v)}</td></tr>");
             Row("Schematic", st.Schematic);
-            Row("Rows", $"{rs.Rows.Count} ({rs.Rows.Count(r => r.Status == RunStatus.Ok)} with data)");
-            Row("Temperature", rs.Mode == TempMode.Corners ? "corners " + string.Join(", ", rs.Corners.Select(t => t.ToString("0.###", Inv))) + " °C" : rs.Mode == TempMode.Random ? "random per run" : "schematic default");
+            Row("Results folder", rs.Folder);
+            Row("Runs", $"{rs.Rows.Count} ({rs.Rows.Count(r => r.Status == RunStatus.Ok)} with data)");
+            Row("Temperature", rs.Mode == TempMode.Corners ? "corners " + string.Join(", ", rs.Corners.Select(t => t.ToString("0.###", Inv))) + " °C"
+                              : rs.Mode == TempMode.Random ? "random per run" : "schematic default");
             Row("Sampling", rs.Paired ? $"SPICA paired generator, seed {rs.Seed}" : "LTspice mc()");
-            Row("Generated", DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv));
             sb.Append("</table>");
 
-            var groups = rs.GroupNames();
+            sb.Append("<nav><b>Contents</b><ol><li><a href=\"#summary\">Summary</a></li>");
+            for (int i = 0; i < rs.Meas.Count; i++) sb.Append($"<li><a href=\"#m{i}\">{H(rs.Meas[i])}</a></li>");
+            if (hasTf) sb.Append("<li><a href=\"#tf\">Transfer function</a></li>");
+            sb.Append("</ol></nav>");
+
+            // ---------------------------------------------------------------- summary tables
+            sb.Append("<h2 id=\"summary\">Summary</h2>");
             for (int g = 0; g < groups.Count; g++)
             {
-                sb.Append($"<h2>Statistics - {H(groups[g])}</h2><div class=\"box\"><table><tr>");
-                foreach (var h in new[] { "Measurement", "n", "Mean", "Std dev", "Min", "Max", "Median", "P0.135%", "P99.865%", "Skew", "Ex.kurt", "Normal p", "LSL", "USL", "Yield", "Yield 95% CI", "Cpk", "Pred. ppm" })
+                if (groups.Count > 1) sb.Append($"<h3>{H(groups[g])}</h3>");
+                var stats = rs.Meas.Select(m => MeasStats.Of(m, groups[g], rs.Values(m, g), st.Spec(m))).ToList();
+
+                sb.Append("<div class=\"wide\"><table><tr>");
+                foreach (var h in new[] { "Measurement", "n", "Mean", "Std dev", "Min", "Max", "Median", "P0.135 %", "P99.865 %", "Skew", "Ex. kurt", "Normality p" })
                     sb.Append($"<th>{H(h)}</th>");
                 sb.Append("</tr>");
-                foreach (var m in rs.Meas)
+                foreach (var s in stats)
                 {
-                    var s = MeasStats.Of(m, groups[g], rs.Values(m, g), st.Spec(m));
-                    bool sp = s.Spec?.IsSet == true;
-                    var cells = new[] { m, s.D.N.ToString(Inv), F(s.D.Mean), F(s.D.Std), F(s.D.Min), F(s.D.Max), F(s.D.Median), F(s.P00135), F(s.P99865),
-                        Num(s.D.Skew, "0.000"), Num(s.D.ExKurt, "0.000"), MeasStats.P(s.AdP), sp ? F(s.Spec.Lsl) : "", sp ? F(s.Spec.Usl) : "",
-                        sp ? MeasStats.Pct(s.Cap.Yield) : "", sp ? $"{MeasStats.Pct(s.Cap.YieldLo)} .. {MeasStats.Pct(s.Cap.YieldHi)}" : "", Num(s.Cap.Cpk, "0.000"),
-                        sp && s.NormalOk ? MeasStats.Ppm(s.Cap.PredictedPpm) : "" };
+                    var cells = new[] { s.Meas, s.D.N.ToString(Inv), F(s.D.Mean), F(s.D.Std), F(s.D.Min), F(s.D.Max), F(s.D.Median), F(s.P00135), F(s.P99865),
+                        Num(s.D.Skew, "0.000"), Num(s.D.ExKurt, "0.000"), MeasStats.P(s.AdP) };
                     sb.Append("<tr>").Append(string.Concat(cells.Select(c => $"<td>{H(c)}</td>"))).Append("</tr>");
                 }
                 sb.Append("</table></div>");
+                sb.Append("<p class=\"note\">P0.135 % and P99.865 % bound the central 99.73 % (&plusmn;3&sigma; for a normal distribution). Normality p is the Anderson-Darling test.</p>");
+
+                if (anySpec)
+                {
+                    sb.Append("<div class=\"wide\"><table><tr>");
+                    foreach (var h in new[] { "Measurement", "LSL", "USL", "Yield", "Yield 95 % CI", "Cpk", "Predicted fails" })
+                        sb.Append($"<th>{H(h)}</th>");
+                    sb.Append("</tr>");
+                    foreach (var s in stats.Where(x => x.Spec?.IsSet == true))
+                    {
+                        var cells = new[] { s.Meas, F(s.Spec.Lsl), F(s.Spec.Usl), MeasStats.Pct(s.Cap.Yield), $"{MeasStats.Pct(s.Cap.YieldLo)} .. {MeasStats.Pct(s.Cap.YieldHi)}",
+                            Num(s.Cap.Cpk, "0.000"), s.NormalOk ? MeasStats.Ppm(s.Cap.PredictedPpm) : "not normal" };
+                        sb.Append("<tr>").Append(string.Concat(cells.Select(c => $"<td>{H(c)}</td>"))).Append("</tr>");
+                    }
+                    sb.Append("</table></div>");
+                }
                 if (rs.Mode != TempMode.Corners) break;   // other modes have a single group
             }
 
+            // ---------------------------------------------------------------- one section per measurement
             using (var c1 = new Win98Chart())
             using (var c2 = new Win98Chart())
             {
-                foreach (var m in rs.Meas)
+                for (int i = 0; i < rs.Meas.Count; i++)
                 {
-                    sb.Append($"<h2>{H(m)}</h2>");
+                    string m = rs.Meas[i];
+                    sb.Append($"<section class=\"meas\"><h2 id=\"m{i}\">{H(m)}</h2>");
                     var s = BuildHistogram(c1, m, 0, true);
-                    sb.Append(Img(c1));
+                    sb.Append("<div class=\"cards\">").Append(Card("Runs", s.D.N.ToString(Inv))).Append(Card("Mean", Win98Chart.Fmt(s.D.Mean))).Append(Card("Std dev", Win98Chart.Fmt(s.D.Std)));
+                    if (s.Spec?.IsSet == true) sb.Append(Card("Yield", MeasStats.Pct(s.Cap.Yield))).Append(Card("Cpk", Num(s.Cap.Cpk, "0.000")));
+                    sb.Append("</div>");
+                    sb.Append(Fig(c1, $"Distribution of {m} over {s.D.N} runs" + (s.Spec?.IsSet == true ? ", with the specification limits." : ".")));
                     sb.Append(Pre(s.Narrative()));
-                    sb.Append(Pre(BuildConvergence(c1, c2, m, 0)));
-                    sb.Append(Img(c1, 760, 240));
-                    if (rs.Mode == TempMode.Corners) { var lv = new ListView(); sb.Append(Pre(BuildTempCorners(c1, lv, m))); sb.Append(Img(c1)); }
-                    else if (rs.Mode == TempMode.Random) { var lv = new ListView(); sb.Append(Pre(BuildTempRandom(c1, lv, m))); sb.Append(Img(c1)); }
+
+                    if (rs.Params.Count > 0)
+                    {
+                        // what drives the spread: share of variance per random parameter
+                        var sr = BuildSensitivity(c1, m, 0, true, false, 12);
+                        var top = sr.Items.Where(x => !double.IsNaN(x.Share)).Take(12).ToList();
+                        if (top.Count > 0)
+                        {
+                            sb.Append("<h3>Sensitivity</h3>");
+                            sb.Append(Fig(c1, $"Share of the variance of {m} explained by each random parameter (linear model, R² = {(100 * sr.R2).ToString("0.0", Inv)} %).", 760, 70 + 24 * top.Count));
+                            sb.Append("<div class=\"wide\"><table><tr><th>Input</th><th>Share of variance</th><th>Signed effect (SRC)</th><th>Shift at limit</th><th style=\"text-align:left\">Limit</th></tr>");
+                            foreach (var it in top)
+                                sb.Append($"<tr><td>{H(it.Name)}</td><td>{(100 * it.Share).ToString("0.0", Inv)} %</td><td>{Num(it.Src, "+0.000;-0.000")}</td><td>{H(F(it.AtLimit))}</td><td style=\"text-align:left\">{H(it.LimitText)}</td></tr>");
+                            sb.Append("</table></div>");
+                        }
+                    }
+
+                    sb.Append("<h3>Convergence</h3>");
+                    string conv = BuildConvergence(c1, c2, m, 0);
+                    sb.Append(Fig(c1, null, 760, 240)).Append(Fig(c2, null, 760, 240));
+                    sb.Append(Pre(conv));
+
+                    if (rs.Mode == TempMode.Corners)
+                    {
+                        string t = BuildTempCorners(c1, new ListView(), m);
+                        sb.Append("<h3>Temperature</h3>").Append(Fig(c1, $"{m} at each temperature corner.")).Append(Pre(t));
+                    }
+                    else if (rs.Mode == TempMode.Random)
+                    {
+                        string t = BuildTempRandom(c1, new ListView(), m);
+                        sb.Append("<h3>Temperature</h3>").Append(Fig(c1, $"{m} against the random temperature of each run.")).Append(Pre(t));
+                    }
+                    sb.Append("</section>");
                 }
-                var tf = st.Tf;
-                if (tf.X.Length > 0 && tf.Y.Length > 0 && rs.Col(tf.Y) >= 0)
+
+                if (hasTf)
                 {
-                    sb.Append($"<h2>Transfer function: {H(tf.Y)} vs {H(tf.X)}</h2>");
+                    sb.Append($"<section class=\"meas\"><h2 id=\"tf\">Transfer function: {H(tf.Y)} vs {H(tf.X)}</h2>");
                     for (int g = 0; g < groups.Count; g++)
                     {
                         var rep = BuildTf(c1, c2, tf, g);
-                        if (groups.Count > 1) sb.Append($"<p><b>{H(groups[g])}</b></p>");
-                        sb.Append(Img(c1)).Append(Img(c2, 760, 240)).Append(Pre(rep.Narrative()));
+                        if (groups.Count > 1) sb.Append($"<h3>{H(groups[g])}</h3>");
+                        sb.Append(Fig(c1, $"{tf.Y} against {tf.X}.")).Append(Fig(c2, null, 760, 240)).Append(Pre(rep.Narrative()));
                         if (rs.Mode != TempMode.Corners) break;
                     }
+                    sb.Append("</section>");
                 }
             }
-            sb.Append("<p style=\"color:#808080\">Generated by SPICA - Spice Parallel Instancer Circuit Analysis.</p></body></html>");
+            sb.Append($"<footer>Generated by SPICA {H(MainForm.AppVersion)} - Spice Parallel Instancer Circuit Analysis. ")
+              .Append("Figures are vector graphics (SVG): they stay sharp when zoomed or printed.</footer></div></body></html>");
             return sb.ToString();
         }
     }
