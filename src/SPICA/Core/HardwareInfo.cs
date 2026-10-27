@@ -60,6 +60,28 @@ namespace Spica.Core
             return GlobalMemoryStatusEx(ms) ? (long)ms.ullAvailPhys : 0;
         }
 
+        /// <summary>Physical memory in use, 0..100 %.</summary>
+        public static double MemoryLoadPercent()
+        {
+            var ms = new MEMORYSTATUSEX();
+            return GlobalMemoryStatusEx(ms) && ms.ullTotalPhys > 0 ? 100.0 * (ms.ullTotalPhys - ms.ullAvailPhys) / ms.ullTotalPhys : double.NaN;
+        }
+
+        static long lastIdle, lastBusy;
+
+        /// <summary>Whole-machine CPU use since the previous call, 0..100 % (NaN on the first call).
+        /// GetSystemTimes instead of performance counters, whose names are localized.</summary>
+        public static double CpuLoadPercent()
+        {
+            if (!GetSystemTimes(out long idle, out long kernel, out long user)) return double.NaN;
+            long busy = kernel + user - idle;              // kernel time includes idle time
+            long dIdle = idle - lastIdle, dBusy = busy - lastBusy;
+            bool first = lastIdle == 0 && lastBusy == 0;
+            lastIdle = idle; lastBusy = busy;
+            if (first || dIdle + dBusy <= 0) return double.NaN;
+            return 100.0 * dBusy / (dIdle + dBusy);
+        }
+
         static void ReadTopology(HardwareInfo hw)
         {
             // RelationAll = 0xFFFF
@@ -147,6 +169,10 @@ namespace Spica.Core
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX lpBuffer);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool GetSystemTimes(out long idleTime, out long kernelTime, out long userTime);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool GetLogicalProcessorInformationEx(int relationshipType, IntPtr buffer, ref uint returnedLength);

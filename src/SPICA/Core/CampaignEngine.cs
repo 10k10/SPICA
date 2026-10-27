@@ -20,7 +20,7 @@ namespace Spica.Core
         public List<string> SaveSignals;      // null = no .save (LTspice saves everything)
         public bool KeepRaw = true;
         public bool ClockReseed = true;
-        public AdaptiveScheduler.Config? Manual;
+        public RunScheduler.Config? Manual;
 
         public List<double> Corners;          // fixed temperatures: every run is simulated at each (null = one pass)
         public bool RandomTemp;               // per-run temperature, flat between TempMin and TempMax
@@ -128,12 +128,13 @@ namespace Spica.Core
         // jobs not handed out yet, as inclusive ranges in job order (one range for a fresh campaign)
         readonly List<int[]> pending = new List<int[]>();
 
-        AdaptiveScheduler sched;
+        RunScheduler sched;
         StreamWriter logFile;
         string chunksDir, iniPath;
         int pendingCount, resumedCount, chunkSeq, workerSeq, activeWorkers, blockedCount;
         long rawBytes;
         DateTime lastLaunch = DateTime.MinValue, lastSave = DateTime.MinValue;
+        double saveInterval = 1;      // seconds between progress saves; grows with the cost of a save
         volatile bool cancel, draining, dirty;
         bool finished, saveWarned;
         string fatal;
@@ -213,8 +214,8 @@ namespace Spica.Core
                 catch (Exception ex) { Log("Could not write campaign.spica: " + ex.Message); }
             }
 
-            var warm = opt.Manual.HasValue ? null : profiles.Find(hw.MachineKey, opt.Netlist.CircuitHash());
-            sched = new AdaptiveScheduler(hw, Math.Max(1, pendingCount), warm, opt.Manual, Log);
+            var warm = profiles.Find(hw.MachineKey, opt.Netlist.CircuitHash());
+            sched = new RunScheduler(hw, Math.Max(1, pendingCount), warm, opt.Manual, Log);
 
             WriteState("Running");
             clock.Start();
@@ -632,7 +633,7 @@ namespace Spica.Core
                 WriteCsvAtomic(list);
                 if (opt.Mc != null && opt.Mc.Sites.Count > 0) WriteSamples(Path.Combine(opt.OutputDir, "samples.csv"));
                 WriteSummary(Path.Combine(opt.OutputDir, "summary.txt"), list, stopped);
-                if (!stopped && !opt.Manual.HasValue && sched.Best.Instances > 0 && !double.IsNaN(sched.SecondsPerRun))
+                if (!stopped && !double.IsNaN(sched.SecondsPerRun))
                     profiles.Store(hw.MachineKey, opt.Netlist.CircuitHash(), sched.ToProfile());
                 WriteState(stopped ? "Stopped" : "Finished");
 
@@ -647,15 +648,21 @@ namespace Spica.Core
             Finished?.Invoke();
         }
 
-        /// <summary>Writes results.csv and campaign.state while the campaign runs (at most once a second).</summary>
+        /// <summary>
+        /// Writes results.csv and campaign.state while the campaign runs, so a crash can be resumed. The whole file is
+        /// rewritten, so the interval is 20 times the cost of the last save (1 .. 30 s): saving stays under ~5 % of one
+        /// core however many runs there are (100k runs take ~0.2 s to write).
+        /// </summary>
         void SaveProgress(bool force)
         {
             if (!dirty && !force) return;
-            if (!force && (DateTime.UtcNow - lastSave).TotalSeconds < 1) return;
+            if (!force && (DateTime.UtcNow - lastSave).TotalSeconds < saveInterval) return;
             dirty = false;
-            lastSave = DateTime.UtcNow;
+            var sw = Stopwatch.StartNew();
             WriteCsvAtomic(GetResults());
             WriteState("Running");
+            saveInterval = Math.Max(1, Math.Min(30, 20 * sw.Elapsed.TotalSeconds));
+            lastSave = DateTime.UtcNow;
         }
 
         void WriteCsvAtomic(List<RunResult> list)
@@ -737,7 +744,7 @@ namespace Spica.Core
         {
             var inv = CultureInfo.InvariantCulture;
             var sb = new StringBuilder("run");
-            foreach (var s in opt.Mc.Sites) sb.Append(',').Append(Csv($"{s.Label} [{(s.Kind == SiteKind.Gaussian ? "gauss" : "uniform")}]"));
+            foreach (var s in opt.Mc.Sites) sb.Append(',').Append(Csv(McPlan.ColumnName(s)));
             sb.Append("\r\n");
             for (int r = 1; r <= opt.Runs; r++)
             {

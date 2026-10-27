@@ -40,6 +40,45 @@ namespace Spica.Core
 
         public bool HasTemp => Mode != TempMode.Default;
 
+        /// <summary>
+        /// The random parameters of a paired campaign, one column per mc()/flat()/gauss() site, e.g.
+        /// "R1 [uniform]" (value in -1..1, the tolerance edges) or "C1 [gauss]" (standard normal).
+        /// Empty for LTspice mc() campaigns, whose draws SPICA cannot see.
+        /// </summary>
+        public readonly List<string> Params = new List<string>();
+        readonly Dictionary<string, int> paramIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<int, double[]> paramRows = new Dictionary<int, double[]>();
+        Func<int, double[]> paramGen;
+
+        /// <summary>Parameter values of one run (null when unknown).</summary>
+        public double[] ParamRow(int run)
+        {
+            if (paramRows.TryGetValue(run, out var v)) return v;
+            if (paramGen == null || run < 1) return null;
+            return paramRows[run] = paramGen(run);
+        }
+
+        public bool IsParam(string column) => paramIndex.ContainsKey(column ?? "");
+
+        public static bool IsGaussianParam(string name) => name.EndsWith("[gauss]", StringComparison.OrdinalIgnoreCase);
+
+        void AddParam(string name)
+        {
+            string n = name, b = name;
+            for (int k = 2; paramIndex.ContainsKey(n) || Col(n) >= 0; k++) n = $"{b} #{k}";
+            paramIndex[n] = Params.Count;
+            Params.Add(n);
+        }
+
+        /// <summary>Everything that can go on a scatter axis: measurements, TEMP, parameters, the run number.</summary>
+        public List<string> AxisColumns()
+        {
+            var l = NumericColumns();
+            l.AddRange(Params);
+            l.Add(RunColumn);
+            return l;
+        }
+
         public int Col(string meas)
         {
             for (int i = 0; i < Meas.Count; i++) if (Meas[i].Equals(meas, StringComparison.OrdinalIgnoreCase)) return i;
@@ -73,6 +112,11 @@ namespace Spica.Core
         {
             if (column == TempColumn) return r.Temp;
             if (column == RunColumn) return r.Run;
+            if (paramIndex.TryGetValue(column, out int pi))
+            {
+                var pv = ParamRow(r.Run);
+                return pv != null && pi < pv.Length ? pv[pi] : double.NaN;
+            }
             int c = Col(column);
             return c >= 0 && r.Status == RunStatus.Ok ? r.V[c] : double.NaN;
         }
@@ -122,6 +166,15 @@ namespace Spica.Core
                 Seed = opt.Seed,
             };
             rs.Meas.AddRange(meas);
+            if (opt.Mc != null && opt.Mc.Sites.Count > 0)
+            {
+                // the paired generator is a pure function of (seed, site, run): recompute instead of reading samples.csv
+                foreach (var site in opt.Mc.Sites) rs.AddParam(McPlan.ColumnName(site));
+                var sites = opt.Mc.Sites.ToArray();
+                uint seed = opt.Seed;
+                int runs = opt.Runs;
+                rs.paramGen = run => run > runs ? null : sites.Select(site => McPlan.Value(seed, site, run)).ToArray();
+            }
             if (opt.Corners != null && opt.Corners.Count > 0) { rs.Mode = TempMode.Corners; rs.Corners.AddRange(opt.Corners); }
             else if (opt.RandomTemp) rs.Mode = TempMode.Random;
             foreach (var r in list) rs.Rows.Add(rs.MakeRow(r.Run, r.Temp, r.Corner, r.Status, m => r.Values.TryGetValue(m, out var v) ? v : "", r.Note));
@@ -206,7 +259,32 @@ namespace Spica.Core
                 rs.Rows.Add(row);
             }
             rs.SortRows();
+            rs.LoadSamples(Path.Combine(folder, "samples.csv"));
             return rs;
+        }
+
+        /// <summary>samples.csv: run, then one column per random parameter.</summary>
+        void LoadSamples(string path)
+        {
+            if (!File.Exists(path)) return;
+            try
+            {
+                var lines = File.ReadAllLines(path, Encoding.UTF8);
+                if (lines.Length < 2) return;
+                var head = SplitCsv(lines[0]);
+                for (int i = 1; i < head.Count; i++) AddParam(head[i]);
+                var inv = CultureInfo.InvariantCulture;
+                for (int li = 1; li < lines.Length; li++)
+                {
+                    var f = SplitCsv(lines[li]);
+                    if (f.Count < 2 || !int.TryParse(f[0], NumberStyles.Integer, inv, out int run)) continue;
+                    var v = new double[Params.Count];
+                    for (int i = 0; i < v.Length; i++)
+                        v[i] = i + 1 < f.Count && double.TryParse(f[i + 1], NumberStyles.Float, inv, out var d) ? d : double.NaN;
+                    paramRows[run] = v;
+                }
+            }
+            catch { Params.Clear(); paramIndex.Clear(); paramRows.Clear(); }
         }
 
         static List<string> SplitCsv(string line)

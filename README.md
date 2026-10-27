@@ -83,25 +83,49 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
 - **Temperature**: corners give per-temperature statistics and, with paired samples, per-unit drift,
   tempco (ppm/°C) and the yield of units passing every spec at all temperatures; a random range gives
   the regression on temperature, tempco and the RSS split of the spread into temperature and tolerances.
+- **Sensitivity**: with paired samples SPICA knows every random draw, so it regresses each
+  measurement on all random parameters (and on temperature in random-temperature campaigns):
+  share of the variance per input (standardized coefficient squared, adding up to R2), signed
+  effect, and the shift of the measurement with the input at its tolerance limit, as a tornado chart
+  and a table (double-click an input for its scatter plot). Without paired samples: correlation with
+  the other measurements.
 - **Convergence**: running mean with its 95 % band, running sigma and yield.
-- **Report**: one HTML file with every table, chart and narrative.
+- **Charts**: drag a box to zoom (a flat box zooms X only), wheel to zoom (Shift: X, Ctrl: Y),
+  middle-drag to pan, double-click to reset, click a legend entry to hide a series; right-click to
+  copy or save the chart as PNG or SVG. Histogram view: histogram (bins selectable), cumulative
+  distribution or normal probability plot. Scatter axes: measurements, TEMP, random parameters or
+  the run number.
+- **Live**: while a campaign runs the tab refreshes every second; untick *Live update* to freeze the
+  snapshot while you analyse it.
+- **Report**: one self-contained HTML file: campaign summary, contents, distribution and
+  specification tables, then one section per measurement (key numbers, histogram, convergence,
+  temperature) and the transfer function. Charts are vector (SVG), sharp when zoomed or printed;
+  printing starts each measurement on a new page.
 
 The statistics were checked against SciPy (Anderson-Darling, skewness, kurtosis, quantiles,
 Clopper-Pearson, normal tail ppm, regression standard errors).
 
-## Adaptive scheduler (Automatic mode)
+## Monitor
 
-- Starts at one instance per physical core with 1 thread each (or from the best configuration
-  saved for this machine + circuit).
-- Measures throughput per configuration from LTspice's own simulation time, so the score does
-  not depend on chunk size.
-- Hill-climbs: more instances, fewer instances, or half the instances with twice the threads;
-  keeps a change only if throughput improves by more than 3 %. It stops probing when too little work is left.
-- Chunk size: big enough that LTspice start-up (~0.9–1.3 s here) stays under ~5 % of the
-  work, capped in duration so the controller can react, and shrunk near the end (guided
-  self-scheduling) so all instances finish together, but never below one start-up worth of simulation per chunk.
-- Memory guard from the observed peak RAM per instance; a running instance that opens a window
-  (e.g. a dialog) is detected and killed; failed chunks are retried run by run.
+Progress, timing, the scheduler's plan and per-instance status, a throughput graph and a resource
+meter (CPU and RAM of the whole machine, space used on the output drive) in the style of Windows 98.
+
+## Scheduler (Automatic mode)
+
+One fixed rule, printed in the log as the campaign's plan:
+
+- **Instances** N = physical cores (or the manual value), 1 thread each; fewer if free RAM
+  divided by the peak RAM of one instance is smaller. The memory guard only ever lowers N.
+- **Run time** x: each instance first simulates one run alone; x is then tracked from LTspice's
+  own simulation time.
+- **Chunk** k = the runs that fit in about 2 minutes (k = 120 s / x), never more than an equal
+  share of what is left (so all instances finish together) and never a .raw over ~1.5 GB.
+  Two minutes keeps LTspice start-up (~1 s) under 1 % of the work and saves progress often.
+- **Total** about runs x x / N, e.g. `Plan: 1000 runs x 2 s = 33 min of simulation / 6 instances
+  = about 6 min; chunks of 59 runs (~118 s) -> 17 launches.`
+- x is remembered per machine and circuit, so the next campaign plans from the first chunk.
+- A running instance that opens a window (e.g. a dialog) is detected and killed; failed chunks
+  are retried run by run.
 
 ## Verified on this machine (Ryzen 5 5500X3D, 6C/12T, LTspice 26.0.1)
 

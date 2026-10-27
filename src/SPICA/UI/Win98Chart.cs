@@ -9,7 +9,7 @@ using System.Windows.Forms;
 
 namespace Spica.UI
 {
-    public enum SeriesKind { Bars, Points, Line, VLine, HLine, ErrorBars }
+    public enum SeriesKind { Bars, Points, Line, VLine, HLine, ErrorBars, HBars }
 
     public sealed class ChartSeries
     {
@@ -19,6 +19,8 @@ namespace Spica.UI
         public double[] X = new double[0], Y = new double[0];
         public double[] Lo, Hi;              // ErrorBars: lower / upper ends
         public double[] Edges;               // Bars: bin edges (X.Length + 1), Y = heights
+                                             // HBars: X = bar lengths, bar i on category row i (YCategories)
+        public Color NegColor = Win98Chart.Maroon;   // HBars: colour of negative bars
         public bool Dashed;
         public int Size = 3;                 // point size / line width
         public bool InLegend = true;
@@ -28,7 +30,7 @@ namespace Spica.UI
     /// Plot control in the style of a Windows 98 era engineering tool: white plot area, black frame,
     /// dotted grid, 16-colour VGA palette. Histograms, scatter, lines, limit lines and error bars.
     /// </summary>
-    public class Win98Chart : Control
+    public partial class Win98Chart : Control
     {
         public static readonly Color Navy = Color.FromArgb(0, 0, 128);
         public static readonly Color Red = Color.FromArgb(255, 0, 0);
@@ -45,6 +47,8 @@ namespace Spica.UI
         public string Title = "", XLabel = "", YLabel = "";
         public string EmptyText = "No data.";
         public bool YFromZero;
+        /// <summary>Category names for HBars: row i is labelled YCategories[i], top to bottom.</summary>
+        public string[] YCategories;
 
         Rectangle plot;
         double x0, x1, y0, y1;
@@ -58,14 +62,12 @@ namespace Spica.UI
             Font = Win98.Font;
         }
 
-        public void Clear() { Series.Clear(); Title = XLabel = YLabel = ""; YFromZero = false; EmptyText = "No data."; Invalidate(); }
+        public void Clear() { Series.Clear(); Title = XLabel = YLabel = ""; YFromZero = false; YCategories = null; EmptyText = "No data."; Invalidate(); }
 
         public ChartSeries Add(ChartSeries s) { Series.Add(s); Invalidate(); return s; }
 
         protected override void OnPaint(PaintEventArgs e) => Render(e.Graphics, ClientRectangle, true);
 
-        protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); mouse = e.Location; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); mouse = null; Invalidate(); }
 
         public Bitmap ToBitmap(int w, int h)
         {
@@ -90,7 +92,8 @@ namespace Spica.UI
 
             ComputeRange();
             int top = bounds.Top + (Title.Length > 0 ? 22 : 8);
-            int left = bounds.Left + 62, right = bounds.Right - 14, bottom = bounds.Bottom - (XLabel.Length > 0 ? 40 : 26);
+            int left = bounds.Left + (YCategories != null ? Math.Min(bounds.Width / 3, YCategories.Select(c => TextRenderer.MeasureText(c ?? "", Font).Width).DefaultIfEmpty(0).Max() + 14) : 62);
+            int right = bounds.Right - 14, bottom = bounds.Bottom - (XLabel.Length > 0 ? 40 : 26);
             plot = Rectangle.FromLTRB(left, top, Math.Max(left + 10, right), Math.Max(top + 10, bottom));
 
             if (Title.Length > 0)
@@ -99,10 +102,11 @@ namespace Spica.UI
             DrawAxes(g, bounds);
             var oldClip = g.Clip;
             g.SetClip(Rectangle.Inflate(plot, -1, -1));
-            foreach (var s in Series) DrawSeries(g, s);
+            for (int i = 0; i < Series.Count; i++) if (!IsHidden(i)) DrawSeries(g, Series[i]);
             g.Clip = oldClip;
             using (var frame = new Pen(Color.Black)) g.DrawRectangle(frame, plot);
-            DrawLegend(g);
+            DrawLegend(g, interactive);
+            if (interactive) DrawInteraction(g);
 
             if (interactive && mouse.HasValue && plot.Contains(mouse.Value))
             {
@@ -120,8 +124,10 @@ namespace Spica.UI
             double xa = double.PositiveInfinity, xb = double.NegativeInfinity, ya = double.PositiveInfinity, yb = double.NegativeInfinity;
             void X(double v) { if (Ok(v)) { xa = Math.Min(xa, v); xb = Math.Max(xb, v); } }
             void Y(double v) { if (Ok(v)) { ya = Math.Min(ya, v); yb = Math.Max(yb, v); } }
-            foreach (var s in Series)
+            for (int si = 0; si < Series.Count; si++)
             {
+                if (IsHidden(si)) continue;
+                var s = Series[si];
                 switch (s.Kind)
                 {
                     case SeriesKind.Bars:
@@ -130,6 +136,7 @@ namespace Spica.UI
                         Y(0);
                         break;
                     case SeriesKind.VLine: foreach (var v in s.X) X(v); break;
+                    case SeriesKind.HBars: foreach (var v in s.X) X(v); X(0); break;
                     case SeriesKind.HLine: foreach (var v in s.Y) Y(v); break;
                     default:
                         foreach (var v in s.X) X(v);
@@ -147,6 +154,8 @@ namespace Spica.UI
             double px = (xb - xa) * 0.04, py = (yb - ya) * 0.06;
             x0 = xa - px; x1 = xb + px;
             y0 = (YFromZero && ya >= 0) ? 0 : ya - py; y1 = yb + py;
+            if (YCategories != null) { y0 = YCategories.Length - 0.4; y1 = -0.6; }   // row 0 at the top
+            if (view.HasValue) { var v = view.Value; x0 = v.X0; x1 = v.X1; y0 = v.Y0; y1 = v.Y1; }
         }
 
         static bool Ok(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
@@ -170,6 +179,15 @@ namespace Spica.UI
                     var sz = TextRenderer.MeasureText(s, Font);
                     TextRenderer.DrawText(g, s, Font, new Point((int)x - sz.Width / 2, plot.Bottom + 5), Color.Black);
                 }
+                if (YCategories != null)
+                    for (int i = 0; i < YCategories.Length; i++)
+                    {
+                        float y = MapY(i);
+                        if (y < plot.Top - 2 || y > plot.Bottom + 2) continue;
+                        var sz = TextRenderer.MeasureText(YCategories[i] ?? "", Font);
+                        TextRenderer.DrawText(g, YCategories[i] ?? "", Font, new Point(plot.Left - 6 - sz.Width, (int)y - sz.Height / 2), Color.Black);
+                    }
+                else
                 foreach (var v in Ticks(y0, y1, Math.Max(2, plot.Height / 40)))
                 {
                     float y = MapY(v);
@@ -206,6 +224,20 @@ namespace Spica.UI
                             if (s.Y[i] <= 0) continue;
                             var r = RectangleF.FromLTRB(a, top, Math.Max(a + 1, b), bot);
                             g.FillRectangle(fill, r);
+                            g.DrawRectangle(edge, r.X, r.Y, r.Width, r.Height);
+                        }
+                    break;
+                case SeriesKind.HBars:
+                    using (var pos = new SolidBrush(s.Color))
+                    using (var neg = new SolidBrush(s.NegColor))
+                    using (var edge = new Pen(Color.Black))
+                        for (int i = 0; i < s.X.Length; i++)
+                        {
+                            if (!Ok(s.X[i])) continue;
+                            float a = MapX(Math.Min(0, s.X[i])), b = MapX(Math.Max(0, s.X[i]));
+                            float yt = MapY(i - 0.32), yb = MapY(i + 0.32);
+                            var r = RectangleF.FromLTRB(a, Math.Min(yt, yb), Math.Max(a + 1, b), Math.Max(yt, yb));
+                            g.FillRectangle(s.X[i] < 0 ? neg : pos, r);
                             g.DrawRectangle(edge, r.X, r.Y, r.Width, r.Height);
                         }
                     break;
@@ -254,8 +286,9 @@ namespace Spica.UI
             }
         }
 
-        void DrawLegend(Graphics g)
+        void DrawLegend(Graphics g, bool interactive)
         {
+            legendHits.Clear();
             var items = Series.Where(s => s.InLegend && !string.IsNullOrEmpty(s.Label)).ToList();
             if (items.Count == 0) return;
             int w = items.Max(s => TextRenderer.MeasureText(s.Label, Font).Width) + 30, h = items.Count * 15 + 6;
@@ -273,7 +306,10 @@ namespace Spica.UI
                     else if (s.Kind == SeriesKind.Points || s.Kind == SeriesKind.ErrorBars) g.FillRectangle(b, sw.X + 6, sw.Y + 2, 5, 5);
                     else g.DrawLine(p, sw.Left, sw.Top + 4, sw.Right, sw.Top + 4);
                 }
-                TextRenderer.DrawText(g, s.Label, Font, new Point(r.Left + 25, y), Color.Black);
+                bool off = hiddenLabels.Contains(s.Label);
+                if (off) using (var b = new SolidBrush(Color.White)) g.FillRectangle(b, sw.Left - 1, sw.Top - 1, sw.Width + 3, sw.Height + 3);
+                TextRenderer.DrawText(g, s.Label, Font, new Point(r.Left + 25, y), off ? Win98.Shadow : Color.Black);
+                if (interactive) legendHits.Add(new KeyValuePair<Rectangle, string>(new Rectangle(r.Left + 1, y, r.Width - 2, 15), s.Label));
                 y += 15;
             }
         }

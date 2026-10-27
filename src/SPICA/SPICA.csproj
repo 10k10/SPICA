@@ -9,7 +9,7 @@
     <RootNamespace>Spica</RootNamespace>
     <ApplicationIcon>Resources\spica.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Product>SPICA - Spice Parallel Instancer Circuit Analysis</Product>
     <Copyright>SPICA project</Copyright>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
