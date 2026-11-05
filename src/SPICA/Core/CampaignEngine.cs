@@ -359,9 +359,10 @@ namespace Spica.Core
         }
 
         /// <summary>
-        /// Seconds of work left, from the measured run time x rather than from the rate: the remaining runs not yet
-        /// handed out (plus one start-up per launch) shared by N instances, but never less than the longest running
-        /// chunk still needs. NaN while x is unknown.
+        /// Seconds of work left, from the measured run time x rather than from the rate. The remaining launches are
+        /// played out on the N instances: each one starts when an instance frees up (after its running chunk), so
+        /// the last round counts whole. Sharing the work evenly (work / N) is optimistic with long runs: 20 runs
+        /// of 260 s on 16 instances take two rounds, not 1.25. NaN while x is unknown.
         /// </summary>
         double ModelEta()
         {
@@ -370,16 +371,35 @@ namespace Spica.Core
             if (double.IsNaN(ov)) ov = 1;
             int n = Math.Max(1, sched.Current.Instances);
             int left = draining ? 0 : Unallocated;
-            double perChunk = Math.Max(1, Math.Min(RunScheduler.ChunkSeconds / x, Math.Ceiling(left / (double)n)));
-            double work = left * x + Math.Ceiling(left / perChunk) * ov, longest = 0;
+
+            // when each instance frees up: running chunks first (a chunk past its expected time needs a bit more)
+            var free = new List<double>();
             foreach (var w in workers)
                 if (w.Proc != null && !w.Exited && w.Expected > 0)
                 {
-                    double rem = Math.Max(0.05 * w.Expected, w.Expected - w.Clock.Elapsed.TotalSeconds);
-                    work += rem;
-                    longest = Math.Max(longest, rem);
+                    double el = w.Clock.Elapsed.TotalSeconds;
+                    free.Add(el < w.Expected ? w.Expected - el : Math.Max(0.05 * w.Expected, 0.1 * el));
                 }
-            return Math.Max(longest, work / n);
+            free.Sort();
+            double end = free.Count > 0 ? free[free.Count - 1] : 0;
+            if (left == 0) return end;
+            if (free.Count > n) free.RemoveRange(0, free.Count - n);   // instances being reduced: keep the longest
+            while (free.Count < n) free.Insert(0, 0);
+
+            // the scheduler's chunk rule: ~ChunkSeconds of work, at most an equal share of what is left
+            double maxK = Math.Max(1, Math.Floor(RunScheduler.ChunkSeconds / x));
+            if (left / maxK > 5000)
+                return Math.Max(end, (free.Sum() + left * x + Math.Ceiling(left / maxK) * ov) / n);   // many launches: rounding is negligible
+            var t = free.ToArray();
+            while (left > 0)
+            {
+                int k = (int)Math.Min(left, Math.Max(1, Math.Min(maxK, Math.Ceiling(left / (double)n))));
+                int i = 0;
+                for (int j = 1; j < t.Length; j++) if (t[j] < t[i]) i = j;
+                t[i] += ov + k * x;
+                left -= k;
+            }
+            return Math.Max(end, t.Max());
         }
 
         void UpdateRate()

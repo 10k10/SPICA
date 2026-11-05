@@ -41,6 +41,25 @@ static class Program
             return 0;
         }
 
+        // SPICA.Smoke --opamps <png> [part index] : capture Tools > Op-amp Models
+        if (args.Length > 1 && args[0] == "--opamps")
+        {
+            var f = new Spica.UI.OpAmpForm(null) { StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen };
+            f.Shown += (s, e) =>
+            {
+                if (args.Length > 2) f.Controls.OfType<System.Windows.Forms.ComboBox>().First().SelectedIndex = int.Parse(args[2]);
+                f.Refresh();
+                using (var bmp = new System.Drawing.Bitmap(f.Width, f.Height))
+                {
+                    f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f.Width, f.Height));
+                    bmp.Save(args[1]);
+                }
+                f.Close();
+            };
+            System.Windows.Forms.Application.Run(f);
+            return 0;
+        }
+
         // SPICA.Smoke --bench <runs> : cost of the live Results refresh and of the per-second results.csv
         if (args.Length > 1 && args[0] == "--bench") return Bench(int.Parse(args[1]));
 
@@ -102,6 +121,21 @@ static class Program
             }
             return 0;
         }
+        if (args.Length > 2 && args[0] == "--sens")
+        {
+            var rs = ResultSet.Load(args[1]);
+            var names = rs.GroupNames();
+            for (int g = 0; g < names.Count; g++)
+                Console.WriteLine($"== {names[g]}\n" + SensitivityReport.Parameters(rs, args[2], g).Narrative(12));
+            return 0;
+        }
+
+        if (args.Length > 1 && args[0] == "--oplib")
+        {
+            File.WriteAllText(args[1], OpAmps.LibraryText());
+            return 0;
+        }
+
         if (args.Length > 0 && args[0] == "--stats")
         {
             var rs = ResultSet.Load(args[1]);

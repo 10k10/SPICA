@@ -162,8 +162,11 @@ namespace Spica.Core
                 sb.AppendLine("Y=" + e.Y);
                 sb.AppendLine("X=" + e.X);
                 sb.AppendLine("TF=" + e.Tf);
+                sb.AppendLine("Ideal=" + e.Ideal);
                 sb.AppendLine("ReferToInput=" + (e.ReferToInput ? 1 : 0));
-                sb.AppendLine("Budget=" + Num(e.Budget));
+                sb.AppendLine("Symmetric=" + (e.Symmetric ? 1 : 0));
+                sb.AppendLine("Lower=" + Num(e.Lower));
+                sb.AppendLine("Upper=" + Num(e.Upper));
                 sb.AppendLine("Unit=" + e.Unit);
                 sb.AppendLine("FullScale=" + Num(e.FullScale));
             }
@@ -253,8 +256,12 @@ namespace Spica.Core
                         case "y": e.Y = val; break;
                         case "x": e.X = val; break;
                         case "tf": e.Tf = val; break;
+                        case "ideal": if (Enum.TryParse(val, true, out IdealKind ik)) e.Ideal = ik; break;
                         case "refertoinput": e.ReferToInput = B(); break;
-                        case "budget": e.Budget = ParseNum(val); break;
+                        case "budget": e.Budget = ParseNum(val); break;          // setups before 0.4: +/- one value
+                        case "symmetric": e.Symmetric = B(); break;
+                        case "lower": e.Lower = ParseNum(val); break;
+                        case "upper": e.Upper = ParseNum(val); break;
                         case "unit": if (Enum.TryParse(val, true, out BudgetUnit bu)) e.Unit = bu; break;
                         case "fullscale": e.FullScale = ParseNum(val); break;
                     }
@@ -271,6 +278,13 @@ namespace Spica.Core
                     }
                 }
             }
+            // the gain and offset of a straight-line ideal (older setups only have the TF text)
+            foreach (var e in p.Errors)
+                if (e.UsesTf && e.Ideal == IdealKind.Linear)
+                {
+                    if (ErrorItem.TryLinear(e.Tf, out var g, out var o)) { e.Gain = g; e.Offset = o; }
+                    else e.Ideal = IdealKind.Expression;
+                }
             p.Dirty = false;
             return p;
         }

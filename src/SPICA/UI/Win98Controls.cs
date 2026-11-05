@@ -592,6 +592,46 @@ namespace Spica.UI
     }
 
     // =====================================================================================
+    //  Tile: one figure in a sunken white box (caption, large value, small note)
+    // =====================================================================================
+    public class Win98Tile : Control
+    {
+        static readonly Font ValueFont = new Font(Win98.Font.FontFamily, 11f, FontStyle.Bold);
+        string caption = "", value = "", note = "";
+        Color valueColor = Color.Black;
+        Color? fill;
+
+        public Win98Tile()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Font = Win98.Font;
+            Height = 58;
+        }
+
+        public string Caption { get => caption; set { caption = value ?? ""; Invalidate(); } }
+
+        /// <summary>The figure, an optional note under it, and the colours (fill = background tint, e.g. for the verdict).</summary>
+        public void Set(string text, string sub = null, Color? color = null, Color? back = null)
+        {
+            value = text ?? ""; note = sub ?? ""; valueColor = color ?? Color.Black; fill = back;
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(fill ?? Win98.Window);
+            Win98.Sunken(g, ClientRectangle);
+            var flags = TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+            int w = Width - 12;
+            TextRenderer.DrawText(g, caption, Font, new Rectangle(6, 4, w, 15), Win98.Shadow, flags);
+            TextRenderer.DrawText(g, value, ValueFont, new Rectangle(6, 19, w, 20), valueColor, flags);
+            if (note.Length > 0) TextRenderer.DrawText(g, note, Font, new Rectangle(6, 39, w, 15), Win98.Shadow, flags);
+        }
+    }
+
+    // =====================================================================================
     //  Resource meter: vertical segmented bars (Windows 98 setup / Resource Meter style)
     // =====================================================================================
     public class Win98ResourceMeter : Control
@@ -626,7 +666,10 @@ namespace Spica.UI
         }
 
         /// <summary>Width of one bar's column; the columns are packed from the left.</summary>
-        public const int ColumnWidth = 38;
+        public const int ColumnWidth = 44;
+
+        /// <summary>Size the icons are drawn at, under the bars (16 px icons are doubled pixel for pixel).</summary>
+        public const int IconSize = 32;
         public int PreferredWidth => Bars.Count * ColumnWidth;
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -644,7 +687,7 @@ namespace Spica.UI
             var g = e.Graphics;
             g.Clear(Win98.Face);
             if (Bars.Count == 0) return;
-            const int segH = 7, gap = 2, wellW = 16, header = 18, footer = 22;
+            const int segH = 6, gap = 2, wellW = 24, header = 16, footer = IconSize + 3;
             for (int i = 0; i < Bars.Count; i++)
             {
                 var b = Bars[i];
@@ -672,8 +715,17 @@ namespace Spica.UI
                         y -= gap;
                     }
 
-                // icon centred under the bar (the name is in the tooltip)
-                if (b.Icon != null) Win98.DrawIcon(g, b.Icon, x0 + (ColumnWidth - 16) / 2, well.Bottom + 4);
+                // icon centred under the bar, a little wider than it (the name is in the tooltip)
+                if (b.Icon != null)
+                {
+                    var old = g.InterpolationMode;
+                    var oldOff = g.PixelOffsetMode;
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                    g.DrawImage(b.Icon, new Rectangle(x0 + (ColumnWidth - IconSize) / 2, Height - IconSize, IconSize, IconSize));
+                    g.InterpolationMode = old;
+                    g.PixelOffsetMode = oldOff;
+                }
             }
         }
 

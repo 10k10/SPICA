@@ -69,17 +69,24 @@ Seed 0 means "a new seed per campaign"; the seed actually used goes into the cam
 
 Results tab, for the running campaign or any folder opened with `File > Open Results`:
 
+- **Error Budget**: each error the design must keep inside its boundaries, in one of two styles:
+  a `.meas` that already is the error, or an output compared run by run with a reference
+  (error = output - (gain x reference + offset), or any ideal expression of x and T), optionally
+  referred to the input. Boundaries symmetric (+/-) or lower/upper (either side may be open), in
+  absolute units, % of reading or % of full scale. Judged per temperature and input band: mean +/-
+  k sigma (default 6) must stay inside both boundaries and the error must be bell-shaped
+  (Anderson-Darling); PASS / FAIL / CHECK, figures in boxes (mean, sigma, room on each side in
+  sigma), a table of every condition, the histogram or error vs input, and the tolerances that drive it.
 - **Table**: every run, out-of-spec values in red, filter and sort.
 - **Statistics**: n, mean, sigma, min/max, median, 0.135/99.865 % percentiles, skewness, kurtosis,
   Anderson-Darling normality, spec limits, observed yield with exact (Clopper-Pearson) 95 % CI, Cpk,
   normal-model ppm. The sigma analysis (mean +/- k sigma, predicted ppm) is shown only when the
   sample is consistent with a normal distribution; otherwise percentiles are used.
 - **Histogram** with normal fit, +/-3 sigma and spec lines.
-- **Scatter & TF**: best average linear TF (gain, offset with CIs, R2), through-origin gain, an
-  optional theoretical TF (`1.93*x`, `x*(1+50e-6*(T-25))`, SPICE suffixes accepted) with an error
-  budget in % or absolute units: per-sample error, % inside budget with CI, k-sigma bound, sigma
-  margin, and the split into gain error, offset error and random scatter combined by RSS and as a
-  linear sum, plus what remains after trimming gain, or gain and offset.
+- **Scatter & TF**: finds the TF: fitted line (gain, offset with CIs, R2), the scatter around it,
+  and an optional ideal (`2*x`, `x*(1+50e-6*(T-25))`, SPICE suffixes accepted) with its gain and
+  offset error. *Use as ideal in Error Budget* / *Use the fitted line* send it to the Error Budget,
+  where the boundaries and the verdict live.
 - **Temperature**: corners give per-temperature statistics and, with paired samples, per-unit drift,
   tempco (ppm/°C) and the yield of units passing every spec at all temperatures; a random range gives
   the regression on temperature, tempco and the RSS split of the spread into temperature and tolerances.
@@ -109,6 +116,12 @@ Clopper-Pearson, normal tail ppm, regression standard errors).
 
 Progress, timing, the scheduler's plan and per-instance status, a throughput graph and a resource
 meter (CPU and RAM of the whole machine, space used on the output drive) in the style of Windows 98.
+The CPU figure is Windows' *% Processor Utility*, the same as Task Manager (it counts turbo clocks,
+so it reads higher than the share of busy time). The remaining time plays the runs left out on the
+instances round by round, so the last, partly filled round counts whole.
+
+Each run takes longer in a campaign than alone in LTspice (all cores busy: lower clocks, shared
+cache and memory bandwidth); the campaign still finishes far sooner than the runs one by one.
 
 ## Scheduler (Automatic mode)
 
@@ -140,6 +153,19 @@ One fixed rule, printed in the log as the campaign's plan:
 | End-of-campaign chunk floor (1000 fast runs) | 23 s → 16 s |
 | Paired corners, `samples/rc_tc.asc` (tc = 4000 ppm/°C) | measured per-unit tempco 4032–4035 ppm/°C vs 4032 expected |
 | `.op` dummy step, `samples/divider_op.asc` | 120 runs, every value equal to the exact divider formula (error < 3e-8) |
+
+## Op-amp models with datasheet tolerances
+
+`Tools > Op-amp Models` lists op-amps modelled from their datasheets: OPA4991, OPA4182, LMH6619 (SPICA_OA)
+and the AD8139 fully differential amplifier (SPICA_FDA). Place LTspice's `opamp2` symbol (or the AD8139
+symbol) and set its value to `<PART>_MC`, e.g. `OPA4991_MC`. When the campaign runs SPICA adds the
+part's tolerances to the instance (offset and its drift, bias and offset current, CMRR, PSRR, open-loop
+gain, ...), so they are paired and named per unit (`U1.Vos`) in Sensitivity, Worst Case and the Error
+Budget. Datasheet limits are flat over the limit; a value given only as typical is flat over 3x typical.
+Override any of them on the symbol (`Vos={gauss(277u)}`, or `Vos=0` to hold it). *Save Library* writes
+`SPICA_opamps.lib`, so the schematic also runs in LTspice with `.lib SPICA_opamps.lib`. The models are
+built for DC and low-frequency accuracy (one pole, slew rate, rails, current limit). Sample:
+`samples/opamp_gain2.asc`.
 
 ## Heavier sample circuits
 

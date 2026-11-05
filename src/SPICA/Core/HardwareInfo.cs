@@ -68,10 +68,45 @@ namespace Spica.Core
         }
 
         static long lastIdle, lastBusy;
+        static IntPtr pdhQuery, pdhCounter;
+        static bool pdhFailed;
 
         /// <summary>Whole-machine CPU use since the previous call, 0..100 % (NaN on the first call).
-        /// GetSystemTimes instead of performance counters, whose names are localized.</summary>
+        /// Same figure as Task Manager: "% Processor Utility", which counts the work done at the actual clock
+        /// against the base clock, so turbo makes it higher than the share of busy time (up to ~2x on a
+        /// workstation at all-core turbo). Busy time from GetSystemTimes when the counter is not available.</summary>
         public static double CpuLoadPercent()
+        {
+            if (!pdhFailed)
+            {
+                double u = ProcessorUtility();
+                if (!double.IsNaN(u) || !pdhFailed) return u;
+            }
+            return BusyTimePercent();
+        }
+
+        static double ProcessorUtility()
+        {
+            try
+            {
+                if (pdhQuery == IntPtr.Zero)
+                {
+                    // English counter path: works on localized Windows too
+                    if (PdhOpenQueryW(null, IntPtr.Zero, out pdhQuery) != 0 ||
+                        PdhAddEnglishCounterW(pdhQuery, @"\Processor Information(_Total)\% Processor Utility", IntPtr.Zero, out pdhCounter) != 0 ||
+                        PdhCollectQueryData(pdhQuery) != 0)
+                    { pdhFailed = true; return double.NaN; }
+                    return double.NaN;                       // a rate needs two samples
+                }
+                if (PdhCollectQueryData(pdhQuery) != 0) { pdhFailed = true; return double.NaN; }
+                if (PdhGetFormattedCounterValue(pdhCounter, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, out _, out var v) != 0 || v.CStatus > 1)
+                    return double.NaN;
+                return Math.Max(0, Math.Min(100, v.Value));
+            }
+            catch { pdhFailed = true; return double.NaN; }
+        }
+
+        static double BusyTimePercent()
         {
             if (!GetSystemTimes(out long idle, out long kernel, out long user)) return double.NaN;
             long busy = kernel + user - idle;              // kernel time includes idle time
@@ -176,5 +211,26 @@ namespace Spica.Core
 
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool GetLogicalProcessorInformationEx(int relationshipType, IntPtr buffer, ref uint returnedLength);
+
+        const uint PDH_FMT_DOUBLE = 0x200, PDH_FMT_NOCAP100 = 0x8000;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PDH_FMT_COUNTERVALUE
+        {
+            public uint CStatus;
+            public double Value;                // the double member of the union, at offset 8
+        }
+
+        [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+        static extern uint PdhOpenQueryW(string dataSource, IntPtr userData, out IntPtr query);
+
+        [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+        static extern uint PdhAddEnglishCounterW(IntPtr query, string fullCounterPath, IntPtr userData, out IntPtr counter);
+
+        [DllImport("pdh.dll")]
+        static extern uint PdhCollectQueryData(IntPtr query);
+
+        [DllImport("pdh.dll")]
+        static extern uint PdhGetFormattedCounterValue(IntPtr counter, uint format, out uint type, out PDH_FMT_COUNTERVALUE value);
     }
 }

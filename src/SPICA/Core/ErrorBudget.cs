@@ -8,36 +8,98 @@ namespace Spica.Core
 {
     public enum BudgetUnit { Abs, PctReading, PctFs }
 
+    /// <summary>How the ideal output is given when an output is compared with a reference.</summary>
+    public enum IdealKind { Linear, Expression }
+
     /// <summary>
-    /// One error the design must keep inside its budget. Either a measurement that already is the error
-    /// (computed by a .meas in LTspice), or an output Y compared with an ideal transfer function of the input X:
-    /// error = Y - TF(X), referred to the input by dividing by the TF gain dTF/dx at that input.
-    /// X is a measurement (the input varies over its range) or a fixed number.
+    /// One error the design must keep inside its boundaries, in one of two styles:
+    ///  - a measurement that already is the error (computed by a .meas in LTspice): Tf empty;
+    ///  - an output Y compared run by run with the ideal value of a reference X (a measurement or a number):
+    ///    error = Y - ideal(X), with ideal = Gain * x + Offset or any expression of x (and T),
+    ///    optionally referred to the input by dividing by the ideal gain d ideal/dx.
+    /// The boundaries may be symmetric (+/- one value) or not, and either side may be left open.
     /// </summary>
     public sealed class ErrorItem
     {
         public string Name = "";
         public string Y = "";              // measurement: the error itself, or the output
-        public string X = "";              // input: measurement name or a number; empty = none
-        public string Tf = "";             // ideal TF of x (and T); empty = Y is already the error
+        public string X = "";              // reference / input: measurement name or a number; empty = none
+        public string Tf = "";             // ideal output as an expression of x (and T); empty = Y is already the error
+        public IdealKind Ideal = IdealKind.Linear;
+        public double Gain = 1, Offset = 0;   // the linear ideal, kept in Tf as "Gain*x + Offset"
         public bool ReferToInput = true;
-        public double Budget = double.NaN; // +/- budget, in the units below
+        public double Lower = double.NaN, Upper = double.NaN;   // boundaries, in the units below; NaN = open
+        public bool Symmetric = true;
         public BudgetUnit Unit = BudgetUnit.Abs;
         public double FullScale = double.NaN;
 
         public bool UsesTf => !string.IsNullOrWhiteSpace(Tf);
+        public bool HasBounds => !double.IsNaN(Lower) || !double.IsNaN(Upper);
+
+        /// <summary>Symmetric budget +/- value (setups before 0.4 stored only this).</summary>
+        public double Budget
+        {
+            get => Symmetric ? Upper : double.NaN;
+            set { Symmetric = true; Lower = -value; Upper = value; }
+        }
+
+        /// <summary>Half the allowed range (or the distance of a single boundary from 0): what margins are a share of.</summary>
+        public double Span =>
+            !double.IsNaN(Lower) && !double.IsNaN(Upper) ? (Upper - Lower) / 2 : Math.Abs(double.IsNaN(Upper) ? Lower : Upper);
+
+        public bool Inside(double v) => (double.IsNaN(Lower) || v >= Lower) && (double.IsNaN(Upper) || v <= Upper);
 
         public ErrorItem Clone() => (ErrorItem)MemberwiseClone();
 
+        static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+        /// <summary>"g*x + o" for the linear ideal.</summary>
+        public static string LinearTf(double g, double o)
+        {
+            string s = g.ToString("G10", Inv) + "*x";
+            if (o > 0) s += " + " + o.ToString("G10", Inv);
+            else if (o < 0) s += " - " + (-o).ToString("G10", Inv);
+            return s;
+        }
+
+        /// <summary>Is the ideal expression a straight line in x that does not depend on T? Then its gain and offset.</summary>
+        public static bool TryLinear(string tf, out double g, out double o)
+        {
+            g = double.NaN; o = double.NaN;
+            if (string.IsNullOrWhiteSpace(tf) || !Expr.TryParse(tf, out var e, out _)) return false;
+            o = e.Eval(0, 25);
+            g = e.Eval(1, 25) - o;
+            if (double.IsNaN(g) || double.IsNaN(o)) return false;
+            foreach (var x in new[] { -3.7, 0.37, 2.9, 1e3 })
+                foreach (var t in new[] { -40.0, 25, 125 })
+                {
+                    double v = e.Eval(x, t), want = g * x + o;
+                    if (double.IsNaN(v) || Math.Abs(v - want) > 1e-9 * Math.Max(1, Math.Abs(want))) return false;
+                }
+            return true;
+        }
+
         public string Definition()
         {
-            if (!UsesTf) return Y + " (error from LTspice)";
+            if (!UsesTf) return Y + " (the error, from LTspice)";
             string x = X.Length > 0 ? X : "x";
-            return ReferToInput ? $"({Y} - TF({x})) / gain, TF = {Tf}" : $"{Y} - TF({x}), TF = {Tf}";
+            string ideal = Ideal == IdealKind.Linear ? LinearTf(Gain, Offset).Replace("x", x) : $"TF({x}), TF = {Tf}";
+            return ReferToInput ? $"({Y} - ({ideal})) / gain" : $"{Y} - ({ideal})";
         }
 
         public string UnitText() => Unit == BudgetUnit.PctReading ? "% of reading" : Unit == BudgetUnit.PctFs ? "% of full scale" : (UsesTf && ReferToInput ? "input units" : "units of " + Y);
         public string Suffix() => Unit == BudgetUnit.Abs ? "" : " %";
+
+        /// <summary>"+/-15m", "-10m .. +20m", ">= -10m".</summary>
+        public string BoundsText()
+        {
+            string F(double v) => ErrorBudget.Fmt(v, this);
+            if (!HasBounds) return "";
+            if (Symmetric && !double.IsNaN(Upper)) return "±" + F(Upper);
+            if (double.IsNaN(Lower)) return "≤ " + F(Upper);
+            if (double.IsNaN(Upper)) return "≥ " + F(Lower);
+            return F(Lower) + " .. " + F(Upper);
+        }
     }
 
     /// <summary>
@@ -55,13 +117,15 @@ namespace Spica.Core
         public double AdP = double.NaN;
         public bool Normal, TailsOk;
         public double SigmaUp = double.NaN, Sigma = double.NaN;
-        public double Lo = double.NaN, Hi = double.NaN;
-        public double Margin = double.NaN;
+        public double Lo = double.NaN, Hi = double.NaN;               // mean -/+ k sigma
+        public double MarginLo = double.NaN, MarginHi = double.NaN;   // room left on each side at k sigma (NaN = open side)
+        public double Margin = double.NaN;                            // the smaller of the two
+        public double SigmasLo = double.NaN, SigmasHi = double.NaN;   // boundary distance from the mean, in sigma
         public int Outside;
         public string Verdict = "-";
     }
 
-    /// <summary>The verdict of one error item against its budget at k sigma: the worst of its slices.</summary>
+    /// <summary>The verdict of one error item against its boundaries at k sigma: the worst of its slices.</summary>
     public sealed class ErrorResult
     {
         public ErrorItem Item;
@@ -90,108 +154,100 @@ namespace Spica.Core
         string K0 => K.ToString("0.#", Inv);
         static string Eng(double v) => ErrorBudget.Eng(v);
 
-        public bool HasBudget => !double.IsNaN(Item.Budget) && Item.Budget > 0;
-        public double MarginPct => HasBudget ? Margin / Item.Budget * 100 : double.NaN;
+        public bool HasBudget => Item.HasBounds;
+        /// <summary>Margin as a share of half the allowed range.</summary>
+        public double MarginPct => HasBudget && Item.Span > 0 ? Margin / Item.Span * 100 : double.NaN;
+        public double SlicePct(ErrorSlice s) => HasBudget && Item.Span > 0 ? s.Margin / Item.Span * 100 : double.NaN;
         public bool InputVaries => X.Length > 2 && X.Where(v => !double.IsNaN(v)).DefaultIfEmpty().Max() > X.Where(v => !double.IsNaN(v)).DefaultIfEmpty().Min();
         public int Outside => Slices.Sum(s => s.Outside);
 
         /// <summary>Runs with no error outside the budget needed to show a coverage by samples alone (95 % confidence).</summary>
         public static double RunsToShow(double coverage) => Math.Log(0.05) / Math.Log(coverage);
 
+        /// <summary>One line: the verdict in words.</summary>
+        public string VerdictText()
+        {
+            if (Error != null) return Error;
+            var w = Worst;
+            return Verdict == "PASS" ? $"mean ± {K0} sigma is inside the boundaries" + (Slices.Count > 1 ? " in every condition" : "") + (w.Normal ? "." : " (the tails are shorter than normal: safe).")
+                 : Verdict == "FAIL" ? (Outside > 0 ? $"{Outside} of {N} simulated units are already outside the boundaries." : $"mean ± {K0} sigma crosses the {(w.MarginLo < w.MarginHi || double.IsNaN(w.MarginHi) ? "lower" : "upper")} boundary at {w.Label}.")
+                 : Verdict == "CHECK" ? $"the error is not bell-shaped at {w.Label}, so the {K0}-sigma figure cannot decide."
+                 : "no boundaries set: enter them to get a verdict.";
+        }
+
+        /// <summary>Short notes under the figures: why CHECK, what a correction would leave, unexplained spread.</summary>
+        public List<string> Notes()
+        {
+            var n = new List<string>();
+            if (Error != null || Worst == null) return n;
+            var w = Worst;
+            if (!w.Normal)
+            {
+                if (w.TailsOk)
+                    n.Add($"Not exactly bell-shaped (p = {MeasStats.P(w.AdP)}), but the tails are no longer than a normal's (flat tolerances adding up): mean ± {K0} sigma over-states the real extremes." +
+                          (Verdict == "CHECK" ? " Over the boundary on paper only: run a worst case (Setup > Analysis) for the hard bound." : ""));
+                else
+                {
+                    var d = w.D;
+                    string shape = d.ExKurt > 0.5 ? "heavy-tailed (longer tails than sigma says)" : Math.Abs(d.Skew) > 0.3 ? "lopsided (one side reaches further)" : "tails longer than a normal's";
+                    n.Add($"Not bell-shaped (p = {MeasStats.P(w.AdP)}): {shape}. Use a worst case, or more runs: with no unit outside, {RunsToShow(0.9973):N0} runs show 3 sigma, {RunsToShow(0.99994):N0} show 4 sigma.");
+                }
+            }
+            if (!double.IsNaN(FitOffset) && InputVaries)
+                n.Add($"The mean error follows e = {Eng(FitOffset)} {(FitSlope < 0 ? "-" : "+")} {Eng(Math.Abs(FitSlope))}·x (offset and gain error): a TF corrected for it leaves ±{K0} sigma = ±{F(K * ResidualStd)}" +
+                      (HasBudget ? (Item.Inside(-K * ResidualStd) && Item.Inside(K * ResidualStd) ? ", inside the boundaries." : ", still outside the boundaries.") : "."));
+            else if (!double.IsNaN(FitOffset) && Math.Abs(w.D.Mean) > 0.5 * w.Sigma)
+                n.Add($"Removing the mean (a calibration) leaves ±{K0} sigma = ±{F(K * w.Sigma)}" +
+                      (HasBudget ? (Item.Inside(-K * w.Sigma) && Item.Inside(K * w.Sigma) ? ", inside the boundaries." : ", still outside the boundaries.") : "."));
+            if (Sens != null && Sens.Error == null && Sens.Items.Count > 0 && Sens.R2 < 0.9)
+                n.Add($"{(100 * (1 - Sens.R2)).ToString("0", Inv)} % of the spread is not explained by the tolerances: nonlinear effects, or randoms inside .subckt models.");
+            return n;
+        }
+
+        /// <summary>Plain-text version (report, console).</summary>
         public string Summary()
         {
             if (Error != null) return Item.Name + ": " + Error;
             var w = Worst;
             var sb = new StringBuilder();
-            string verdict = Verdict == "PASS" ? $"PASS at {K0} sigma" + (w.Normal ? "" : " (conservative: the real tails are shorter than normal)")
-                           : Verdict == "FAIL" ? (Outside > 0 ? $"FAILS: {Outside} of {N} simulated units are already outside the budget" : $"FAILS at {K0} sigma")
-                           : Verdict == "CHECK" ? $"CHECK: the {K0}-sigma figure cannot decide ({(w.Margin >= 0 ? "inside" : "outside")} the budget on paper)"
-                           : "no budget set";
-            sb.AppendLine($"{Item.Name}:  {verdict}");
-            sb.AppendLine($"  {Item.Definition()}");
-            sb.AppendLine($"  in {Item.UnitText()}");
-            if (Slices.Count > 1)
-            {
-                sb.AppendLine($"  judged in {Slices.Count} conditions (temperature x input band);");
-                sb.AppendLine($"  the worst one is {w.Label}");
-            }
+            sb.AppendLine($"{Item.Name}:  {Verdict}{(Verdict == "-" ? "" : " at " + K0 + " sigma")}: {VerdictText()}");
+            sb.AppendLine($"  error = {Item.Definition()}, in {Item.UnitText()}");
+            if (HasBudget) sb.AppendLine($"  boundaries {Item.BoundsText()}");
             sb.AppendLine();
-            sb.AppendLine("The error of a production unit" + (Slices.Count > 1 ? $" (worst condition, {w.D.N} units)" : ""));
-            sb.AppendLine($"  mean          {F(w.D.Mean)}   (same in every unit: a TF/calibration removes it)");
+            sb.AppendLine("Worst condition" + (Slices.Count > 1 ? $": {w.Label} ({w.D.N} units)" : ""));
+            sb.AppendLine($"  mean          {F(w.D.Mean)}");
             sb.AppendLine($"  sigma         {F(w.D.Std)}   (95 % upper bound {F(w.SigmaUp)}{(Pessimistic ? ": used" : "")})");
-            sb.AppendLine($"  mean +/-{K0}s   {F(w.Lo)} .. {F(w.Hi)}");
+            sb.AppendLine($"  mean ± {K0}s    {F(w.Lo)} .. {F(w.Hi)}");
             sb.AppendLine($"  seen          {F(w.D.Min)} .. {F(w.D.Max)}");
+            sb.AppendLine($"  bell-shaped   {(w.Normal ? "yes" : w.TailsOk ? "no, shorter tails (safe)" : "no")}  (p = {MeasStats.P(w.AdP)})");
             if (HasBudget)
             {
-                sb.AppendLine();
-                sb.AppendLine($"Against the budget  +/-{F(Item.Budget)}");
-                sb.AppendLine(w.Margin >= 0 ? $"  margin        {F(w.Margin)} to spare ({MarginPct:0} % of the budget)"
-                                            : $"  margin        SHORT by {F(-w.Margin)} ({-MarginPct:0} % over the budget)");
-                if (w.Sigma > 0) sb.AppendLine($"  the budget is {((Item.Budget - Math.Abs(w.D.Mean)) / w.Sigma).ToString("0.0", Inv)} sigma away from the mean (needed: {K0})");
-                if (Outside > 0) sb.AppendLine($"  {Outside} simulated units are outside the budget: no extrapolation needed to see it fails");
+                if (!double.IsNaN(w.MarginLo)) sb.AppendLine($"  low side      {F(w.MarginLo)} of room, boundary {w.SigmasLo.ToString("0.0", Inv)} sigma from the mean (needed {K0})");
+                if (!double.IsNaN(w.MarginHi)) sb.AppendLine($"  high side     {F(w.MarginHi)} of room, boundary {w.SigmasHi.ToString("0.0", Inv)} sigma from the mean (needed {K0})");
             }
-
-            sb.AppendLine();
-            sb.AppendLine($"Is the {K0}-sigma extrapolation valid?");
-            if (w.Normal) sb.AppendLine($"  yes: the error is bell-shaped (normality p = {MeasStats.P(w.AdP)})");
-            else if (w.TailsOk)
-            {
-                sb.AppendLine($"  conservative: not exactly bell-shaped (p = {MeasStats.P(w.AdP)}), but its tails are no longer than a normal's\n" +
-                              "  (typical of flat tolerances adding up). The real extremes are inside mean +/- k sigma.");
-                if (Verdict == "CHECK")
-                    sb.AppendLine("  Over the budget on paper only: the real extremes are shorter. Run a worst case (Setup > Analysis)\n" +
-                                  "  for the hard bound of the flat tolerances.");
-            }
-            else
-            {
-                var d = w.D;
-                string shape = d.ExKurt > 0.5 ? "heavy-tailed: the real tails are LONGER than the sigma figure says"
-                             : Math.Abs(d.Skew) > 0.3 ? "lopsided: one side reaches further than sigma says"
-                             : "its tails reach further than a normal's";
-                sb.AppendLine($"  no: normality p = {MeasStats.P(w.AdP)}, {shape}.");
-                sb.AppendLine("  Options:");
-                sb.AppendLine("    - worst case (Setup > Analysis > Worst case): every tolerance at its edge, a hard bound;");
-                sb.AppendLine($"    - more Monte Carlo: with no unit outside the budget, {RunsToShow(0.9973):N0} runs show 99.73 % (3 sigma),");
-                sb.AppendLine($"      {RunsToShow(0.99994):N0} runs 99.994 % (4 sigma); 6 sigma by samples alone is out of reach (~1.5 billion).");
-            }
-
             if (Slices.Count > 1)
             {
                 sb.AppendLine();
                 sb.AppendLine("Every condition");
                 int lw = Math.Max(10, Slices.Max(s => s.Label.Length));
-                sb.AppendLine($"  {"condition".PadRight(lw)} {"n",5} {"mean",10} {"sigma",10} {"mean +/-" + K0 + "s",22} {"margin",7}  verdict");
+                sb.AppendLine($"  {"condition".PadRight(lw)} {"n",5} {"mean",10} {"sigma",10} {"mean ±" + K0 + "s",22} {"margin",7}  verdict");
                 foreach (var s in Slices)
                     sb.AppendLine($"  {s.Label.PadRight(lw)} {s.D.N,5} {F(s.D.Mean),10} {F(s.Sigma),10} {F(s.Lo) + " .. " + F(s.Hi),22} " +
-                                  $"{(HasBudget ? (s.Margin / Item.Budget * 100).ToString("0", Inv) + " %" : ""),7}  {s.Verdict}");
+                                  $"{(HasBudget ? SlicePct(s).ToString("0", Inv) + " %" : ""),7}  {s.Verdict}");
             }
-
-            if (!double.IsNaN(FitOffset))
-            {
-                sb.AppendLine();
-                sb.AppendLine(Item.UsesTf ? "What a corrected TF would leave" : "What a calibration of the systematic part would leave");
-                if (InputVaries)
-                {
-                    sb.AppendLine($"  the average error follows  e = {Eng(FitOffset)} + {Eng(FitSlope)} * x   (offset + gain error)");
-                    sb.AppendLine($"  a TF corrected for it leaves sigma {F(ResidualStd)}: +/-{K0}s = +/-{F(K * ResidualStd)}" +
-                                  (HasBudget ? (K * ResidualStd <= Item.Budget ? "  -> inside the budget" : "  -> still over the budget") : ""));
-                }
-                else
-                    sb.AppendLine($"  removing the mean leaves +/-{K0}s = +/-{F(K * w.Sigma)}" +
-                                  (HasBudget ? (K * w.Sigma <= Item.Budget ? "  -> inside the budget" : "  -> still over the budget") : ""));
-            }
-
+            var notes = Notes();
+            if (notes.Count > 0) { sb.AppendLine(); foreach (var t in notes) sb.AppendLine("  - " + t); }
             if (Sens != null && Sens.Error == null && Sens.Items.Count > 0)
             {
                 sb.AppendLine();
-                sb.AppendLine($"What drives the spread{(Slices.Count > 1 ? " in the worst condition" : "")} (share of the variance; tighten the top ones first)");
+                sb.AppendLine($"What drives the spread{(Slices.Count > 1 ? " in the worst condition" : "")} (share of the variance)");
                 foreach (var it in Sens.Items.Where(i => !double.IsNaN(i.Share)).Take(6))
                     sb.AppendLine($"  {(100 * it.Share).ToString("0.0", Inv),5} %  {it.Name}");
-                if (Sens.R2 < 0.9) sb.AppendLine($"  ({(100 * (1 - Sens.R2)).ToString("0", Inv)} % is not explained: nonlinear effects, or randoms inside .subckt models)");
             }
             return sb.ToString();
         }
     }
+
 
     public static class ErrorBudget
     {
@@ -273,11 +329,13 @@ namespace Spica.Core
         {
             if (it.Name.Trim().Length == 0) return "Give the error a name.";
             if (rs.Col(it.Y) < 0) return $"'{it.Y}' is not a measurement of this campaign.";
-            if (it.UsesTf && !Expr.TryParse(it.Tf, out _, out var err)) return "Ideal TF: " + err + "  (use x for the input, T for temperature, e.g. 2*x)";
+            if (it.UsesTf && !Expr.TryParse(it.Tf, out _, out var err)) return "Ideal TF: " + err + "  (use x for the reference, T for temperature, e.g. 2*x)";
             bool needX = it.UsesTf || it.Unit == BudgetUnit.PctReading;
             if (needX && !TryConstant(rs, it.X, out _) && rs.Col(it.X) < 0 && !rs.IsParam(it.X))
-                return "Choose the input: a measurement (e.g. vin) or a fixed number (e.g. 1).";
-            if (it.Unit == BudgetUnit.PctFs && !(it.FullScale > 0)) return "Enter the full scale for a % of full scale budget.";
+                return it.UsesTf ? "Choose the reference: a measurement (e.g. vin) or a fixed number (e.g. 1)."
+                                 : "For a % of reading boundary, choose the reading: the measurement the % is taken of.";
+            if (it.Unit == BudgetUnit.PctFs && !(it.FullScale > 0)) return "Enter the full scale for a % of full scale boundary.";
+            if (!double.IsNaN(it.Lower) && !double.IsNaN(it.Upper) && it.Lower >= it.Upper) return "The lower boundary must be below the upper one.";
             return null;
         }
 
@@ -386,9 +444,20 @@ namespace Spica.Core
             s.Sigma = pessimistic && !double.IsNaN(s.SigmaUp) ? s.SigmaUp : s.D.Std;
             s.Lo = s.D.Mean - k * s.Sigma;
             s.Hi = s.D.Mean + k * s.Sigma;
-            if (double.IsNaN(it.Budget) || !(it.Budget > 0)) return;
-            s.Margin = it.Budget - Math.Max(Math.Abs(s.Lo), Math.Abs(s.Hi));
-            s.Outside = s.E.Count(e => Math.Abs(e) > it.Budget);
+            if (!it.HasBounds) return;
+            // each side on its own: room left at k sigma, and how many sigma the boundary is from the mean
+            if (!double.IsNaN(it.Lower))
+            {
+                s.MarginLo = s.Lo - it.Lower;
+                s.SigmasLo = s.Sigma > 0 ? (s.D.Mean - it.Lower) / s.Sigma : double.NaN;
+            }
+            if (!double.IsNaN(it.Upper))
+            {
+                s.MarginHi = it.Upper - s.Hi;
+                s.SigmasHi = s.Sigma > 0 ? (it.Upper - s.D.Mean) / s.Sigma : double.NaN;
+            }
+            s.Margin = double.IsNaN(s.MarginLo) ? s.MarginHi : double.IsNaN(s.MarginHi) ? s.MarginLo : Math.Min(s.MarginLo, s.MarginHi);
+            s.Outside = s.E.Count(e => !it.Inside(e));
             // units already outside: FAIL. Bell-shaped: the k-sigma bound decides. Shorter tails than normal: the bound
             // is safe, so inside = PASS, outside = CHECK (the real extremes may still fit). Longer tails: CHECK.
             s.Verdict = s.Outside > 0 ? "FAIL"

@@ -26,6 +26,7 @@ namespace Spica.UI
         CampaignEngine engine;
         bool analyzeOnFinish, discardOnFinish;     // what the Stop dialog asked for
         int graphTick;
+        double graphShown;                         // throughput as drawn: rises from 0 at the start
         SpicaProject project = new SpicaProject();
         bool loadingUi;
 
@@ -168,6 +169,7 @@ namespace Spica.UI
             mResults.DropDownOpening += (s, e) => UpdateCommandState();
 
             var mTools = new ToolStripMenuItem("&Tools");
+            mTools.DropDownItems.Add(new ToolStripMenuItem("&Op-amp Models...", null, (s, e) => ShowOpAmps()));
             mTools.DropDownItems.Add(new ToolStripMenuItem("&Hardware Information...", Win98.Icon("hw16"), (s, e) => ShowHardware()));
             mTools.DropDownItems.Add(new ToolStripMenuItem("&Forget Saved Run Times", null, (s, e) => ForgetProfiles()));
 
@@ -561,13 +563,13 @@ namespace Spica.UI
             graph = new Win98Graph { Dock = DockStyle.Fill, Caption = "Throughput (runs/min)" };
             graphRow.Controls.Add(new Win98Well(graph, Color.Black) { Dock = DockStyle.Fill });
             graphRow.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 6, BackColor = Win98.Face });
-            meter = new Win98ResourceMeter { Dock = DockStyle.Fill };
-            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = Win98Chart.Navy, Icon = Win98.Icon("hw16") });
+            meter = new Win98ResourceMeter();
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = Win98Chart.Navy, Icon = Win98.Icon("hw32") });
             meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "RAM", Color = Win98Chart.Teal, Icon = Win98.Icon("memory16") });
             meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "Disk", Color = Win98Chart.Purple, Icon = Win98.Icon("disk16") });
-            var meterBox = new Win98GroupBox { Text = "Resources", Dock = DockStyle.Right, Width = meter.PreferredWidth + 16, Padding = new Padding(8, 18, 8, 4) };
-            meterBox.Controls.Add(meter);
-            graphRow.Controls.Add(meterBox);
+            meter.Dock = DockStyle.Right;
+            meter.Width = meter.PreferredWidth;
+            graphRow.Controls.Add(meter);
 
             lvWorkers = MakeListView();
             foreach (var (t, w) in new[] { ("Instance", 70), ("PID", 64), ("Runs", 120), ("State", 80), ("Time", 70), ("Memory", 80), ("Threads", 60) })
@@ -1347,6 +1349,7 @@ namespace Spica.UI
             {
                 txtLog.Clear();
                 graph.Clear();
+                graphShown = 0;
             }
             resultsView.SetData(null, false);
             progress.Maximum = options.Jobs;
@@ -1439,6 +1442,7 @@ namespace Spica.UI
                 engine = null;
                 txtLog.Clear();
                 graph.Clear();
+                graphShown = 0;
                 resultsView.SetData(null, false);
                 progress.Value = 0;
                 UpdateCommandState();
@@ -1549,7 +1553,12 @@ namespace Spica.UI
             stat[".raw kept"].Text = engine.Options.KeepRaw ? FormatBytes(s.RawBytes) : "deleted";
             stat[".raw forecast"].Text = double.IsNaN(s.RawForecast) ? "-" : FormatBytes((long)s.RawForecast);
 
-            if (++graphTick % 4 == 0 && !s.Finished) graph.Push(s.RunsPerMinute);
+            // once a second; eased so the cold start draws as a climb from zero, not a jump to the running rate
+            if (++graphTick % 4 == 0 && !s.Finished)
+            {
+                graphShown += 0.15 * (s.RunsPerMinute - graphShown);
+                graph.Push(graphShown);
+            }
 
             lvWorkers.BeginUpdate();
             while (lvWorkers.Items.Count > s.Workers.Count) lvWorkers.Items.RemoveAt(lvWorkers.Items.Count - 1);
@@ -1596,7 +1605,7 @@ namespace Spica.UI
         {
             double cpu = HardwareInfo.CpuLoadPercent(), ram = HardwareInfo.MemoryLoadPercent();
             HardwareInfo.RefreshMemory(hw);
-            meter.Set(0, cpu, $"CPU in use, whole machine ({hw.LogicalProcessors} threads)");
+            meter.Set(0, cpu, $"CPU utility, whole machine ({hw.LogicalProcessors} threads), as in Task Manager");
             meter.Set(1, ram, $"RAM in use: {(hw.TotalMemory - hw.AvailableMemory) / (double)(1L << 30):0.0} of {hw.TotalMemory / (double)(1L << 30):0.0} GB");
             try
             {
@@ -1658,6 +1667,13 @@ namespace Spica.UI
 
         void ExportResults() { CatchUpResults(); resultsView.ExportCsv(); }
         void ExportReport() { CatchUpResults(); resultsView.ExportReport(); }
+
+        void ShowOpAmps()
+        {
+            string dir = null;
+            try { if (File.Exists(txtAsc.Text)) dir = Path.GetDirectoryName(Path.GetFullPath(txtAsc.Text)); } catch { }
+            using (var f = new OpAmpForm(dir)) f.ShowDialog(this);
+        }
 
         void ShowHardware()
         {

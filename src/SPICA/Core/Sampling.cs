@@ -100,10 +100,16 @@ namespace Spica.Core
                     expanded = ExpandFuncs(expanded, funcs, randomFuncs, plan.Inlined);
 
                 string label = LabelOf(t);
-                int before = plan.Sites.Count;
-                string rewritten = RewriteCalls(expanded, plan, label);
-                if (plan.Sites.Count - before > 1)
-                    for (int i = before; i < plan.Sites.Count; i++) plan.Sites[i].Label = $"{label}#{i - before + 1}";
+                string rewritten;
+                if (char.ToUpperInvariant(label[0]) == 'X')
+                    rewritten = RewriteInstance(expanded, plan, Netlist.InstanceName(label));
+                else
+                {
+                    int before = plan.Sites.Count;
+                    rewritten = RewriteCalls(expanded, plan, label);
+                    if (plan.Sites.Count - before > 1)
+                        for (int i = before; i < plan.Sites.Count; i++) plan.Sites[i].Label = $"{label}#{i - before + 1}";
+                }
                 plan.Lines.Add(rewritten + comment);
             }
             return plan;
@@ -200,6 +206,23 @@ namespace Spica.Core
                         return $"(({Arg(a, 0)})*{site.Param})";
                 }
             });
+        }
+
+        /// <summary>A sub-circuit instance: each random parameter is labelled by instance and name ("U1.Vos").</summary>
+        static string RewriteInstance(string code, McPlan plan, string inst)
+        {
+            var toks = Netlist.Tokenize(code.Trim());
+            for (int k = 1; k < toks.Count; k++)
+            {
+                if (!HasCall(toks[k], RandomFuncs)) continue;
+                int eq = toks[k].IndexOf('=');
+                string label = eq > 0 ? inst + "." + toks[k].Substring(0, eq).Trim() : inst;
+                int before = plan.Sites.Count;
+                toks[k] = RewriteCalls(toks[k], plan, label);
+                if (plan.Sites.Count - before > 1)
+                    for (int i = before; i < plan.Sites.Count; i++) plan.Sites[i].Label = $"{label}#{i - before + 1}";
+            }
+            return (code.Length - code.TrimStart().Length > 0 ? code.Substring(0, code.Length - code.TrimStart().Length) : "") + string.Join(" ", toks);
         }
 
         static string Arg(List<string> a, int i) => i < a.Count ? a[i] : "0";

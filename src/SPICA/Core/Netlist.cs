@@ -25,6 +25,7 @@ namespace Spica.Core
         public readonly List<string> ExistingSaves = new List<string>();
         public readonly List<string> RemovedSteps = new List<string>();
         public string Analysis = "";
+        public List<string> OpAmpInstances = new List<string>();  // "U1 = OPA4991": SPICA op-amp models in use
 
         public static Netlist Parse(string text, string sourcePath, Encoding enc)
         {
@@ -37,6 +38,7 @@ namespace Spica.Core
                     n.Lines.Add(raw);
             }
             n.Analyze();
+            n.OpAmpInstances = OpAmps.Augment(n.Lines);   // their tolerances and, if needed, the library
             return n;
         }
 
@@ -94,6 +96,8 @@ namespace Spica.Core
 
         void ParseElement(string l, HashSet<string> nodeSet, List<string> nodes, HashSet<string> curSet)
         {
+            int sc = l.IndexOf(';');                     // LTspice's pin map after X lines
+            if (sc > 0) l = l.Substring(0, sc).TrimEnd();
             var tok = Tokenize(l);
             if (tok.Count < 2) return;
             string name = tok[0];
@@ -167,6 +171,17 @@ namespace Spica.Core
                     yield return $"{fn}({arg})";
                 }
             }
+        }
+
+        /// <summary>
+        /// The schematic name of a sub-circuit instance: "X§U1" -> "U1". LTspice writes the § in UTF-8,
+        /// which may arrive as one or two odd characters, so everything before the first ASCII letter goes.
+        /// </summary>
+        public static string InstanceName(string element)
+        {
+            int i = 1;
+            while (i < element.Length && !(element[i] < 128 && char.IsLetterOrDigit(element[i]))) i++;
+            return i < element.Length ? element.Substring(i) : element;
         }
 
         /// <summary>Whitespace tokenizer that keeps (), {} and quoted groups together.</summary>
