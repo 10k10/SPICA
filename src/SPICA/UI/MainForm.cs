@@ -36,7 +36,7 @@ namespace Spica.UI
         Win98TabControl tabs;
         Win98TabPage pageSetup, pageMonitor, pageResults;
         ToolStripButton tbOpen, tbStart, tbStop, tbFolder;
-        ToolStripMenuItem miStart, miStop, miRecent, miExport, miFolder;
+        ToolStripMenuItem miStart, miStop, miRecent, miExport, miReport, miFolder;
 
         // setup page
         Win98TextField txtAsc, txtLtspice, txtRuns, txtOut, txtInstances, txtThreads, txtFilter, txtSeed;
@@ -47,6 +47,14 @@ namespace Spica.UI
         Label lblSignalCount, lblHwHint;
         TextBox txtCircuit;
         Win98Button btnStart;
+
+        // analysis: Monte Carlo (with optional early stop) or worst case
+        Win98RadioButton rbMc, rbWc;
+        Win98CheckBox chkStop;
+        Win98TextField txtSpread, txtYield, txtMinRuns, txtWatch, txtWcSigma;
+        ComboBox cbWc;
+        Label lblAnalysisHint;
+        int siteCount;                 // tolerance sites SPICA can drive in the loaded schematic
 
         // monitor page
         Win98ProgressBar progress;
@@ -104,6 +112,19 @@ namespace Spica.UI
                 Win98MessageBox.Show(this, "LTspice was not found in the usual locations.\nUse the \"...\" button next to the LTspice field to point SPICA at LTspice.exe.",
                     "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
             if (!string.IsNullOrEmpty(StartupFile) && File.Exists(StartupFile)) OpenFile(StartupFile);
+            else if (!string.IsNullOrEmpty(StartupFile) && File.Exists(Path.Combine(StartupFile, "results.csv"))) OpenResultsFolder(StartupFile);
+        }
+
+        /// <summary>Shows a campaign folder on the Results tab (no resume prompt).</summary>
+        void OpenResultsFolder(string dir)
+        {
+            try
+            {
+                resultsView.SetData(ResultSet.Load(dir), false);
+                tabs.SelectedIndex = 2;
+                SetStatus($"Opened results: {dir}");
+            }
+            catch (Exception ex) { Win98MessageBox.Show(this, "Could not read the results:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); }
         }
 
         /// <summary>Opens a schematic (.asc) or a setup (.spica).</summary>
@@ -126,19 +147,25 @@ namespace Spica.UI
             var miOpen = new ToolStripMenuItem("&Open Schematic or Setup...", Win98.Icon("open16"), (s, e) => BrowseSchematic()) { ShortcutKeys = Keys.Control | Keys.O };
             var miSave = new ToolStripMenuItem("&Save Setup", Win98.Icon("save16"), (s, e) => SaveSetup(false)) { ShortcutKeys = Keys.Control | Keys.S };
             var miSaveAs = new ToolStripMenuItem("Save Setup &As...", null, (s, e) => SaveSetup(true));
-            var miResults = new ToolStripMenuItem("Open &Results...", Win98.Icon("results16"), (s, e) => OpenResults()) { ShortcutKeys = Keys.Control | Keys.R };
             miRecent = new ToolStripMenuItem("Recent &Files");
             var miExit = new ToolStripMenuItem("E&xit", null, (s, e) => Close());
-            mFile.DropDownItems.AddRange(new ToolStripItem[] { miOpen, miSave, miSaveAs, new ToolStripSeparator(), miResults, new ToolStripSeparator(), miRecent, new ToolStripSeparator(), miExit });
+            mFile.DropDownItems.AddRange(new ToolStripItem[] { miOpen, miSave, miSaveAs, new ToolStripSeparator(), miRecent, new ToolStripSeparator(), miExit });
             mFile.DropDownOpening += (s, e) => FillRecent();
             miRecent.DropDownItems.Add("(empty)");
 
             var mCampaign = new ToolStripMenuItem("&Campaign");
             miStart = new ToolStripMenuItem("&Start", Win98.Icon("run16"), (s, e) => StartCampaign()) { ShortcutKeys = Keys.F5 };
             miStop = new ToolStripMenuItem("S&top", Win98.Icon("stop16"), (s, e) => StopCampaign()) { ShortcutKeys = Keys.Shift | Keys.F5 };
-            miFolder = new ToolStripMenuItem("Open Output &Folder", Win98.Icon("folder16"), (s, e) => OpenOutputFolder());
-            miExport = new ToolStripMenuItem("&Export Results...", Win98.Icon("save16"), (s, e) => ExportResults());
-            mCampaign.DropDownItems.AddRange(new ToolStripItem[] { miStart, miStop, new ToolStripSeparator(), miFolder, miExport });
+            mCampaign.DropDownItems.AddRange(new ToolStripItem[] { miStart, miStop });
+
+            // everything that acts on the results shown in the Results tab (enabled whenever it can be used)
+            var mResults = new ToolStripMenuItem("&Results");
+            var miResults = new ToolStripMenuItem("&Open Results...", Win98.Icon("results16"), (s, e) => OpenResults()) { ShortcutKeys = Keys.Control | Keys.R };
+            miExport = new ToolStripMenuItem("Export &CSV...", Win98.Icon("save16"), (s, e) => ExportResults()) { ShortcutKeys = Keys.Control | Keys.E };
+            miReport = new ToolStripMenuItem("&Report...", Win98.Icon("doc16"), (s, e) => ExportReport()) { ShortcutKeys = Keys.Control | Keys.P };
+            miFolder = new ToolStripMenuItem("Open Campaign &Folder", Win98.Icon("folder16"), (s, e) => OpenOutputFolder());
+            mResults.DropDownItems.AddRange(new ToolStripItem[] { miResults, new ToolStripSeparator(), miExport, miReport, new ToolStripSeparator(), miFolder });
+            mResults.DropDownOpening += (s, e) => UpdateCommandState();
 
             var mTools = new ToolStripMenuItem("&Tools");
             mTools.DropDownItems.Add(new ToolStripMenuItem("&Hardware Information...", Win98.Icon("hw16"), (s, e) => ShowHardware()));
@@ -147,7 +174,7 @@ namespace Spica.UI
             var mHelp = new ToolStripMenuItem("&Help");
             mHelp.DropDownItems.Add(new ToolStripMenuItem("&About SPICA...", Win98.Icon("help16"), (s, e) => ShowAbout()));
 
-            menu.Items.AddRange(new ToolStripItem[] { mFile, mCampaign, mTools, mHelp });
+            menu.Items.AddRange(new ToolStripItem[] { mFile, mCampaign, mResults, mTools, mHelp });
             Win98Renderer.StyleDropDowns(menu.Items);
 
             toolbar = new ToolStrip
@@ -180,7 +207,7 @@ namespace Spica.UI
             tbStart = Btn("Start", "run32", (s, e) => StartCampaign(), "Start the Monte Carlo campaign (F5)");
             tbStop = Btn("Stop", "stop32", (s, e) => StopCampaign(), "Stop the campaign; finished runs are kept");
             toolbar.Items.Add(new ToolStripSeparator());
-            tbFolder = Btn("Output", "folder32", (s, e) => OpenOutputFolder(), "Open the campaign output folder");
+            tbFolder = Btn("Folder", "folder32", (s, e) => OpenOutputFolder(), "Open the folder of the campaign shown in Results");
             toolbar.Items.Add(new ToolStripSeparator());
             Btn("Hardware", "hw32", (s, e) => ShowHardware(), "What SPICA detected about this machine");
             Btn("Help", "help32", (s, e) => ShowAbout(), "About SPICA");
@@ -298,7 +325,7 @@ namespace Spica.UI
 
             var spacer2 = new Panel { Dock = DockStyle.Top, Height = 6, BackColor = Win98.Face };
 
-            var grpCircuit = new Win98GroupBox { Text = "Circuit", Dock = DockStyle.Bottom, Height = 190 };
+            var grpCircuit = new Win98GroupBox { Text = "Circuit", Dock = DockStyle.Bottom, Height = 130 };
             txtCircuit = new TextBox { Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Win98.Window, ScrollBars = ScrollBars.Vertical, Font = Win98.Font, WordWrap = false };
             var wellCircuit = new Win98Well(txtCircuit) { Dock = DockStyle.Fill };
             grpCircuit.Padding = new Padding(10, 20, 10, 10);
@@ -338,6 +365,8 @@ namespace Spica.UI
             right.Controls.Add(spacer2);
             right.Controls.Add(grpCircuit);
             spacer2.Dock = DockStyle.Bottom;
+            right.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 6, BackColor = Win98.Face });
+            right.Controls.Add(BuildAnalysisGroup());
 
             // --- bottom: start button --------------------------------------------------------
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 36, BackColor = Win98.Face };
@@ -350,6 +379,89 @@ namespace Spica.UI
             p.Controls.Add(left);
             p.Controls.Add(bottom);
             p.Controls.Add(grpFiles);
+        }
+
+        Win98GroupBox BuildAnalysisGroup()
+        {
+            var grp = new Win98GroupBox { Text = "Analysis", Dock = DockStyle.Top, Height = 134 };
+            rbMc = new Win98RadioButton { Text = "Monte Carlo (random units)", Location = new Point(10, 20), Width = 180 };
+            chkStop = new Win98CheckBox { Text = "Stop early when the answer is known (Runs = maximum)", Location = new Point(196, 20), Width = 330 };
+            Win98TextField Num(int x, int w) { var t = new Win98TextField { Location = new Point(x, 44), Width = w }; return t; }
+            txtSpread = Num(82, 36);
+            txtYield = Num(192, 50);
+            txtMinRuns = Num(304, 50);
+            txtWatch = new Win98TextField { Location = new Point(410, 44), Width = 120, Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right };
+            rbWc = new Win98RadioButton { Text = "Worst case:", Location = new Point(10, 76), Width = 90 };
+            cbWc = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(104, 75), Width = 236, Font = Win98.Font };
+            cbWc.Items.AddRange(new object[] { "Auto (recommended)", "Sensitivity: n+1 runs, then verify", "All corners: 2^n runs (exact)" });
+            cbWc.SelectedIndex = 0;
+            txtWcSigma = new Win98TextField { Location = new Point(482, 74), Width = 36 };
+            lblAnalysisHint = new Label { AutoSize = false, Location = new Point(10, 102), Height = 30, ForeColor = Win98.Shadow, BackColor = Win98.Face, Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right };
+            grp.Controls.AddRange(new Control[] { rbMc, chkStop,
+                Lbl("Spread ±", 28, 44), txtSpread, Lbl("%  Yield ≥", 124, 44), txtYield, Lbl("%  Min", 248, 44), txtMinRuns, Lbl("Watch:", 366, 44), txtWatch,
+                rbWc, cbWc, Lbl("Gaussian at ±", 352, 76), txtWcSigma, Lbl("σ", 522, 76), lblAnalysisHint });
+            grp.Resize += (s, e) => { lblAnalysisHint.Width = grp.Width - 20; txtWatch.Width = Math.Max(60, grp.Width - 10 - txtWatch.Left); };
+
+            var tip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
+            tip.SetToolTip(chkStop, "The campaign ends as soon as the result is known well enough, at most after 'Number of runs'.\n" +
+                "Measurements with spec limits: stop when the yield is proven at least the required yield (or proven below it), 95 % confidence.\n" +
+                "Measurements without limits: stop when their spread (sigma) is known within the given percentage.");
+            tip.SetToolTip(txtSpread.Box, "Measurements without spec limits: stop when sigma is known within ± this % (95 % confidence).\n10 % takes ~200 runs, 5 % ~770, 3 % ~2100 (for bell-shaped results).");
+            tip.SetToolTip(txtYield.Box, "Measurements with spec limits: the yield to prove (or disprove).\nWith no failures: 99 % takes ~300 runs, 99.73 % ~1100, 99.9 % ~3000.");
+            tip.SetToolTip(txtMinRuns.Box, "Never stop before this many runs (per temperature).");
+            tip.SetToolTip(txtWatch.Box, "Measurements that decide the stop, separated by commas. Empty = all of them.");
+            tip.SetToolTip(cbWc, "Every tolerance is set to an edge of its range instead of a random value.\n" +
+                "Sensitivity: nominal + one run per tolerance finds which way each one pushes every measurement,\nthen 2 runs per measurement (and temperature) with all of them pushed the same way.\n" +
+                "All corners: every combination of edges, 2^n runs; exact, for up to " + WorstCase.MaxCornerSites + " tolerances.\nAuto: all corners up to " + WorstCase.AutoCornerSites + " tolerances, sensitivity above.");
+            tip.SetToolTip(txtWcSigma.Box, "gauss() tolerances have no edge: they are pushed to ± this many sigma (3 = 99.73 % of the parts).");
+
+            foreach (var c in new Control[] { rbMc, rbWc, chkStop, cbWc })
+            {
+                if (c is RadioButton r) r.CheckedChanged += (s, e) => UpdateAnalysisUi();
+                else if (c is CheckBox k) k.CheckedChanged += (s, e) => UpdateAnalysisUi();
+                else ((ComboBox)c).SelectedIndexChanged += (s, e) => UpdateAnalysisUi();
+            }
+            return grp;
+        }
+
+        WcMethod SelectedWc() => !rbWc.Checked ? WcMethod.Off : cbWc.SelectedIndex == 1 ? WcMethod.Sensitivity : cbWc.SelectedIndex == 2 ? WcMethod.Corners : WcMethod.Auto;
+
+        /// <summary>Enables the fields of the chosen analysis and explains what it will run.</summary>
+        void UpdateAnalysisUi()
+        {
+            if (lblAnalysisHint == null) return;
+            bool wc = rbWc.Checked;
+            chkStop.Enabled = !wc;
+            txtSpread.Enabled = txtYield.Enabled = txtMinRuns.Enabled = txtWatch.Enabled = !wc && chkStop.Checked;
+            cbWc.Enabled = txtWcSigma.Enabled = wc;
+            txtRuns.Enabled = !wc;
+            if (wc) chkPaired.Checked = true;
+            chkPaired.Enabled = !wc;
+            var inv = CultureInfo.InvariantCulture;
+            string hint;
+            if (wc)
+            {
+                var m = WorstCase.Resolve(SelectedWc(), siteCount);
+                int meas = netlist?.MeasNames.Count ?? 0;
+                if (netlist == null) hint = "Open a schematic to see how many runs the worst case needs.";
+                else if (siteCount == 0) hint = "No mc()/gauss()/flat() SPICA can drive in this schematic: there is nothing to push to its edges.";
+                else if (m == WcMethod.Corners && siteCount > WorstCase.MaxCornerSites)
+                    hint = $"{siteCount} tolerances: all corners would need 2^{siteCount} runs. Choose Sensitivity or Auto.";
+                else if (m == WcMethod.Corners)
+                    hint = $"{siteCount} tolerances -> all corners: {(1 << siteCount) + 1:N0} runs per temperature (nominal + 2^{siteCount}). 'Number of runs' is not used.";
+                else
+                    hint = $"{siteCount} tolerances -> sensitivity: {siteCount + 1} screening runs, then up to {2 * meas} verification runs per temperature. 'Number of runs' is not used.";
+                if (rbTempRandom.Checked) hint += " Random temperature becomes the two corners min and max.";
+            }
+            else if (chkStop.Checked)
+            {
+                double.TryParse(txtYield.Text, NumberStyles.Float, inv, out var y);
+                hint = "Stops when every watched measurement is settled: with spec limits, its yield is proven above (or below) the required yield;" +
+                       " without, its spread is known within the given ±%." +
+                       (y > 0 && y < 100 ? $" Proving {y.ToString("0.###", inv)} % with no failure takes ~{StopRule.ZeroFailRuns(y / 100):N0} runs." : "");
+            }
+            else hint = "Random units: every tolerance gets a new random value in each run. Statistics, yield, sensitivity, temperature drift.";
+            lblAnalysisHint.Text = hint;
         }
 
         IEnumerable<SignalItem> VisibleSignals()
@@ -403,7 +515,7 @@ namespace Spica.UI
         {
             var p = pageMonitor;
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 118, BackColor = Win98.Face };
+            var top = new Panel { Dock = DockStyle.Top, Height = 145, BackColor = Win98.Face };
             progress = new Win98ProgressBar { Location = new Point(0, 4), Height = 20, Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right };
             top.Controls.Add(progress);
 
@@ -424,6 +536,12 @@ namespace Spica.UI
                     cap.Tag = new Point(c, r);
                     val.Tag = new Point(c, r);
                 }
+            // one wide line: what the campaign is doing (Monte Carlo, auto-stop progress, worst-case step)
+            var capA = new Label { Text = "Analysis:", AutoSize = false, Width = 74, Height = 18, TextAlign = ContentAlignment.MiddleRight, BackColor = Win98.Face, Tag = new Point(0, 3) };
+            var valA = new SunkenLabel { Width = 150, Height = 20, Tag = new Point(-1, 3) };
+            top.Controls.Add(capA);
+            top.Controls.Add(valA);
+            stat["Analysis"] = valA;
             top.Resize += (s, e) =>
             {
                 progress.Width = top.Width;
@@ -432,7 +550,8 @@ namespace Spica.UI
                 {
                     if (!(ctl.Tag is Point pt)) continue;
                     int y = 32 + pt.Y * 27;
-                    if (ctl is SunkenLabel) { ctl.Location = new Point(pt.X * colW + 80, y); ctl.Width = colW - 86; }
+                    if (pt.X < 0) { ctl.Location = new Point(80, y); ctl.Width = top.Width - 86; }
+                    else if (ctl is SunkenLabel) { ctl.Location = new Point(pt.X * colW + 80, y); ctl.Width = colW - 86; }
                     else ctl.Location = new Point(pt.X * colW, y + 1);
                 }
             };
@@ -446,7 +565,7 @@ namespace Spica.UI
             meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = Win98Chart.Navy, Icon = Win98.Icon("hw16") });
             meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "RAM", Color = Win98Chart.Teal, Icon = Win98.Icon("memory16") });
             meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "Disk", Color = Win98Chart.Purple, Icon = Win98.Icon("disk16") });
-            var meterBox = new Win98GroupBox { Text = "Resources", Dock = DockStyle.Right, Width = 228, Padding = new Padding(6, 18, 6, 4) };
+            var meterBox = new Win98GroupBox { Text = "Resources", Dock = DockStyle.Right, Width = meter.PreferredWidth + 16, Padding = new Padding(8, 18, 8, 4) };
             meterBox.Controls.Add(meter);
             graphRow.Controls.Add(meterBox);
 
@@ -522,12 +641,7 @@ namespace Spica.UI
         void BuildResultsPage()
         {
             resultsView = new ResultsView();
-            resultsView.OpenResultsRequested += OpenResults;
-            resultsView.OpenFolderRequested += () =>
-            {
-                string dir = resultsView.Data?.Folder;
-                if (Directory.Exists(dir ?? "")) Process.Start("explorer.exe", "\"" + dir + "\"");
-            };
+            resultsView.DataChanged += UpdateCommandState;
             resultsView.SetupChanged += () =>
             {
                 // edits on the running/just-finished campaign belong to the current setup
@@ -580,14 +694,7 @@ namespace Spica.UI
                     if (c == 2 || c < 0) return;
                     if (c == 0) { ResumeCampaign(dir, state); return; }
                 }
-                try
-                {
-                    var rs = ResultSet.Load(dir);
-                    resultsView.SetData(rs, false);
-                    tabs.SelectedIndex = 2;
-                    SetStatus($"Opened results: {dir}");
-                }
-                catch (Exception ex) { Win98MessageBox.Show(this, "Could not read the results:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); }
+                OpenResultsFolder(dir);
             }
         }
 
@@ -684,6 +791,13 @@ namespace Spica.UI
             if (double.TryParse(txtTempMin.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var tmin)) project.TempMin = tmin;
             if (double.TryParse(txtTempMax.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var tmax)) project.TempMax = tmax;
             project.Paired = chkPaired.Checked;
+            project.WorstCase = SelectedWc();
+            if (double.TryParse(txtWcSigma.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var k) && k > 0 && k <= 10) project.WcSigma = k;
+            project.Stop.Enabled = chkStop.Checked;
+            if (double.TryParse(txtSpread.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var sp) && sp > 0 && sp <= 100) project.Stop.SpreadPct = sp;
+            if (double.TryParse(txtYield.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var y) && y > 0 && y < 100) project.Stop.YieldPct = y;
+            if (int.TryParse(txtMinRuns.Text, out var mr) && mr > 0) project.Stop.MinRuns = mr;
+            project.Stop.Watch = SpicaProject.ParseNames(txtWatch.Text);
         }
 
         /// <summary>Shows the project on the Setup tab (signal selection is applied when the schematic loads).</summary>
@@ -708,6 +822,16 @@ namespace Spica.UI
                 txtCorners.Enabled = rbTempCorners.Checked;
                 txtTempMin.Enabled = txtTempMax.Enabled = rbTempRandom.Checked;
                 chkPaired.Checked = project.Paired;
+                rbWc.Checked = project.WorstCase != WcMethod.Off;
+                rbMc.Checked = !rbWc.Checked;
+                cbWc.SelectedIndex = project.WorstCase == WcMethod.Sensitivity ? 1 : project.WorstCase == WcMethod.Corners ? 2 : 0;
+                txtWcSigma.Text = project.WcSigma.ToString("0.###", inv);
+                chkStop.Checked = project.Stop.Enabled;
+                txtSpread.Text = project.Stop.SpreadPct.ToString("0.###", inv);
+                txtYield.Text = project.Stop.YieldPct.ToString("0.###", inv);
+                txtMinRuns.Text = project.Stop.MinRuns.ToString(inv);
+                txtWatch.Text = string.Join(", ", project.Stop.Watch);
+                UpdateAnalysisUi();
             }
             finally { loadingUi = false; }
             UpdateTitle();
@@ -809,8 +933,12 @@ namespace Spica.UI
             project.Dirty = false;
 
             // any edit on the Setup tab makes the setup "unsaved"
-            foreach (var t in new[] { txtRuns, txtSeed, txtCorners, txtTempMin, txtTempMax }) t.Box.TextChanged += (s, e) => MarkDirty();
-            foreach (var c in new[] { chkReseed, chkKeepRaw, chkPaired }) c.CheckedChanged += (s, e) => MarkDirty();
+            foreach (var t in new[] { txtRuns, txtSeed, txtCorners, txtTempMin, txtTempMax, txtSpread, txtYield, txtMinRuns, txtWatch, txtWcSigma }) t.Box.TextChanged += (s, e) => MarkDirty();
+            foreach (var c in new[] { chkReseed, chkKeepRaw, chkPaired, chkStop }) c.CheckedChanged += (s, e) => MarkDirty();
+            rbWc.CheckedChanged += (s, e) => MarkDirty();
+            cbWc.SelectedIndexChanged += (s, e) => MarkDirty();
+            txtYield.Box.TextChanged += (s, e) => UpdateAnalysisUi();
+            rbTempRandom.CheckedChanged += (s, e) => UpdateAnalysisUi();
             rbSaveSel.CheckedChanged += (s, e) => MarkDirty();
 
             UpdateLtspiceVersion();
@@ -938,6 +1066,7 @@ namespace Spica.UI
                 foreach (var n in nl.Nodes) { var s = $"V({n})"; if (!req.Contains(s)) allSignals.Add(new SignalItem { Signal = s }); }
                 foreach (var c in nl.Currents) if (!req.Contains(c)) allSignals.Add(new SignalItem { Signal = c });
 
+                siteCount = McPlan.Build(nl.Lines).Sites.Count;
                 bool wasDirty = project.Dirty;
                 var remembered = project.Signals.Count > 0 || project.FilePath != null ? project.Signals : nl.ExistingSaves;
                 foreach (var s in remembered) if (allSignals.Any(a => a.Signal.Equals(s, StringComparison.OrdinalIgnoreCase))) checkedSignals.Add(s);
@@ -1017,7 +1146,8 @@ namespace Spica.UI
 
         /// <param name="resumeDir">an unfinished campaign folder to complete (its setup is already loaded)</param>
         /// <param name="resume">the runs already finished in that folder</param>
-        void StartCampaign(string resumeDir = null, List<RunResult> resume = null, double priorSeconds = 0)
+        /// <param name="continuing">the second step of a worst case: keep the log and the graph</param>
+        void StartCampaign(string resumeDir = null, List<RunResult> resume = null, double priorSeconds = 0, bool continuing = false)
         {
             if (Running) return;
             if (netlist == null) { BrowseSchematic(); if (netlist == null) return; }
@@ -1070,13 +1200,77 @@ namespace Spica.UI
             }
 
             McPlan plan = null;
-            if (project.Paired)
+            bool wc = project.WorstCase != WcMethod.Off;
+            if (project.Paired || wc)
             {
                 plan = McPlan.Build(netlist.Lines);
-                if (plan.Sites.Count == 0 &&
+                if (wc && (plan.Sites.Count == 0 || netlist.MeasNames.Count == 0))
+                {
+                    Win98MessageBox.Show(this, plan.Sites.Count == 0
+                        ? "Worst case needs tolerances SPICA can drive: mc(), gauss() or flat() outside .subckt definitions. None were found."
+                        : "Worst case needs .meas statements: there is nothing to find the extremes of.", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
+                    return;
+                }
+                if (!wc && plan.Sites.Count == 0 &&
                     Win98MessageBox.Show(this, "Paired samples are on, but SPICA found no mc()/gauss()/flat() it can take over in this schematic" +
                         (plan.Warnings.Count > 0 ? " (random values inside .subckt definitions stay with LTspice)" : "") + ".\nRun anyway?",
                         "SPICA", MessageBoxButtons.YesNo, Win98Icon.Question) != DialogResult.Yes) return;
+            }
+
+            // worst case: the runs are fixed combinations of tolerance edges instead of random units
+            var setup = project;
+            bool randomTemp = project.Temp == TempMode.Random;
+            int wcStage = 0;
+            string stage = null;
+            if (wc)
+            {
+                int n = plan.Sites.Count;
+                double k = project.WcSigma;
+                var method = WorstCase.Resolve(project.WorstCase, n);
+                if (method == WcMethod.Corners && n > WorstCase.MaxCornerSites)
+                {
+                    Win98MessageBox.Show(this, $"{n} tolerances: all corners would need 2^{n} = {Math.Pow(2, n):N0} runs per temperature.\nChoose Sensitivity or Auto.", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
+                    return;
+                }
+                if (randomTemp)
+                {
+                    // a random temperature has no edge: its two limits become corners
+                    corners = new List<double> { project.TempMin, project.TempMax };
+                    randomTemp = false;
+                    setup = project.Clone();
+                    setup.Temp = TempMode.Corners;
+                    setup.Corners = new List<double>(corners);
+                }
+                int cc = corners != null && corners.Count > 0 ? corners.Count : 1;
+                string temps = cc > 1 ? $" at {cc} temperatures" : "";
+                if (method == WcMethod.Corners)
+                {
+                    plan.Design = WorstCase.CornerDesign(plan.Sites, k);
+                    stage = $"Worst case, all corners: nominal + 2^{n} combinations of {n} tolerance edges = {plan.Design.Count} runs{temps}.";
+                }
+                else
+                {
+                    var screen = WorstCase.ScreenDesign(plan.Sites, k);
+                    if (resume != null && Screened(resume, n, cc))
+                    {
+                        var verify = WorstCase.VerifyDesign(resume, netlist.MeasNames, plan.Sites, k, cc);
+                        if (verify.Count == 0)
+                        {
+                            Win98MessageBox.Show(this, "The screening runs gave no usable .meas values, so the worst-case directions are unknown.", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
+                            return;
+                        }
+                        plan.Design = screen.Concat(verify).ToList();
+                        wcStage = 2;
+                        stage = $"Worst case, step 2 of 2 (verification): {verify.Count} runs with every tolerance pushed the way that moves a measurement up or down{temps}.";
+                    }
+                    else
+                    {
+                        plan.Design = screen;
+                        wcStage = 1;
+                        stage = $"Worst case, step 1 of 2 (screening): nominal + each of the {n} tolerances alone at its upper edge = {n + 1} runs{temps}.";
+                    }
+                }
+                runs = plan.Design.Count;
             }
 
             if (netlist.MeasNames.Count == 0 &&
@@ -1121,6 +1315,7 @@ namespace Spica.UI
 
             SaveSettings();
             uint seed = project.Seed;
+            if (continuing && engine != null) seed = engine.Options.Seed;   // worst case step 2: same campaign
             if (seed == 0) seed = (uint)(Guid.NewGuid().GetHashCode() & 0x7FFFFFFF) | 1;
             var options = new CampaignOptions
             {
@@ -1134,19 +1329,25 @@ namespace Spica.UI
                 ClockReseed = chkReseed.Checked,
                 Manual = manual,
                 Corners = corners,
-                RandomTemp = project.Temp == TempMode.Random,
+                RandomTemp = randomTemp,
                 TempMin = project.TempMin,
                 TempMax = project.TempMax,
                 Mc = plan,
                 Seed = seed,
-                Setup = project,
+                Setup = setup,
                 Resume = resume,
                 PriorSeconds = priorSeconds,
+                Stop = wc ? null : project.Stop.Clone(),
+                Stage = stage,
+                WcStage = wcStage,
             };
             analyzeOnFinish = discardOnFinish = false;
 
-            txtLog.Clear();
-            graph.Clear();
+            if (!continuing)
+            {
+                txtLog.Clear();
+                graph.Clear();
+            }
             resultsView.SetData(null, false);
             progress.Maximum = options.Jobs;
             progress.Value = 0;
@@ -1164,6 +1365,21 @@ namespace Spica.UI
             SetStatus(resume != null ? $"Resuming: {options.Jobs - resume.Count(r => r.Status != RunStatus.Failed)} of {options.Jobs} simulations to go..."
                                      : $"Running {options.Jobs} simulations...");
             UpdateCommandState();
+        }
+
+        /// <summary>Worst case by sensitivity: are the screening runs (nominal + one per tolerance) done at every temperature?</summary>
+        static bool Screened(IList<RunResult> done, int sites, int corners) =>
+            done.Count(r => r.Status != RunStatus.Failed && r.Run >= 1 && r.Run <= sites + 1 && r.Corner < corners) >= (sites + 1) * corners;
+
+        static string AnalysisText(CampaignOptions o, EngineSnapshot s)
+        {
+            if (o.WcStage == 1) return $"Worst case, step 1 of 2: screening (nominal + each of {o.Mc.Sites.Count} tolerances at its edge); verification follows automatically";
+            if (o.WcStage == 2) return "Worst case, step 2 of 2: verification (every tolerance pushed the worst way for each measurement)";
+            if (o.Mc?.Design != null) return $"Worst case, all corners: {o.Runs:N0} combinations of {o.Mc.Sites.Count} tolerance edges";
+            if (o.Stop != null && o.Stop.Enabled)
+                return s.AutoStopped ? "Auto-stop: answer known - " + (s.StopStatus ?? "")
+                     : "Auto-stop (max " + o.Runs.ToString("N0", CultureInfo.InvariantCulture) + " runs): " + (s.StopStatus ?? "waiting for the first results...");
+            return $"Monte Carlo: {o.Runs:N0} random units" + (o.CornerCount > 1 ? $" x {o.CornerCount} temperatures" : "");
         }
 
         void StopCampaign()
@@ -1233,6 +1449,18 @@ namespace Spica.UI
             }
 
             UpdateUi();
+            var o = engine.Options;
+            var snap = engine.Snapshot();
+            if (o.WcStage == 1 && !snap.Cancelled && snap.FatalError == null && !analyzeOnFinish)
+            {
+                var done = engine.GetResults();
+                if (Screened(done, o.Mc.Sites.Count, o.CornerCount))
+                {
+                    // worst case by sensitivity: the screening told which way each tolerance pushes; now verify
+                    StartCampaign(o.OutputDir, done, snap.Elapsed.TotalSeconds, true);
+                    if (Running) return;
+                }
+            }
             RefreshResults();
             UpdateCommandState();
             var s = engine.Snapshot();
@@ -1277,8 +1505,10 @@ namespace Spica.UI
             tbStart.Enabled = miStart.Enabled = btnStart.Enabled = !run && has;
             tbStop.Enabled = miStop.Enabled = run;
             tbOpen.Enabled = !run;
-            tbFolder.Enabled = miFolder.Enabled = engine != null;
-            miExport.Enabled = engine != null;
+            if (resultsView == null) return;
+            // Export / Report: the results shown, or the running campaign once it has finished runs
+            miExport.Enabled = miReport.Enabled = resultsView.CanExport || (engine != null && engine.Snapshot().Done > 0);
+            tbFolder.Enabled = miFolder.Enabled = Directory.Exists(CampaignFolder() ?? "");
             foreach (Control c in pageSetup.Controls) c.Enabled = !run;
         }
 
@@ -1301,6 +1531,7 @@ namespace Spica.UI
             }
 
             var s = engine.Snapshot();
+            miExport.Enabled = miReport.Enabled = resultsView.CanExport || s.Done > 0;
             progress.Maximum = Math.Max(1, s.Total);
             progress.Value = s.Done;
             var inv = CultureInfo.InvariantCulture;
@@ -1309,7 +1540,8 @@ namespace Spica.UI
             stat["Remaining"].Text = double.IsNaN(s.EtaSeconds) ? (s.Finished ? "done" : "estimating...") : TimeSpan.FromSeconds(Math.Min(s.EtaSeconds, 359999)).ToString(@"hh\:mm\:ss");
             stat["Rate"].Text = s.RunsPerMinute > 0 ? $"{s.RunsPerMinute:0.0} runs/min" : "-";
             stat["Config"].Text = s.Config;
-            stat["Phase"].Text = s.Draining ? $"Stopping ({s.Running} running)" : s.Cancelled ? "Stopped" : s.Finished ? "Finished" : PhaseText(s.Phase);
+            stat["Analysis"].Text = AnalysisText(engine.Options, s);
+            stat["Phase"].Text = s.Draining ? (s.AutoStopped ? $"Auto-stop ({s.Running} finishing)" : $"Stopping ({s.Running} running)") : s.Cancelled ? "Stopped" : s.Finished ? "Finished" : PhaseText(s.Phase);
             stat["Start-up"].Text = double.IsNaN(s.OverheadSeconds) ? "-" : $"{s.OverheadSeconds:0.00} s / launch";
             stat["Per run"].Text = double.IsNaN(s.SecondsPerRun) ? "-" : $"{s.SecondsPerRun:0.000} s (sim)";
             stat["Failed"].Text = $"{s.Failed}" + (s.NoData > 0 ? $"  (+{s.NoData} no data)" : "");
@@ -1401,17 +1633,31 @@ namespace Spica.UI
         //  Misc commands
         // =====================================================================================
 
-        void OpenOutputFolder()
+        /// <summary>The folder of the results shown, else of the campaign run in this session, else the output root.</summary>
+        string CampaignFolder()
         {
-            string dir = engine?.Options.OutputDir ?? txtOut.Text;
-            if (Directory.Exists(dir)) Process.Start("explorer.exe", "\"" + dir + "\"");
+            string dir = resultsView.Data?.Folder;
+            if (Directory.Exists(dir ?? "")) return dir;
+            dir = engine?.Options.OutputDir;
+            if (Directory.Exists(dir ?? "")) return dir;
+            dir = txtOut.Text.Trim();
+            return dir.Length > 0 && Directory.Exists(dir) ? dir : null;
         }
 
-        void ExportResults()
+        void OpenOutputFolder()
+        {
+            string dir = CampaignFolder();
+            if (dir != null) Process.Start("explorer.exe", "\"" + dir + "\"");
+        }
+
+        /// <summary>The running campaign's results are built on demand; a folder opened from disk is used as it is.</summary>
+        void CatchUpResults()
         {
             if (engine != null && (resultsView.Data == null || resultsView.Data.Folder == engine.Options.OutputDir)) RefreshResults();
-            resultsView.ExportCsv();
         }
+
+        void ExportResults() { CatchUpResults(); resultsView.ExportCsv(); }
+        void ExportReport() { CatchUpResults(); resultsView.ExportReport(); }
 
         void ShowHardware()
         {

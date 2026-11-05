@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -52,6 +52,14 @@ namespace Spica.Core
         public readonly Dictionary<string, SpecLimit> Specs = new Dictionary<string, SpecLimit>(StringComparer.OrdinalIgnoreCase);
         public TfSetup Tf = new TfSetup();
 
+        public WcMethod WorstCase = WcMethod.Off;   // Off = Monte Carlo
+        public double WcSigma = 3;            // gaussian tolerances are pushed to +/- this many sigma
+        public StopRule Stop = new StopRule();
+
+        public double DesignSigma = 6;        // error budget: mean +/- this many sigma must stay inside the budget
+        public bool PessimisticSigma = true;  // use the 95 % upper bound of sigma
+        public List<ErrorItem> Errors = new List<ErrorItem>();
+
         public bool Dirty;
 
         public SpecLimit Spec(string meas) => meas != null && Specs.TryGetValue(meas, out var s) ? s : null;
@@ -92,6 +100,9 @@ namespace Spica.Core
             return list;
         }
 
+        public static List<string> ParseNames(string s) =>
+            (s ?? "").Split(new[] { ',', ';', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
         public void Save(string path)
         {
             var sb = new StringBuilder();
@@ -129,6 +140,33 @@ namespace Spica.Core
             sb.AppendLine("Budget=" + Num(Tf.Budget));
             sb.AppendLine("BudgetUnit=" + (Tf.BudgetPercent ? "%" : "abs"));
             sb.AppendLine("K=" + Num(Tf.K));
+            sb.AppendLine();
+            sb.AppendLine("[WorstCase]");
+            sb.AppendLine("Method=" + WorstCase);
+            sb.AppendLine("Sigma=" + Num(WcSigma));
+            sb.AppendLine();
+            sb.AppendLine("[Stop]");
+            sb.AppendLine("Enabled=" + (Stop.Enabled ? 1 : 0));
+            sb.AppendLine("Spread=" + Num(Stop.SpreadPct));
+            sb.AppendLine("Yield=" + Num(Stop.YieldPct));
+            sb.AppendLine("MinRuns=" + Stop.MinRuns.ToString(Inv));
+            sb.AppendLine("Watch=" + string.Join(", ", Stop.Watch));
+            sb.AppendLine();
+            sb.AppendLine("[ErrorBudget]");
+            sb.AppendLine("Sigma=" + Num(DesignSigma));
+            sb.AppendLine("Pessimistic=" + (PessimisticSigma ? 1 : 0));
+            foreach (var e in Errors)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"[Error {e.Name}]");
+                sb.AppendLine("Y=" + e.Y);
+                sb.AppendLine("X=" + e.X);
+                sb.AppendLine("TF=" + e.Tf);
+                sb.AppendLine("ReferToInput=" + (e.ReferToInput ? 1 : 0));
+                sb.AppendLine("Budget=" + Num(e.Budget));
+                sb.AppendLine("Unit=" + e.Unit);
+                sb.AppendLine("FullScale=" + Num(e.FullScale));
+            }
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
             FilePath = path;
             Dirty = false;
@@ -195,6 +233,43 @@ namespace Spica.Core
                         case "k": var k = ParseNum(val); if (k > 0) p.Tf.K = k; break;
                     }
                 }
+                else if (section.Equals("WorstCase", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (key.Equals("Method", StringComparison.OrdinalIgnoreCase) && Enum.TryParse(val, true, out WcMethod wm)) p.WorstCase = wm;
+                    else if (key.Equals("Sigma", StringComparison.OrdinalIgnoreCase)) { var ks = ParseNum(val); if (ks > 0) p.WcSigma = ks; }
+                }
+                else if (section.Equals("ErrorBudget", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (key.Equals("Sigma", StringComparison.OrdinalIgnoreCase)) { var ks = ParseNum(val); if (ks > 0) p.DesignSigma = ks; }
+                    else if (key.Equals("Pessimistic", StringComparison.OrdinalIgnoreCase)) p.PessimisticSigma = B();
+                }
+                else if (section.StartsWith("Error ", StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = section.Substring(6).Trim();
+                    var e = p.Errors.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (e == null) p.Errors.Add(e = new ErrorItem { Name = name });
+                    switch (key.ToLowerInvariant())
+                    {
+                        case "y": e.Y = val; break;
+                        case "x": e.X = val; break;
+                        case "tf": e.Tf = val; break;
+                        case "refertoinput": e.ReferToInput = B(); break;
+                        case "budget": e.Budget = ParseNum(val); break;
+                        case "unit": if (Enum.TryParse(val, true, out BudgetUnit bu)) e.Unit = bu; break;
+                        case "fullscale": e.FullScale = ParseNum(val); break;
+                    }
+                }
+                else if (section.Equals("Stop", StringComparison.OrdinalIgnoreCase))
+                {
+                    switch (key.ToLowerInvariant())
+                    {
+                        case "enabled": p.Stop.Enabled = B(); break;
+                        case "spread": var sp = ParseNum(val); if (sp > 0) p.Stop.SpreadPct = sp; break;
+                        case "yield": var yp = ParseNum(val); if (yp > 0 && yp < 100) p.Stop.YieldPct = yp; break;
+                        case "minruns": if (int.TryParse(val, NumberStyles.Integer, Inv, out var mr) && mr > 0) p.Stop.MinRuns = mr; break;
+                        case "watch": p.Stop.Watch = ParseNames(val); break;
+                    }
+                }
             }
             p.Dirty = false;
             return p;
@@ -208,6 +283,8 @@ namespace Spica.Core
                 ClockReseed = ClockReseed, KeepRaw = KeepRaw, SaveSelected = SaveSelected,
                 Signals = new List<string>(Signals), Temp = Temp, Corners = new List<double>(Corners),
                 TempMin = TempMin, TempMax = TempMax, Dirty = Dirty,
+                WorstCase = WorstCase, WcSigma = WcSigma, Stop = Stop.Clone(),
+                DesignSigma = DesignSigma, PessimisticSigma = PessimisticSigma, Errors = Errors.Select(e => e.Clone()).ToList(),
                 Tf = new TfSetup { X = Tf.X, Y = Tf.Y, Theory = Tf.Theory, Budget = Tf.Budget, BudgetPercent = Tf.BudgetPercent, K = Tf.K },
             };
             foreach (var kv in Specs) c.Specs[kv.Key] = new SpecLimit { Lsl = kv.Value.Lsl, Usl = kv.Value.Usl };

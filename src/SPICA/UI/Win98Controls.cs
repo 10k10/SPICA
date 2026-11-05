@@ -625,15 +625,18 @@ namespace Spica.UI
             Invalidate();
         }
 
-        int ColumnWidth => Bars.Count == 0 ? Width : Width / Bars.Count;
+        /// <summary>Width of one bar's column; the columns are packed from the left.</summary>
+        public const int ColumnWidth = 38;
+        public int PreferredWidth => Bars.Count * ColumnWidth;
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            int i = Math.Min(Bars.Count - 1, e.X / Math.Max(1, ColumnWidth));
+            int i = e.X / ColumnWidth;
+            if (i >= Bars.Count) i = -1;
             if (i == tipBar) return;
             tipBar = i;
-            tip.SetToolTip(this, i >= 0 ? Bars[i].Tip : "");
+            tip.SetToolTip(this, i >= 0 ? $"{Bars[i].Label}: {Bars[i].Tip}" : "");
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -641,16 +644,20 @@ namespace Spica.UI
             var g = e.Graphics;
             g.Clear(Win98.Face);
             if (Bars.Count == 0) return;
-            int cw = ColumnWidth;
-            const int segH = 7, gap = 2, wellW = 24, footer = 38;
+            const int segH = 7, gap = 2, wellW = 16, header = 18, footer = 22;
             for (int i = 0; i < Bars.Count; i++)
             {
                 var b = Bars[i];
-                int x0 = i * cw;
-                if (i > 0) Win98.EtchedVLine(g, x0, 4, Height - 4);
+                int x0 = i * ColumnWidth;
+                if (i > 0) Win98.EtchedVLine(g, x0, 2, Height - 2);
+
+                // percentage centred above the bar
+                string val = double.IsNaN(b.Value) ? "-" : $"{b.Value:0}%";
+                TextRenderer.DrawText(g, val, Font, new Rectangle(x0, 0, ColumnWidth, header), Color.Black,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
 
                 // the well: sunken white column holding the segments
-                var well = new Rectangle(x0 + (cw - wellW) / 2, 6, wellW, Math.Max(20, Height - 6 - footer));
+                var well = new Rectangle(x0 + (ColumnWidth - wellW) / 2, header, wellW, Math.Max(20, Height - header - footer));
                 using (var w = new SolidBrush(Color.White)) g.FillRectangle(w, well);
                 Win98.Sunken(g, well);
                 var inner = Rectangle.Inflate(well, -3, -3);
@@ -665,15 +672,8 @@ namespace Spica.UI
                         y -= gap;
                     }
 
-                // icon and caption under the well
-                int fy = well.Bottom + 4;
-                string val = double.IsNaN(b.Value) ? "-" : $"{b.Value:0}%";
-                string cap = $"{b.Label} {val}";
-                var sz = TextRenderer.MeasureText(cap, Font);
-                int iconW = b.Icon != null ? 18 : 0;
-                int cx = x0 + (cw - iconW - sz.Width) / 2;
-                if (b.Icon != null) Win98.DrawIcon(g, b.Icon, cx, fy + 4);
-                TextRenderer.DrawText(g, cap, Font, new Point(cx + iconW, fy + 6), Color.Black);
+                // icon centred under the bar (the name is in the tooltip)
+                if (b.Icon != null) Win98.DrawIcon(g, b.Icon, x0 + (ColumnWidth - 16) / 2, well.Bottom + 4);
             }
         }
 

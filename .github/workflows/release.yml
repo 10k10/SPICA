@@ -28,8 +28,9 @@ jobs:
           dotnet-version: "8.0.x"
 
       # net48 WinForms app: the whole program is a single SPICA.exe
-      - name: Build SPICA.exe
-        run: dotnet build src/SPICA/SPICA.csproj -c Release -o out
+      # the Release build also writes dist/SPICA-<version>.exe
+      - name: Build SPICA
+        run: dotnet build src/SPICA/SPICA.csproj -c Release
 
       - name: Build smoke tests
         run: dotnet build tests/SPICA.Smoke/SPICA.Smoke.csproj -c Release
@@ -42,10 +43,10 @@ jobs:
           body: |
             ## SPICA — Spice Parallel Instancer Circuit Analysis
 
-            Download `SPICA.exe` and run it. No installation needed — it is the whole app.
+            Download `SPICA-<version>.exe` and run it. No installation needed — it is the whole app.
             Settings (`SPICA.ini`) and profiles (`SPICA.profiles`) are written next to the exe.
 
             Requires Windows with .NET Framework 4.8 (built into Windows 10/11) and LTspice installed.
-          files: out/SPICA.exe
+          files: dist/SPICA-*.exe
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

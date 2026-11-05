@@ -94,12 +94,13 @@ namespace Spica.Core
         // ------------------------------------------------------------------ chunk sizing
 
         /// <param name="unallocated">Runs not yet handed to any instance.</param>
-        public int NextChunkSize(int unallocated)
+        /// <param name="maxSeconds">shorter chunks (auto-stop: less overshoot once the answer is known)</param>
+        public int NextChunkSize(int unallocated, double maxSeconds = ChunkSeconds)
         {
             if (unallocated <= 0) return 0;
             if (double.IsNaN(perRunEma) || perRunEma <= 0) return 1;      // measuring x
 
-            int n = Math.Max(1, (int)(ChunkSeconds / perRunEma));
+            int n = Math.Max(1, (int)(Math.Min(ChunkSeconds, maxSeconds) / perRunEma));
             int share = (int)Math.Ceiling(unallocated / (double)Math.Max(1, Current.Instances));
             n = Math.Min(n, share);
             if (!double.IsNaN(rawPerRunEma) && rawPerRunEma > 0)

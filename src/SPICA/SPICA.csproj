@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -9,7 +9,7 @@
     <RootNamespace>Spica</RootNamespace>
     <ApplicationIcon>Resources\spica.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Product>SPICA - Spice Parallel Instancer Circuit Analysis</Product>
     <Copyright>SPICA project</Copyright>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -25,5 +25,12 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\Icons\*.png" />
   </ItemGroup>
+
+  <!-- Release: the distributable carries its version in the file name (dist\SPICA-0.3.0.exe).
+       Settings stay in SPICA.ini / SPICA.profiles, so versions side by side share them. -->
+  <Target Name="CopyVersionedExe" AfterTargets="Build" Condition="'$(Configuration)' == 'Release' and '$(SkipDist)' != 'true'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(MSBuildThisFileDirectory)..\..\dist\SPICA-$(Version).exe" SkipUnchangedFiles="false" />
+    <Message Importance="high" Text="SPICA $(Version) -> dist\SPICA-$(Version).exe" />
+  </Target>
 
 </Project>

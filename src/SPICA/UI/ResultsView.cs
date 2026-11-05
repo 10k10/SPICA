@@ -13,14 +13,14 @@ using Spica.Core;
 namespace Spica.UI
 {
     /// <summary>
-    /// The Results tab: Table | Statistics | Histogram | Scatter & TF | Sensitivity | Temperature | Convergence,
+    /// The Results tab: Table | Statistics | Histogram | Scatter & TF | Sensitivity | Temperature | Convergence | Worst Case,
     /// for the running campaign (refreshed while it runs, unless paused) or any campaign folder opened from disk.
     /// </summary>
     public sealed class ResultsView : Panel
     {
         public event Action SetupChanged;
-        public event Action OpenResultsRequested;
-        public event Action OpenFolderRequested;
+        /// <summary>The result set changed: the Results menu enables its commands from <see cref="CanExport"/> / <see cref="CanOpenFolder"/>.</summary>
+        public event Action DataChanged;
 
         ResultSet rs;
         bool live;
@@ -29,10 +29,8 @@ namespace Spica.UI
 
         readonly Label lblTitle;
         readonly Win98TabControl tabs;
-        Win98Button btnReport, btnCsv, btnFolder;
         Win98CheckBox chkLive;
         Panel topBar;
-        Win98Button[] topButtons;
         string titleText = "";
         readonly List<Win98Chart> charts = new List<Win98Chart>();
 
@@ -89,35 +87,27 @@ namespace Spica.UI
             Dock = DockStyle.Fill;
 
             var top = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = Win98.Face };
-            lblTitle = new Label { AutoSize = false, Location = new Point(2, 8), Height = 16, BackColor = Win98.Face, Text = "No results yet. Run a campaign, or open a campaign folder.", AutoEllipsis = true };
-            var btnOpen = new Win98Button { Text = "&Open Results...", Image = Win98.Icon("open16"), Size = new Size(118, 25) };
-            btnCsv = new Win98Button { Text = "Export &CSV...", Image = Win98.Icon("save16"), Size = new Size(108, 25) };
-            btnReport = new Win98Button { Text = "&Report...", Image = Win98.Icon("doc16"), Size = new Size(96, 25) };
-            btnFolder = new Win98Button { Text = "&Folder", Image = Win98.Icon("folder16"), Size = new Size(84, 25) };
-            btnOpen.Click += (s, e) => OpenResultsRequested?.Invoke();
-            btnCsv.Click += (s, e) => ExportCsv();
-            btnReport.Click += (s, e) => ExportReport();
-            btnFolder.Click += (s, e) => OpenFolderRequested?.Invoke();
+            lblTitle = new Label { AutoSize = false, Location = new Point(2, 8), Height = 16, BackColor = Win98.Face, Text = "No results yet. Run a campaign, or open a campaign folder (Results > Open Results).", AutoEllipsis = true };
             chkLive = new Win98CheckBox { Text = "&Live update", Checked = true, Visible = false, Width = 96 };
             chkLive.CheckedChanged += (s, e) => UpdateTitle();
-            top.Controls.AddRange(new Control[] { lblTitle, chkLive, btnOpen, btnCsv, btnReport, btnFolder });
+            top.Controls.AddRange(new Control[] { lblTitle, chkLive });
             topBar = top;
-            topButtons = new[] { btnFolder, btnReport, btnCsv, btnOpen };
             top.Resize += (s, e) => LayoutTop();
 
             tabs = new Win98TabControl { Dock = DockStyle.Fill };
-            tabs.AddPage(BuildTablePage());
-            tabs.AddPage(BuildStatsPage());
-            tabs.AddPage(BuildHistPage());
-            tabs.AddPage(BuildTfPage());
-            tabs.AddPage(BuildSensPage());
-            tabs.AddPage(BuildTempPage());
-            tabs.AddPage(BuildConvPage());
+            tabs.AddPage(pgBudget = BuildBudgetPage());
+            tabs.AddPage(pgTable = BuildTablePage());
+            tabs.AddPage(pgStats = BuildStatsPage());
+            tabs.AddPage(pgHist = BuildHistPage());
+            tabs.AddPage(pgTf = BuildTfPage());
+            tabs.AddPage(pgSens = BuildSensPage());
+            tabs.AddPage(pgTemp = BuildTempPage());
+            tabs.AddPage(pgConv = BuildConvPage());
+            tabs.AddPage(pgWc = BuildWcPage());
             tabs.SelectedIndexChanged += (s, e) => RefreshPage();
 
             Controls.Add(tabs);
             Controls.Add(top);
-            UpdateButtons();
             filling = false;
         }
 
@@ -152,15 +142,20 @@ namespace Spica.UI
                 columnsKey = key;
                 FillChoices();
             }
-            UpdateButtons();
+            DataChanged?.Invoke();
+            // a worst-case campaign opens on its own page (once, so the user can move away)
+            bool isWc = set != null && set.Setup.WorstCase != WcMethod.Off;
+            if (set != null) ErrorBudget.Register(set, set.Setup.Errors);
+            if (isWc && !shownWc) { shownWc = true; if (!Showing(pgWc)) { Show(pgWc); return; } }
+            if (!isWc) shownWc = false;
             RefreshPage();
         }
 
+        bool shownWc;
+
         void LayoutTop()
         {
-            int x = topBar.Width;
-            foreach (var b in topButtons) { x -= b.Width; b.Location = new Point(x, 2); x -= 4; }
-            x -= 8;
+            int x = topBar.Width - 4;
             if (chkLive.Visible) { x -= chkLive.Width; chkLive.Location = new Point(x, 6); x -= 8; }
             lblTitle.Width = Math.Max(10, x - 4);
         }
@@ -170,11 +165,8 @@ namespace Spica.UI
             lblTitle.Text = titleText + (!live ? "" : chkLive.Checked ? "   (running: updates every second)" : "   (running: paused - tick Live update to resume)");
         }
 
-        void UpdateButtons()
-        {
-            btnCsv.Enabled = btnReport.Enabled = rs != null && rs.Rows.Count > 0;
-            btnFolder.Enabled = rs != null && Directory.Exists(rs.Folder ?? "");
-        }
+        public bool CanExport => rs != null && rs.Rows.Count > 0;
+        public bool CanOpenFolder => rs != null && Directory.Exists(rs.Folder ?? "");
 
         void FillChoices()
         {
@@ -183,6 +175,8 @@ namespace Spica.UI
             var cols = rs?.NumericColumns() ?? new List<string>();
             var groups = rs?.GroupNames() ?? new List<string> { "All runs" };
             Fill(cbHistMeas, meas); Fill(cbConvMeas, meas); Fill(cbTempMeas, meas); Fill(cbSpecMeas, meas); Fill(cbSensMeas, meas);
+            Fill(cbBudY, meas); Fill(cbBudGroup, groups);
+            Fill(cbBudX, new[] { "(none)" }.Concat(meas).ToList());
             Fill(cbStatGroup, groups); Fill(cbHistGroup, groups); Fill(cbTfGroup, groups); Fill(cbConvGroup, groups); Fill(cbSensGroup, groups);
             var axes = rs?.AxisColumns() ?? new List<string>();
             Fill(cbTfX, axes); Fill(cbTfY, axes);
@@ -227,18 +221,27 @@ namespace Spica.UI
 
         void RefreshPage()
         {
-            if (filling || tabs == null) return;
-            switch (tabs.SelectedIndex)
-            {
-                case 0: RefreshTable(); break;
-                case 1: RefreshStats(); break;
-                case 2: RefreshHist(); break;
-                case 3: RefreshTf(); break;
-                case 4: RefreshSens(); break;
-                case 5: RefreshTemp(); break;
-                case 6: RefreshConv(); break;
-            }
+            if (filling || tabs == null || tabs.SelectedIndex < 0) return;
+            var p = tabs.Pages[tabs.SelectedIndex];
+            if (p == pgBudget) RefreshBudget();
+            else if (p == pgTable) RefreshTable();
+            else if (p == pgStats) RefreshStats();
+            else if (p == pgHist) RefreshHist();
+            else if (p == pgTf) RefreshTf();
+            else if (p == pgSens) RefreshSens();
+            else if (p == pgTemp) RefreshTemp();
+            else if (p == pgConv) RefreshConv();
+            else if (p == pgWc) RefreshWc();
         }
+
+        Win98TabPage pgBudget, pgTable, pgStats, pgHist, pgTf, pgSens, pgTemp, pgConv, pgWc;
+
+        void Show(Win98TabPage p)
+        {
+            for (int i = 0; i < tabs.Pages.Count; i++) if (tabs.Pages[i] == p) { tabs.SelectedIndex = i; return; }
+        }
+
+        bool Showing(Win98TabPage p) => tabs.SelectedIndex >= 0 && tabs.Pages[tabs.SelectedIndex] == p;
 
         void NotifySetup()
         {
@@ -414,6 +417,402 @@ namespace Spica.UI
         }
 
         // =====================================================================================
+        //  Error budget
+        // =====================================================================================
+
+        Win98ListView lvBud;
+        TextBox txtBud, txtBudSigma, txtBudName, txtBudTf, txtBudBudget, txtBudFs;
+        ComboBox cbBudGroup, cbBudChart, cbBudY, cbBudX, cbBudUnit;
+        Win98CheckBox chkBudPess, chkBudRefer;
+        Win98Chart chBud;
+        readonly List<ErrorResult> budRows = new List<ErrorResult>();
+
+        Win98TabPage BuildBudgetPage()
+        {
+            var p = new Win98TabPage("Error Budget", Win98.Icon("results16"));
+            var bar = Bar(30);
+            txtBudSigma = Field(84, 2, 36);
+            txtBudSigma.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyBudgetSigma(); e.SuppressKeyPress = true; } };
+            txtBudSigma.Leave += (s, e) => ApplyBudgetSigma();
+            chkBudPess = new Win98CheckBox { Text = "Pessimistic sigma (95 % upper bound)", Location = new Point(132, 4), Width = 230 };
+            chkBudPess.CheckedChanged += (s, e) => { if (filling || rs == null) return; rs.Setup.PessimisticSigma = chkBudPess.Checked; rs.Setup.Dirty = true; NotifySetup(); RefreshBudget(); };
+            cbBudGroup = Combo(414, 2, 140);
+            bar.Controls.AddRange(new Control[] { Lbl("Design sigma:", 0, 2), txtBudSigma, chkBudPess, Lbl("Group:", 370, 2), cbBudGroup,
+                Hint("PASS: mean +/- k sigma inside the budget and the error is bell-shaped.", 566, 2) });
+
+            // left: the definition of the selected error
+            var grp = new Win98GroupBox { Text = "Error definition", Dock = DockStyle.Left, Width = 270 };
+            txtBudName = Field(84, 20, 174);
+            cbBudY = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(84, 48), Width = 174, Font = Win98.Font };
+            cbBudX = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Location = new Point(84, 76), Width = 174, Font = Win98.Font };
+            txtBudTf = Field(84, 104, 174);
+            chkBudRefer = new Win98CheckBox { Text = "Refer to the input (divide by the TF gain)", Location = new Point(10, 130), Width = 250, Checked = true };
+            txtBudBudget = Field(84, 156, 70);
+            cbBudUnit = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(158, 156), Width = 100, Font = Win98.Font };
+            cbBudUnit.Items.AddRange(new object[] { "absolute", "% of reading", "% of full scale" });
+            cbBudUnit.SelectedIndex = 0;
+            txtBudFs = Field(84, 184, 70);
+            var btnAdd = new Win98Button { Text = "&Add", Location = new Point(10, 214), Size = new Size(76, 24) };
+            var btnUpd = new Win98Button { Text = "&Update", Location = new Point(96, 214), Size = new Size(76, 24) };
+            var btnDel = new Win98Button { Text = "&Delete", Location = new Point(182, 214), Size = new Size(76, 24) };
+            btnAdd.Click += (s, e) => SaveBudgetItem(true);
+            btnUpd.Click += (s, e) => SaveBudgetItem(false);
+            btnDel.Click += (s, e) => DeleteBudgetItem();
+            var hint = new Label
+            {
+                Location = new Point(10, 246), Size = new Size(250, 150), BackColor = Win98.Face, ForeColor = Win98.Shadow,
+                Text = "Error already computed by a .meas: choose it as Output and leave the TF empty.\n\n" +
+                       "Error computed here: Output = the circuit output, Input = a measurement (e.g. vin, when the input " +
+                       "sweeps the range) or a number (e.g. 1), Ideal TF in x (e.g. 2*x, or 2*x + 10m). " +
+                       "Add several errors with different TFs to compare them.",
+            };
+            var tip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
+            tip.SetToolTip(txtBudSigma, "The error must stay inside the budget at mean +/- this many sigma (6 = very conservative, 3 = 99.73 %).");
+            tip.SetToolTip(chkBudPess, "Sigma from n runs is itself uncertain. Ticked: use its 95 % upper bound (about +12 % at 200 runs, +4 % at 2000).");
+            tip.SetToolTip(txtBudTf, "Ideal transfer function of the input x (T = temperature in °C). Empty: Output already is the error.");
+            tip.SetToolTip(cbBudX, "A measurement that holds the input (it may vary from run to run over the input range), or a fixed number.");
+            grp.Controls.AddRange(new Control[] { Lbl("Name:", 10, 20), txtBudName, Lbl("Output (Y):", 10, 48), cbBudY, Lbl("Input (x):", 10, 76), cbBudX,
+                Lbl("Ideal TF y =", 10, 104), txtBudTf, chkBudRefer, Lbl("Budget ±", 10, 156), txtBudBudget, cbBudUnit, Lbl("Full scale:", 10, 184), txtBudFs,
+                btnAdd, btnUpd, btnDel, hint });
+
+            lvBud = new Win98ListView();
+            foreach (var (t, w) in new[] { ("Error", 130), ("Verdict", 58), ("Margin", 58), ("Mean ± 6 sigma", 150), ("Budget ±", 64), ("Mean", 70), ("Sigma", 70),
+                                           ("Normal p", 62), ("Worst condition", 160), ("Main cause", 140), ("n", 46), ("Definition", 230) })
+                lvBud.Columns.Add(t, w, t == "Error" || t == "Definition" || t == "Verdict" || t == "Main cause" || t == "Worst condition" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
+            lvBud.CellColor = (i, c) =>
+            {
+                if (i >= budRows.Count) return null;
+                var r = budRows[i];
+                if (c == 1) return r.Verdict == "PASS" ? Win98Chart.Green : r.Verdict == "FAIL" ? Win98Chart.Red : r.Verdict == "CHECK" ? Win98Chart.Olive : (Color?)null;
+                if (c == 2 && r.Margin < 0) return Win98Chart.Red;
+                if (c == 7 && !double.IsNaN(r.AdP)) return r.Normal ? Win98Chart.Green : Win98Chart.Maroon;
+                return null;
+            };
+            lvBud.HeaderTip = c => BudTips[c];
+            lvBud.SelectedIndexChanged += (s, e) => ShowBudgetDetail();
+
+            chBud = Track(new Win98Chart());
+            cbBudChart = Combo(0, 0, 150);
+            cbBudChart.Items.AddRange(new object[] { "Histogram", "Error vs input" });
+            cbBudChart.SelectedIndex = 0;
+            txtBud = Memo();
+
+            var lower = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            var chartPanel = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            var chartBar = Bar(26);
+            chartBar.Controls.Add(cbBudChart);
+            chartPanel.Controls.Add(ChartWell(chBud));
+            chartPanel.Controls.Add(chartBar);
+            var memo = new Win98Well(txtBud) { Dock = DockStyle.Right, Width = 520 };
+            lower.Controls.Add(chartPanel);
+            lower.Controls.Add(Gap(DockStyle.Right));
+            lower.Controls.Add(memo);
+            lower.Resize += (s, e) => memo.Width = Math.Max(420, lower.Width * 5 / 8);
+
+            var right = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            var listWell = new Win98Well(lvBud) { Dock = DockStyle.Top, Height = 150 };
+            right.Controls.Add(lower);
+            right.Controls.Add(Gap(DockStyle.Top));
+            right.Controls.Add(listWell);
+
+            p.Controls.Add(right);
+            p.Controls.Add(Gap(DockStyle.Left));
+            p.Controls.Add(grp);
+            p.Controls.Add(Gap(DockStyle.Top));
+            p.Controls.Add(bar);
+            return p;
+        }
+
+        static readonly string[] BudTips =
+        {
+            "Your name for this error.",
+            "PASS: mean +/- k sigma inside the budget in every condition, and the error is bell-shaped (or has shorter tails, so the bound is safe).\n" +
+            "FAIL: outside the budget at k sigma, or simulated units already outside.\n" +
+            "CHECK: the k-sigma extrapolation cannot decide (tails longer than normal, or flat-shaped and over on paper): run a worst case or many more runs.",
+            "How much of the budget is left at k sigma, in the worst condition. Negative = over the budget.",
+            "The extrapolated error range of a production unit: mean +/- k sigma, in the worst condition.",
+            "The allowed error, +/- this value.",
+            "Average error in the worst condition: the same in every unit, so a better TF or a calibration can remove it.",
+            "Unit-to-unit spread of the error in the worst condition (its 95 % upper bound when Pessimistic sigma is ticked).",
+            "Is the error bell-shaped (Anderson-Darling)? Green: the k-sigma extrapolation is valid. Dark red: not exactly; see the text below for whether its tails are safe.",
+            "Each error is judged per temperature and per band of the input range (units in the same condition differ only by their tolerances).\nThis is the condition with the least margin.",
+            "The tolerance that explains most of the spread in the worst condition. Tighten it first.",
+            "Runs with data (all conditions).",
+            "How the error is obtained: a .meas that already is the error, or (output - ideal TF(input)), referred to the input.",
+        };
+
+        void ApplyBudgetSigma()
+        {
+            if (filling || rs == null) return;
+            var k = ParseField(txtBudSigma);
+            if (!(k > 0) || k > 20) { txtBudSigma.Text = rs.Setup.DesignSigma.ToString("0.##", Inv); return; }
+            if (k == rs.Setup.DesignSigma) return;
+            rs.Setup.DesignSigma = k;
+            rs.Setup.Dirty = true;
+            NotifySetup();
+            RefreshBudget();
+        }
+
+        void RefreshBudget()
+        {
+            if (rs == null) { lvBud.Items.Clear(); budRows.Clear(); chBud.Clear(); txtBud.Text = ""; return; }
+            filling = true;
+            var st = rs.Setup;
+            txtBudSigma.Text = st.DesignSigma.ToString("0.##", Inv);
+            chkBudPess.Checked = st.PessimisticSigma;
+            filling = false;
+            string k = st.DesignSigma.ToString("0.#", Inv);
+            lvBud.Columns[3].Text = $"Mean ± {k} sigma";
+            int keep = lvBud.SelectedIndices.Count > 0 ? lvBud.SelectedIndices[0] : 0;
+            int g = Math.Max(0, cbBudGroup.SelectedIndex);
+            budRows.Clear();
+            lvBud.BeginUpdate();
+            lvBud.Items.Clear();
+            foreach (var it in st.Errors)
+            {
+                var r = ErrorBudget.Compute(rs, it, g, st.DesignSigma, st.PessimisticSigma);
+                budRows.Add(r);
+                string u(double v) => ErrorBudget.Fmt(v, it);
+                var top = r.Sens?.Error == null ? r.Sens?.Items.FirstOrDefault(x => !double.IsNaN(x.Share)) : null;
+                var li = new ListViewItem(it.Name);
+                string[] cols = r.Error != null ? new[] { "ERROR", "", r.Error, "", "", "", "", "", "", "", it.Definition() } : new[]
+                {
+                    r.Verdict, r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "", $"{u(r.Lo)} .. {u(r.Hi)}", r.HasBudget ? u(it.Budget) : "",
+                    u(r.D.Mean), u(r.Sigma), MeasStats.P(r.AdP), r.Slices.Count > 1 ? r.Worst.Label : "",
+                    top == null ? "" : $"{Short(top.Name)} ({100 * top.Share:0} %)", r.N.ToString(Inv), it.Definition(),
+                };
+                foreach (var c in cols) li.SubItems.Add(c);
+                lvBud.Items.Add(li);
+            }
+            lvBud.EndUpdate();
+            if (lvBud.Items.Count > 0) lvBud.Items[Math.Min(keep, lvBud.Items.Count - 1)].Selected = true;
+            ShowBudgetDetail();
+        }
+
+        void ShowBudgetDetail()
+        {
+            int i = lvBud.SelectedIndices.Count > 0 ? lvBud.SelectedIndices[0] : -1;
+            if (rs == null) return;
+            if (i < 0 || i >= budRows.Count)
+            {
+                chBud.Clear();
+                txtBud.Text = rs.Setup.Errors.Count > 0 ? "Select an error." :
+                    ("No error defined yet.\n\n" +
+                     "Define the errors the design must keep inside their budget, on the left:\n" +
+                     "  - a .meas that already is the error (e.g. err_in): Output = err_in, TF empty;\n" +
+                     "  - or the output against an ideal TF of the input: Output = vout, Input = vin (or 1), TF = 2*x.\n" +
+                     "    The error is referred to the input: (vout - TF(vin)) / gain.\n\n" +
+                     $"Each error passes when mean +/- {rs.Setup.DesignSigma.ToString("0.#", Inv)} sigma stays inside +/- its budget and the error is bell-shaped.").Replace("\n", "\r\n");
+                return;
+            }
+            var r = budRows[i];
+            LoadBudgetFields(r.Item);
+            txtBud.Text = r.Summary().Replace("\r\n", "\n").Replace("\n", "\r\n");
+            BuildBudgetChart(chBud, r, cbBudChart.SelectedIndex);
+        }
+
+        void BuildBudgetChart(Win98Chart ch, ErrorResult r, int view)
+        {
+            ch.Clear();
+            ch.Title = r.Item.Name + (r.Error != null ? "" : $"  -  {r.Verdict}");
+            if (r.Error != null || r.D.N < 3) { ch.EmptyText = r.Error ?? "No data."; return; }
+            string unit = r.Item.Suffix().Trim();
+            double k = r.K;
+            if (view == 1 && r.InputVaries)
+            {
+                ch.YFromZero = false;
+                ch.XLabel = r.Item.X; ch.YLabel = "error" + (unit.Length > 0 ? " (%)" : "");
+                ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = r.X, Y = r.E, Color = Win98Chart.Navy, Size = 2, Label = "runs" });
+                // the +/- k sigma band of every input band, at the temperature of the worst condition
+                bool first = true;
+                foreach (var s in r.Slices.Where(s => s.Corner == r.Worst.Corner && !double.IsNaN(s.XLo)))
+                {
+                    foreach (var v in new[] { s.Lo, s.Hi })
+                    {
+                        ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = new[] { s.XLo, s.XHi }, Y = new[] { v, v }, Color = Win98Chart.Purple, Size = 2,
+                                                 Label = $"mean +/- {k:0.#} sigma per band" + (r.Worst.Corner >= 0 && rs != null ? $" ({ResultSet.TempLabel(rs.Corners[r.Worst.Corner])})" : ""), InLegend = first });
+                        first = false;
+                    }
+                }
+                if (first) ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = new[] { r.Lo, r.Hi }, Color = Win98Chart.Purple, Dashed = true, Label = $"mean +/- {k:0.#} sigma" });
+                if (r.HasBudget)
+                {
+                    double pad = 1.12 * r.Item.Budget;
+                    ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = new[] { -pad, pad }, Color = Color.White, InLegend = false });
+                    ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = new[] { -r.Item.Budget, r.Item.Budget }, Color = Win98Chart.Red, Size = 2, Label = "budget" });
+                }
+                return;
+            }
+            if (view == 1) { ch.EmptyText = "The input does not vary between runs: see the histogram."; return; }
+            ch.YFromZero = true;
+            if (r.Slices.Count > 1) ch.Title += $"  -  worst condition: {r.Worst.Label}";
+            ch.XLabel = "error" + (unit.Length > 0 ? " (%)" : ""); ch.YLabel = "runs";
+            var edges = Stats.HistogramEdges(r.D);
+            var counts = Stats.Histogram(r.D.Sorted, edges);
+            ch.Add(new ChartSeries { Kind = SeriesKind.Bars, Edges = edges, Y = counts.Select(c => (double)c).ToArray(), X = edges, Color = Win98Chart.Navy, Label = "runs", InLegend = false });
+            if (r.D.Std > 0)
+            {
+                double w = edges[1] - edges[0];
+                double lo = Math.Min(r.Lo, edges[0]), hi = Math.Max(r.Hi, edges[edges.Length - 1]);
+                if (r.HasBudget) { lo = Math.Min(lo, -r.Item.Budget); hi = Math.Max(hi, r.Item.Budget); }
+                var xs = Enumerable.Range(0, 201).Select(j => lo + (hi - lo) * j / 200).ToArray();
+                ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = xs, Y = xs.Select(x => r.D.N * w * Stats.NormalPdf((x - r.D.Mean) / r.D.Std) / r.D.Std).ToArray(), Color = Win98Chart.Teal, Size = 2, Label = "normal fit" });
+            }
+            ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { r.Lo, r.Hi }, Color = Win98Chart.Purple, Dashed = true, Label = $"mean +/- {k:0.#} sigma" });
+            if (r.HasBudget)
+            {
+                // white lines just outside, so the budget lines do not sit on the frame
+                double pad = 1.12 * Math.Max(r.Item.Budget, Math.Max(Math.Abs(r.Lo), Math.Abs(r.Hi)));
+                ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { -pad, pad }, Color = Color.White, InLegend = false });
+                ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { -r.Item.Budget, r.Item.Budget }, Color = Win98Chart.Red, Size = 2, Label = "budget" });
+            }
+        }
+
+        void LoadBudgetFields(ErrorItem it)
+        {
+            txtBudName.Text = it.Name;
+            Select(cbBudY, it.Y);
+            cbBudX.Text = it.X;
+            txtBudTf.Text = it.Tf;
+            chkBudRefer.Checked = it.ReferToInput;
+            txtBudBudget.Text = double.IsNaN(it.Budget) ? "" : it.Budget.ToString("G9", Inv);
+            cbBudUnit.SelectedIndex = (int)it.Unit;
+            txtBudFs.Text = double.IsNaN(it.FullScale) ? "" : it.FullScale.ToString("G9", Inv);
+        }
+
+        void SaveBudgetItem(bool add)
+        {
+            if (rs == null) return;
+            var it = new ErrorItem
+            {
+                Name = txtBudName.Text.Trim(), Y = cbBudY.SelectedItem as string ?? "", X = cbBudX.Text.Trim() == "(none)" ? "" : cbBudX.Text.Trim(),
+                Tf = txtBudTf.Text.Trim(), ReferToInput = chkBudRefer.Checked, Budget = ParseField(txtBudBudget),
+                Unit = (BudgetUnit)Math.Max(0, cbBudUnit.SelectedIndex), FullScale = ParseField(txtBudFs),
+            };
+            var list = rs.Setup.Errors;
+            int sel = lvBud.SelectedIndices.Count > 0 ? lvBud.SelectedIndices[0] : -1;
+            if (add) for (int n = 2; list.Any(e => e.Name.Equals(it.Name, StringComparison.OrdinalIgnoreCase)); n++) it.Name = $"{txtBudName.Text.Trim()} {n}";
+            string bad = ErrorBudget.Check(rs, it);
+            if (bad != null) { Win98MessageBox.Show(FindForm(), bad, "SPICA", MessageBoxButtons.OK, Win98Icon.Warning); return; }
+            if (add || sel < 0 || sel >= list.Count) { list.Add(it); sel = list.Count - 1; }
+            else list[sel] = it;
+            rs.Setup.Dirty = true;
+            ErrorBudget.Register(rs, list);
+            NotifySetup();
+            RefreshBudget();
+            if (sel < lvBud.Items.Count) lvBud.Items[sel].Selected = true;
+        }
+
+        void DeleteBudgetItem()
+        {
+            if (rs == null || lvBud.SelectedIndices.Count == 0) return;
+            int sel = lvBud.SelectedIndices[0];
+            if (sel >= rs.Setup.Errors.Count) return;
+            rs.Setup.Errors.RemoveAt(sel);
+            rs.Setup.Dirty = true;
+            ErrorBudget.Register(rs, rs.Setup.Errors);
+            NotifySetup();
+            RefreshBudget();
+        }
+
+        // =====================================================================================
+        //  Worst case
+        // =====================================================================================
+
+        Win98ListView lvWc;
+        TextBox txtWc;
+        WcReport wcRep;
+
+        Win98TabPage BuildWcPage()
+        {
+            var p = new Win98TabPage("Worst Case", Win98.Icon("results16"));
+            var bar = Bar(24);
+            bar.Controls.Add(Hint("Every tolerance at an edge of its range: the guaranteed limits, not a statistic. Select a row for its causes below.", 0, 2));
+            lvWc = new Win98ListView();
+            foreach (var (t, w) in new[] { ("Measurement", 120), ("Verdict", 80), ("Nominal", 150), ("Worst low", 90), ("Worst high", 90), ("LSL", 70), ("USL", 70),
+                                           ("Low margin", 90), ("High margin", 90), ("Main cause", 200) })
+                lvWc.Columns.Add(t, w, t == "Measurement" || t == "Verdict" || t == "Main cause" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
+            lvWc.CellColor = (i, c) =>
+            {
+                if (wcRep == null || i >= wcRep.Items.Count) return null;
+                var w = wcRep.Items[i];
+                if (c == 1) return w.Pass == true ? Win98Chart.Green : w.Pass == false ? Win98Chart.Red : (Color?)null;
+                if (c == 7 && w.LowMargin < 0 || c == 8 && w.HighMargin < 0) return Win98Chart.Red;
+                return null;
+            };
+            lvWc.HeaderTip = c => WcTips[c];
+            lvWc.SelectedIndexChanged += (s, e) => ShowWcDetail();
+            txtWc = Memo();
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 280, BackColor = Win98.Face };
+            bottom.Controls.Add(new Win98Well(txtWc) { Dock = DockStyle.Fill });
+            p.Controls.Add(new Win98Well(lvWc) { Dock = DockStyle.Fill });
+            p.Controls.Add(Gap(DockStyle.Top));
+            p.Controls.Add(bar);
+            p.Controls.Add(Gap(DockStyle.Bottom));
+            p.Controls.Add(bottom);
+            bottom.SendToBack();
+            return p;
+        }
+
+        static readonly string[] WcTips =
+        {
+            "The .meas result.",
+            "Worst case against the spec limits: green = even the most extreme unit passes, red = some combination of tolerances fails.\nSet limits on the Statistics tab.",
+            "The nominal unit: every tolerance at its centre (a range when it changes with temperature).",
+            "The lowest value of all the worst-case runs (and temperatures).",
+            "The highest value of all the worst-case runs (and temperatures).",
+            "Lower spec limit.",
+            "Upper spec limit.",
+            "Worst low minus LSL: how much room is left below. Negative = fails.",
+            "USL minus worst high: how much room is left above. Negative = fails.",
+            "The tolerance that moves this measurement most, with its share of the total swing. Tighten it first.",
+        };
+
+        void RefreshWc()
+        {
+            int keep = lvWc.SelectedIndices.Count > 0 ? lvWc.SelectedIndices[0] : 0;
+            wcRep = rs == null ? null : WcReport.Of(rs);
+            lvWc.BeginUpdate();
+            lvWc.Items.Clear();
+            if (wcRep != null)
+                foreach (var w in wcRep.Items)
+                {
+                    var it = new ListViewItem(w.Meas);
+                    var top = w.Top.FirstOrDefault();
+                    string[] cols =
+                    {
+                        w.Pass == true ? "PASS" : w.Pass == false ? "FAIL" : "(no limits)",
+                        double.IsNaN(w.NomLo) ? "" : w.NomLo == w.NomHi ? F(w.NomLo) : $"{F(w.NomLo)} .. {F(w.NomHi)}",
+                        F(w.Min), F(w.Max),
+                        w.Spec != null ? F(w.Spec.Lsl) : "", w.Spec != null ? F(w.Spec.Usl) : "",
+                        F(w.LowMargin), F(w.HighMargin),
+                        top == null ? "" : $"{Short(top.Param)} ({top.Share * 100:0} %)",
+                    };
+                    foreach (var x in cols) it.SubItems.Add(x);
+                    lvWc.Items.Add(it);
+                }
+            lvWc.EndUpdate();
+            if (lvWc.Items.Count > 0) lvWc.Items[Math.Min(keep, lvWc.Items.Count - 1)].Selected = true;
+            ShowWcDetail();
+        }
+
+        static string Short(string p) { int i = p.LastIndexOf(" ["); return i > 0 ? p.Substring(0, i) : p; }
+
+        void ShowWcDetail()
+        {
+            if (rs == null) { txtWc.Text = ""; return; }
+            if (wcRep == null)
+            {
+                txtWc.Text = ("This campaign is a Monte Carlo (random units), not a worst case.\n\n" +
+                              "Worst case sets every tolerance to an edge of its range and reports the guaranteed limits.\n" +
+                              "To run one: Setup > Analysis > Worst case, then Start.").Replace("\n", "\r\n");
+                return;
+            }
+            if (lvWc.SelectedIndices.Count == 0 || lvWc.SelectedIndices[0] >= wcRep.Items.Count) { txtWc.Text = "Select a measurement."; return; }
+            txtWc.Text = wcRep.Summary(wcRep.Items[lvWc.SelectedIndices[0]], rs).Replace("\r\n", "\n").Replace("\n", "\r\n");
+        }
+
+        // =====================================================================================
         //  Statistics
         // =====================================================================================
 
@@ -440,6 +839,8 @@ namespace Spica.UI
                 return null;
             };
             lvStats.SelectedIndexChanged += (s, e) => ShowStatDetail();
+            lvStats.HeaderTip = c => Glossary.Column(lvStats.Columns[c].Text);
+            lvStats.CellTip = (i, c) => i < statRows.Count ? Glossary.StatCell(statRows[i], c) : null;
             var listWell = new Win98Well(lvStats) { Dock = DockStyle.Fill };
 
             // bottom: spec editor + narrative
@@ -513,7 +914,8 @@ namespace Spica.UI
         {
             if (lvStats.SelectedIndices.Count == 0 || lvStats.SelectedIndices[0] >= statRows.Count) { txtStat.Text = rs == null ? "" : "Select a measurement."; return; }
             var s = statRows[lvStats.SelectedIndices[0]];
-            txtStat.Text = s.Narrative().Replace("\n", "\r\n").Replace("\r\r\n", "\r\n");
+            string text = s.Summary() + "\n" + new string('-', 72) + "\nStatistical details\n\n" + s.Narrative();
+            txtStat.Text = text.Replace("\n", "\r\n").Replace("\r\r\n", "\r\n");
             if (!filling) { Select(cbSpecMeas, s.Meas); }
         }
 
@@ -787,6 +1189,7 @@ namespace Spica.UI
             chSens = new Win98Chart();
             txtSens = Memo();
             lvSens = new Win98ListView();
+            lvSens.HeaderTip = c => Glossary.Column(lvSens.Columns[c].Text);
             foreach (var (t, w) in new[] { ("#", 34), ("Input", 220), ("Share of variance", 110), ("Signed effect (SRC)", 116), ("Correlation r", 90), ("Slope (per unit)", 100), ("Shift at limit", 100), ("Limit", 150) })
                 lvSens.Columns.Add(t, w, t == "Input" || t == "Limit" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
             lvSens.DoubleClick += (s, e) =>
@@ -818,7 +1221,7 @@ namespace Spica.UI
             cbTfGroup.SelectedIndex = Math.Min(Math.Max(0, cbSensGroup.SelectedIndex), cbTfGroup.Items.Count - 1);
             filling = false;
             chTf.ResetView(); chTfErr.ResetView();
-            tabs.SelectedIndex = 3;
+            Show(pgTf);
             RefreshTf();
         }
 
@@ -879,6 +1282,7 @@ namespace Spica.UI
             chTemp = new Win98Chart();
             txtTemp = Memo();
             lvTemp = new Win98ListView();
+            lvTemp.HeaderTip = c => Glossary.Column(lvTemp.Columns[c].Text);
             var right = new Win98Well(txtTemp) { Dock = DockStyle.Right, Width = 420 };
             var listWell = new Win98Well(lvTemp) { Dock = DockStyle.Bottom, Height = 150 };
             var body = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
@@ -1167,7 +1571,7 @@ namespace Spica.UI
             }
         }
 
-        void ExportReport()
+        public void ExportReport()
         {
             if (rs == null) return;
             using (var d = new SaveFileDialog { Title = "Save Analysis Report", Filter = "HTML report (*.html)|*.html", FileName = "SPICA_report.html", InitialDirectory = rs.Folder ?? "", AutoUpgradeEnabled = false })
@@ -1244,10 +1648,57 @@ namespace Spica.UI
             Row("Sampling", rs.Paired ? $"SPICA paired generator, seed {rs.Seed}" : "LTspice mc()");
             sb.Append("</table>");
 
-            sb.Append("<nav><b>Contents</b><ol><li><a href=\"#summary\">Summary</a></li>");
+            bool hasBudget = st.Errors.Count > 0;
+            sb.Append("<nav><b>Contents</b><ol>");
+            if (hasBudget) sb.Append("<li><a href=\"#budget\">Error budget</a></li>");
+            sb.Append("<li><a href=\"#summary\">Summary</a></li>");
             for (int i = 0; i < rs.Meas.Count; i++) sb.Append($"<li><a href=\"#m{i}\">{H(rs.Meas[i])}</a></li>");
             if (hasTf) sb.Append("<li><a href=\"#tf\">Transfer function</a></li>");
             sb.Append("</ol></nav>");
+
+            // ---------------------------------------------------------------- error budget
+            if (hasBudget)
+            {
+                ErrorBudget.Register(rs, st.Errors);
+                string k = st.DesignSigma.ToString("0.#", Inv);
+                var res = st.Errors.Select(e => ErrorBudget.Compute(rs, e, 0, st.DesignSigma, st.PessimisticSigma)).ToList();
+                int pass = res.Count(r => r.Verdict == "PASS"), fail = res.Count(r => r.Verdict == "FAIL"), check = res.Count(r => r.Verdict == "CHECK");
+                sb.Append("<h2 id=\"budget\">Error budget</h2>");
+                sb.Append("<div class=\"cards\">").Append(Card("Criterion", $"mean ± {k} σ inside the budget")).Append(Card("Pass", pass.ToString(Inv)))
+                  .Append(Card("Fail", fail.ToString(Inv))).Append(Card("Check (not normal)", check.ToString(Inv))).Append("</div>");
+                sb.Append("<div class=\"wide\"><table><tr>");
+                foreach (var h in new[] { "Error", "Verdict", "Margin", $"Mean ± {k}σ", "Budget ±", "Mean", "Sigma", "Normality p", "Worst condition", "n", "Definition" })
+                    sb.Append($"<th>{H(h)}</th>");
+                sb.Append("</tr>");
+                foreach (var r in res)
+                {
+                    string u(double v) => ErrorBudget.Fmt(v, r.Item);
+                    string color = r.Verdict == "PASS" ? "#007a00" : r.Verdict == "FAIL" ? "#c00000" : r.Verdict == "CHECK" ? "#8a6d00" : "inherit";
+                    var cells = r.Error != null ? new[] { r.Item.Name, "ERROR", "", r.Error, "", "", "", "", "", "", r.Item.Definition() } : new[]
+                    {
+                        r.Item.Name, r.Verdict, r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "", $"{u(r.Lo)} .. {u(r.Hi)}", r.HasBudget ? u(r.Item.Budget) : "",
+                        u(r.D.Mean), u(r.Sigma), MeasStats.P(r.AdP), r.Slices.Count > 1 ? r.Worst.Label : "", r.N.ToString(Inv), r.Item.Definition(),
+                    };
+                    sb.Append("<tr>").Append(string.Concat(cells.Select((c, j) => j == 1 ? $"<td style=\"color:{color};font-weight:600;text-align:left\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
+                }
+                sb.Append("</table></div>");
+                sb.Append($"<p class=\"note\">PASS: mean ± {k} σ inside ± the budget and the error bell-shaped (Anderson-Darling p ≥ {MeasStats.NormalAlpha.ToString("0.###", Inv)}). " +
+                          $"CHECK: inside on paper, but not bell-shaped, so the {k} σ extrapolation is not valid. Sigma: " +
+                          (st.PessimisticSigma ? "95 % upper confidence bound." : "sample standard deviation.") +
+                          " Each error is judged per temperature and input band; the figures are those of the worst condition.</p>");
+                using (var cb = new Win98Chart())
+                    foreach (var r in res)
+                    {
+                        sb.Append($"<h3>{H(r.Item.Name)}</h3>");
+                        if (r.Error == null)
+                        {
+                            BuildBudgetChart(cb, r, 0);
+                            sb.Append(Fig(cb, $"Error of {r.Item.Name} over {r.D.N} runs, with mean ± {k} σ and the budget.", 760, 280));
+                            if (r.InputVaries) { BuildBudgetChart(cb, r, 1); sb.Append(Fig(cb, "Error across the input range.", 760, 240)); }
+                        }
+                        sb.Append(Pre(r.Summary()));
+                    }
+            }
 
             // ---------------------------------------------------------------- summary tables
             sb.Append("<h2 id=\"summary\">Summary</h2>");

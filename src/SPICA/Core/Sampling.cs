@@ -33,6 +33,13 @@ namespace Spica.Core
         public readonly List<string> Warnings = new List<string>();
         public readonly List<string> Inlined = new List<string>();   // .func names expanded at their call sites
 
+        /// <summary>Fixed site values per run (worst case: row r-1 is run r); null = random from the seed.</summary>
+        public List<double[]> Design;
+
+        /// <summary>The value of a site for a run: from the fixed design when there is one, else random.</summary>
+        public double ValueOf(uint seed, McSite site, int run) =>
+            Design != null ? (run >= 1 && run <= Design.Count ? Design[run - 1][site.Index - 1] : 0) : Value(seed, site, run);
+
         static readonly string[] RandomFuncs = { "mc", "flat", "gauss" };
 
         sealed class FuncDef
@@ -299,7 +306,7 @@ namespace Spica.Core
         public void AppendParams(StringBuilder sb, uint seed, int first, int last)
         {
             foreach (var s in Sites)
-                AppendTable(sb, s.Param, first, last, r => Value(seed, s, r));
+                AppendTable(sb, s.Param, first, last, r => ValueOf(seed, s, r));
         }
 
         public static void AppendTable(StringBuilder sb, string param, int first, int last, Func<int, double> value)

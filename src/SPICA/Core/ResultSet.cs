@@ -108,8 +108,15 @@ namespace Spica.Core
         public IEnumerable<Row> InGroup(int group) =>
             group <= 0 || Mode != TempMode.Corners ? Rows : Rows.Where(r => r.Corner == group - 1);
 
+        /// <summary>Computed columns (e.g. the error items of the error budget), by name.</summary>
+        readonly Dictionary<string, Func<Row, double>> derived = new Dictionary<string, Func<Row, double>>(StringComparer.OrdinalIgnoreCase);
+        public void AddDerived(string name, Func<Row, double> f) => derived[name] = f;
+        public void ClearDerived() => derived.Clear();
+
         public double Get(Row r, string column)
         {
+            if (column == null) return double.NaN;
+            if (derived.TryGetValue(column, out var df)) return df(r);
             if (column == TempColumn) return r.Temp;
             if (column == RunColumn) return r.Run;
             if (paramIndex.TryGetValue(column, out int pi))
@@ -171,9 +178,10 @@ namespace Spica.Core
                 // the paired generator is a pure function of (seed, site, run): recompute instead of reading samples.csv
                 foreach (var site in opt.Mc.Sites) rs.AddParam(McPlan.ColumnName(site));
                 var sites = opt.Mc.Sites.ToArray();
+                var plan = opt.Mc;
                 uint seed = opt.Seed;
                 int runs = opt.Runs;
-                rs.paramGen = run => run > runs ? null : sites.Select(site => McPlan.Value(seed, site, run)).ToArray();
+                rs.paramGen = run => run > runs ? null : sites.Select(site => plan.ValueOf(seed, site, run)).ToArray();
             }
             if (opt.Corners != null && opt.Corners.Count > 0) { rs.Mode = TempMode.Corners; rs.Corners.AddRange(opt.Corners); }
             else if (opt.RandomTemp) rs.Mode = TempMode.Random;

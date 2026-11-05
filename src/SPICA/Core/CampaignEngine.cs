@@ -30,6 +30,9 @@ namespace Spica.Core
         public SpicaProject Setup;            // copied into the campaign folder as campaign.spica
         public List<RunResult> Resume;        // runs already done in OutputDir (resuming an interrupted campaign)
         public double PriorSeconds;           // wall time of the earlier sessions of a resumed campaign
+        public StopRule Stop;                 // early stop when the answer is known (null = run all)
+        public string Stage;                  // logged at start instead of the resume line (e.g. worst-case verification)
+        public int WcStage;                   // worst case by sensitivity: 1 = screening, 2 = verification (0 = not)
 
         public int CornerCount => Corners != null && Corners.Count > 0 ? Corners.Count : 1;
         public int Jobs => Runs * CornerCount;
@@ -77,7 +80,8 @@ namespace Spica.Core
         public long RawBytes;
         public double RawForecast = double.NaN;
         public List<WorkerView> Workers = new List<WorkerView>();
-        public bool Finished, Cancelled, Draining;
+        public bool Finished, Cancelled, Draining, AutoStopped;
+        public string StopStatus;             // auto-stop progress (null = no auto-stop)
         public int Running;                   // simulations inside chunks that are running now
         public string FatalError;
         public int Done => Ok + NoData + Failed;
@@ -106,6 +110,8 @@ namespace Spica.Core
             public long Memory;
             public Process Proc;
             public bool Exited;
+            public int Count;                        // runs in the chunk now running
+            public double Expected = double.NaN;     // its expected wall time (start-up + Count * x), NaN while x is unknown
         }
 
         readonly CampaignOptions opt;
@@ -118,7 +124,9 @@ namespace Spica.Core
         readonly List<Thread> threads = new List<Thread>();
         readonly SortedDictionary<int, RunResult> results = new SortedDictionary<int, RunResult>();
         readonly Queue<int> retry = new Queue<int>();
-        readonly List<KeyValuePair<double, int>> history = new List<KeyValuePair<double, int>>();
+        // (time, runs done + partial credit for running chunks), for the smoothed rate
+        readonly List<KeyValuePair<double, double>> history = new List<KeyValuePair<double, double>>();
+        double rateEma = double.NaN, etaEma = double.NaN, lastTick = double.NaN;
         readonly Stopwatch clock = new Stopwatch();
         readonly string ascDir;
 
@@ -176,10 +184,14 @@ namespace Spica.Core
                 Log("");
             }
             BuildPending();
+            // auto-stop: the first chunks cover the minimum runs; later ones follow the rule's own estimate
+            if (opt.Stop != null && opt.Stop.Enabled) stopRemaining = Math.Max(1, opt.Stop.MinRuns * opt.CornerCount - results.Count);
 
             Log($"SPICA campaign: {opt.Runs} runs of {Path.GetFileName(opt.AscPath)}" +
                 (opt.CornerCount > 1 ? $" x {opt.CornerCount} temperatures = {opt.Jobs} simulations" : ""));
-            if (resuming) Log($"Resuming: {resumedCount} of {opt.Jobs} simulations already done, {pendingCount} to go.");
+            if (opt.Stage != null) Log(opt.Stage);
+            else if (resuming) Log($"Resuming: {resumedCount} of {opt.Jobs} simulations already done, {pendingCount} to go.");
+            if (opt.Stop != null && opt.Stop.Enabled) Log($"Auto-stop: {opt.Stop.Describe()}; at most {opt.Runs} runs.");
             Log($"Machine: {hw}");
             Log($"LTspice: {opt.LtspiceExe} ({Ltspice.Version(opt.LtspiceExe)})");
             Log($"Seed: {opt.Seed}");
@@ -243,7 +255,46 @@ namespace Spica.Core
 
         public bool IsFinished { get { lock (sync) return finished; } }
 
-        bool Stopped => cancel || (draining && Unallocated > 0);
+        bool Stopped => cancel || (draining && Unallocated > 0 && !autoStopped);
+
+        // ------------------------------------------------------------------ auto-stop
+
+        const double AutoStopChunkSeconds = 30;
+        volatile bool autoStopped;
+        string stopStatus;
+        int stopRemaining = int.MaxValue;     // simulations the stop rule still expects to need
+        int stopCheckedAt = -1;
+        DateTime nextStopCheck = DateTime.MinValue;
+
+        /// <summary>Every 2 s with new results: is the answer known? Then finish what runs and stop.</summary>
+        void CheckStop()
+        {
+            if (opt.Stop == null || !opt.Stop.Enabled || draining || cancel || DateTime.UtcNow < nextStopCheck) return;
+            nextStopCheck = DateTime.UtcNow.AddSeconds(2);
+            List<RunResult> list;
+            lock (sync)
+            {
+                if (results.Count == stopCheckedAt) return;
+                stopCheckedAt = results.Count;
+                list = results.Values.ToList();
+            }
+            var specs = opt.Setup;
+            var check = opt.Stop.Evaluate(list, opt.Netlist.MeasNames, m => specs?.Spec(m), opt.CornerCount,
+                c => opt.Corners != null && c < opt.Corners.Count ? opt.Corners[c].ToString("0.###", CultureInfo.InvariantCulture) + " °C" : "corner " + (c + 1));
+            lock (sync)
+            {
+                stopStatus = check.Status;
+                int least = Enumerable.Range(0, opt.CornerCount).Min(c => list.Count(r => r.Corner == c));
+                long rem = check.RunsNeeded >= int.MaxValue ? int.MaxValue : (long)Math.Max(0, check.RunsNeeded - least) * opt.CornerCount;
+                // runs handed out but not finished count as already on their way
+                stopRemaining = (int)Math.Max(0, Math.Min(int.MaxValue, rem - (opt.Jobs - Unallocated - results.Count)));
+                if (!check.Done || draining) return;
+                autoStopped = true;
+                draining = true;
+            }
+            Log($"Auto-stop: the answer is known after {list.Count} simulations ({check.Status}). Finishing the running ones, starting nothing new.");
+            foreach (var line in check.Lines) Log("  " + line);
+        }
 
         // ------------------------------------------------------------------ controller
 
@@ -267,13 +318,12 @@ namespace Spica.Core
                             SpawnWorker(plan);
                         }
 
-                        int done = results.Count;
-                        history.Add(new KeyValuePair<double, int>(clock.Elapsed.TotalSeconds, done));
-                        while (history.Count > 2 && history[0].Key < clock.Elapsed.TotalSeconds - 45) history.RemoveAt(0);
+                        UpdateRate();
 
                         if (activeWorkers == 0 && (Unallocated == 0 || draining)) break;
                     }
                     SaveProgress(false);
+                    CheckStop();
                     Thread.Sleep(200);
                 }
             }
@@ -291,22 +341,105 @@ namespace Spica.Core
 
         int Unallocated => pendingCount + retry.Count;
 
+        // ------------------------------------------------------------------ rate and ETA
+
+        /// <summary>
+        /// Runs finish in bursts: a chunk of ~2 min reports all its runs at once, and instances started together
+        /// finish together. Counting finished runs alone gives a rate that jumps between zero and a spike.
+        /// Here a running chunk is credited for the share of its expected time that has passed (at most 95 %),
+        /// so progress grows smoothly; the rate is its slope over 90 s, then low-pass filtered (time constant 20 s).
+        /// </summary>
+        double Progress()
+        {
+            double p = results.Count;
+            foreach (var w in workers)
+                if (w.Proc != null && !w.Exited && w.Expected > 0)
+                    p += w.Count * Math.Min(0.95, w.Clock.Elapsed.TotalSeconds / w.Expected);
+            return p;
+        }
+
+        /// <summary>
+        /// Seconds of work left, from the measured run time x rather than from the rate: the remaining runs not yet
+        /// handed out (plus one start-up per launch) shared by N instances, but never less than the longest running
+        /// chunk still needs. NaN while x is unknown.
+        /// </summary>
+        double ModelEta()
+        {
+            double x = sched.SecondsPerRun, ov = sched.OverheadSeconds;
+            if (double.IsNaN(x) || x <= 0) return double.NaN;
+            if (double.IsNaN(ov)) ov = 1;
+            int n = Math.Max(1, sched.Current.Instances);
+            int left = draining ? 0 : Unallocated;
+            double perChunk = Math.Max(1, Math.Min(RunScheduler.ChunkSeconds / x, Math.Ceiling(left / (double)n)));
+            double work = left * x + Math.Ceiling(left / perChunk) * ov, longest = 0;
+            foreach (var w in workers)
+                if (w.Proc != null && !w.Exited && w.Expected > 0)
+                {
+                    double rem = Math.Max(0.05 * w.Expected, w.Expected - w.Clock.Elapsed.TotalSeconds);
+                    work += rem;
+                    longest = Math.Max(longest, rem);
+                }
+            return Math.Max(longest, work / n);
+        }
+
+        void UpdateRate()
+        {
+            double now = clock.Elapsed.TotalSeconds;
+            history.Add(new KeyValuePair<double, double>(now, Progress()));
+            while (history.Count > 2 && history[0].Key < now - 90) history.RemoveAt(0);
+            double dt = double.IsNaN(lastTick) ? 0 : now - lastTick;
+            lastTick = now;
+
+            var a = history[0]; var b = history[history.Count - 1];
+            if (b.Key - a.Key > 5 && b.Value > a.Value)
+            {
+                double rate = (b.Value - a.Value) / (b.Key - a.Key) * 60;
+                rateEma = double.IsNaN(rateEma) ? rate : rateEma + Math.Min(1, dt / 20) * (rate - rateEma);
+            }
+
+            // ETA: the model when x is known, else from the rate; it counts down by itself between updates
+            double target = ModelEta();
+            if (double.IsNaN(target) && rateEma > 0) target = (opt.Jobs - Progress()) / (rateEma / 60);
+            if (double.IsNaN(target)) return;
+            if (double.IsNaN(etaEma)) etaEma = target;
+            else
+            {
+                double guess = etaEma - dt;
+                etaEma = guess + Math.Min(1, dt / 10) * (target - guess);
+            }
+        }
+
         void BuildPending()
         {
             pending.Clear();
             pendingCount = 0;
+            cornerAlloc = new int[opt.CornerCount];
+            foreach (var job in results.Keys) cornerAlloc[CornerOf(job)]++;
             int start = 0;
             for (int job = 1; job <= opt.Jobs + 1; job++)
             {
+                // ranges never span two corners, so chunks can be taken from the corners in turn
                 bool missing = job <= opt.Jobs && !results.ContainsKey(job);
-                if (missing && start == 0) start = job;
-                if (!missing && start != 0)
+                bool boundary = start != 0 && job <= opt.Jobs && CornerOf(job) != CornerOf(start);
+                if (start != 0 && (!missing || boundary))
                 {
                     pending.Add(new[] { start, job - 1 });
                     pendingCount += job - start;
                     start = 0;
                 }
+                if (missing && start == 0) start = job;
             }
+        }
+
+        int[] cornerAlloc = new int[1];      // jobs handed out (or done) per temperature corner
+
+        /// <summary>The pending range of the corner that is furthest behind: all temperatures advance together.</summary>
+        int NextRange()
+        {
+            int best = 0;
+            for (int i = 1; i < pending.Count; i++)
+                if (cornerAlloc[CornerOf(pending[i][0])] < cornerAlloc[CornerOf(pending[best][0])]) best = i;
+            return best;
         }
 
         int ExistingChunkCount()
@@ -337,13 +470,20 @@ namespace Spica.Core
             else
             {
                 if (pending.Count == 0) return null;
-                var range = pending[0];
-                int n = sched.NextChunkSize(Unallocated);
+                int ri = NextRange();
+                var range = pending[ri];
+                // auto-stop: short chunks, and no more than the runs still expected to be needed
+                bool auto = opt.Stop != null && opt.Stop.Enabled;
+                int n = auto ? sched.NextChunkSize(Math.Min(Unallocated, Math.Max(sched.Current.Instances, stopRemaining)), AutoStopChunkSeconds)
+                             : sched.NextChunkSize(Unallocated);
+                double x = sched.SecondsPerRun;
+                if (auto && x > 0) n = Math.Max(n, (int)Math.Min(Unallocated, Math.Max(1, 5 / x)));   // >= ~5 s: launches stay cheap
                 n = Math.Max(1, Math.Min(n, Math.Min(range[1], CornerEnd(range[0])) - range[0] + 1));
                 p = new Plan { First = range[0], Last = range[0] + n - 1 };
+                cornerAlloc[CornerOf(range[0])] += n;
                 range[0] += n;
                 pendingCount -= n;
-                if (range[0] > range[1]) pending.RemoveAt(0);
+                if (range[0] > range[1]) pending.RemoveAt(ri);
             }
             p.Id = ++chunkSeq;
             p.Threads = sched.Current.Threads;
@@ -466,6 +606,9 @@ namespace Spica.Core
                 w.Proc = proc; w.Exited = false; w.Pid = proc.Id; w.First = first; w.Last = last;
                 w.Temp = corners ? opt.Corners[corner] : double.NaN;
                 w.Threads = p.Threads; w.State = p.IsRetry ? "Retry" : "Running"; w.Clock.Restart(); w.Memory = 0;
+                w.Count = p.Count;
+                double x = sched.SecondsPerRun, ov = sched.OverheadSeconds;
+                w.Expected = double.IsNaN(x) || x <= 0 ? double.NaN : (double.IsNaN(ov) ? 1 : ov) + p.Count * x;
             }
             proc.OutputDataReceived += (s, e) => { };
             proc.ErrorDataReceived += (s, e) => { };
@@ -638,6 +781,15 @@ namespace Spica.Core
                 WriteState(stopped ? "Stopped" : "Finished");
 
                 var snap = Snapshot();
+                if (!autoStopped && !stopped && opt.Stop != null && opt.Stop.Enabled)
+                {
+                    nextStopCheck = DateTime.MinValue;    // judge the final results, not the last 2-second check
+                    CheckStop();
+                }
+                if (autoStopped) Log($"Auto-stop: {snap.Done} of at most {opt.Jobs} simulations were needed.");
+                else if (!stopped && opt.Stop != null && opt.Stop.Enabled && stopStatus != null)
+                    Log($"Auto-stop: the maximum number of runs was reached before the answer was settled: {stopStatus}. " +
+                        "A result this close to the requirement needs many more runs to call, or a design change.");
                 Log(stopped ? $"Campaign stopped after {snap.Elapsed:hh\\:mm\\:ss}: {snap.Done} of {snap.Total} simulations done ({snap.Ok} ok, {snap.Failed} failed). It can be resumed from File > Open Results."
                             : $"Campaign finished in {snap.Elapsed:hh\\:mm\\:ss}: {snap.Ok} ok, {snap.NoData} without data, {snap.Failed} failed.");
                 Log($"Results: {Path.Combine(opt.OutputDir, "results.csv")}");
@@ -689,7 +841,7 @@ namespace Spica.Core
                 var s = new CampaignState
                 {
                     Status = status,
-                    Jobs = opt.Jobs,
+                    Jobs = autoStopped && status == "Finished" ? results.Count : opt.Jobs,
                     Done = results.Count,
                     ElapsedSeconds = opt.PriorSeconds + clock.Elapsed.TotalSeconds,
                     CircuitHash = opt.Netlist.CircuitHash(),
@@ -749,7 +901,7 @@ namespace Spica.Core
             for (int r = 1; r <= opt.Runs; r++)
             {
                 sb.Append(r.ToString(inv));
-                foreach (var s in opt.Mc.Sites) sb.Append(',').Append(McPlan.Value(opt.Seed, s, r).ToString("G9", inv));
+                foreach (var s in opt.Mc.Sites) sb.Append(',').Append(opt.Mc.ValueOf(opt.Seed, s, r).ToString("G9", inv));
                 sb.Append("\r\n");
             }
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
@@ -824,7 +976,10 @@ namespace Spica.Core
                     Draining = draining && !finished,
                     FatalError = fatal,
                     RawBytes = rawBytes,
+                    AutoStopped = autoStopped,
+                    StopStatus = stopStatus,
                 };
+                if (autoStopped && finished) s.Total = results.Count;
                 s.Running = finished ? 0 : Math.Max(0, s.Allocated - results.Count);   // handed out, not finished yet
                 foreach (var r in results.Values)
                 {
@@ -843,17 +998,8 @@ namespace Spica.Core
                         s.RawForecast = rawBytes + sched.RawBytesPerRun * (opt.Jobs - s.Done);
                 }
 
-                // Rate over the last ~45 s window, else since start.
-                if (history.Count >= 2)
-                {
-                    var a = history[0]; var b = history[history.Count - 1];
-                    double dt = b.Key - a.Key;
-                    if (dt > 1 && b.Value > a.Value) s.RunsPerMinute = (b.Value - a.Value) / dt * 60;
-                }
-                if (s.RunsPerMinute <= 0 && clock.Elapsed.TotalSeconds > 1 && s.Done > resumedCount)
-                    s.RunsPerMinute = (s.Done - resumedCount) / clock.Elapsed.TotalSeconds * 60;
-                if (s.RunsPerMinute > 0 && !finished)
-                    s.EtaSeconds = (opt.Jobs - s.Done) / (s.RunsPerMinute / 60);
+                if (!double.IsNaN(rateEma) && rateEma > 0) s.RunsPerMinute = rateEma;
+                if (!finished && !double.IsNaN(etaEma)) s.EtaSeconds = Math.Max(0, etaEma);
 
                 foreach (var w in workers)
                     s.Workers.Add(new WorkerView

@@ -44,10 +44,64 @@ static class Program
         // SPICA.Smoke --bench <runs> : cost of the live Results refresh and of the per-second results.csv
         if (args.Length > 1 && args[0] == "--bench") return Bench(int.Parse(args[1]));
 
+        // SPICA.Smoke --tiptest : hover a list header and a cell, report the tip texts
+        if (args.Length > 0 && args[0] == "--tiptest") return TipTest();
+
         // SPICA.Smoke --charttest : drive the chart's mouse handlers (zoom box, wheel, legend toggle, reset)
         if (args.Length > 0 && args[0] == "--charttest") return ChartTest();
 
         // SPICA.Smoke --stats <campaign folder> <meas> [lsl usl] : print the analysis of saved results
+        if (args.Length > 2 && args[0] == "--results")
+        {
+            // opens a campaign folder in the app and captures every Results page: --results <folder> <png>
+            var t = new Thread(() =>
+            {
+                var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]) };
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var timer = new System.Windows.Forms.Timer { Interval = 800 };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    var view = (Spica.UI.ResultsView)typeof(Spica.UI.MainForm).GetField("resultsView", flags).GetValue(form);
+                    for (int i = 0; i < view.PageCount; i++)
+                    {
+                        view.SelectPage(i);
+                        for (int k = 0; k < 10; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                        using (var bmp = new System.Drawing.Bitmap(form.Width, form.Height))
+                        {
+                            form.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, form.Width, form.Height));
+                            bmp.Save(args[2].Replace(".png", $"_res{i}.png"));
+                        }
+                    }
+                    form.Close();
+                };
+                form.Shown += (s, e) => timer.Start();
+                System.Windows.Forms.Application.Run(form);
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            return 0;
+        }
+        if (args.Length > 1 && args[0] == "--budget")
+        {
+            // error budget of a campaign folder; with a 3rd argument also writes the HTML report there
+            var rs = ResultSet.Load(args[1]);
+            ErrorBudget.Register(rs, rs.Setup.Errors);
+            foreach (var it in rs.Setup.Errors)
+            {
+                Console.WriteLine(ErrorBudget.Compute(rs, it, 0, rs.Setup.DesignSigma, rs.Setup.PessimisticSigma).Summary());
+                Console.WriteLine(new string('=', 80));
+            }
+            if (args.Length > 2)
+            {
+                var view = new Spica.UI.ResultsView();
+                view.SetData(rs, false);
+                view.WriteReport(args[2]);
+                Console.WriteLine("report: " + args[2]);
+            }
+            return 0;
+        }
         if (args.Length > 0 && args[0] == "--stats")
         {
             var rs = ResultSet.Load(args[1]);
@@ -55,6 +109,8 @@ static class Program
             if (args.Length > 4) rs.Setup.SetSpec(args[2], double.Parse(args[3], inv), double.Parse(args[4], inv));
             Console.WriteLine($"mode {rs.Mode}, rows {rs.Rows.Count}, meas {string.Join(",", rs.Meas)}");
             var ms = MeasStats.Of(args[2], "all", rs.Values(args[2], 0), rs.Setup.Spec(args[2]));
+            Console.WriteLine(ms.Summary());
+            Console.WriteLine("---- details ----");
             Console.WriteLine(ms.Narrative());
             Console.WriteLine($"RAW A2={ms.AdA2:R} p={ms.AdP:R} skew={ms.D.Skew:R} kurt={ms.D.ExKurt:R} q00135={ms.P00135:R} lo={ms.Cap.YieldLo:R} hi={ms.Cap.YieldHi:R} ppm={ms.Cap.PredictedPpm:R}");
             // SPICA_TF=X,Y,theory,budget% overrides the default (first two measurements, 1.93*x, 2 %)
@@ -113,13 +169,17 @@ static class Program
         var done = new ManualResetEventSlim();
         engine.Finished += () => done.Set();
         engine.Start();
+        // (elapsed, done, smoothed rate, ETA) every second; SPICA_RATE=1 prints how good the ETA was afterwards
+        var trace = new System.Collections.Generic.List<double[]>();
         while (!done.Wait(1000))
         {
             while (engine.LogQueue.TryDequeue(out var l)) Console.WriteLine(l);
             var s = engine.Snapshot();
-            Console.WriteLine($"   [{s.Done}/{s.Total}] {s.RunsPerMinute:0} runs/min, {s.Config}, {s.Phase}, workers={s.Workers.Count}");
+            trace.Add(new[] { s.Elapsed.TotalSeconds, s.Done, s.RunsPerMinute, s.EtaSeconds });
+            Console.WriteLine($"   [{s.Done}/{s.Total}] {s.RunsPerMinute:0} runs/min, ETA {s.EtaSeconds:0} s, {s.Config}, {s.Phase}, workers={s.Workers.Count}");
         }
         while (engine.LogQueue.TryDequeue(out var l)) Console.WriteLine(l);
+        if (Environment.GetEnvironmentVariable("SPICA_RATE") == "1") RateReport(trace, engine.Snapshot().Elapsed.TotalSeconds);
         Console.WriteLine(File.ReadAllText(Path.Combine(outDir, "summary.txt")));
         Console.WriteLine(string.Join(Environment.NewLine, File.ReadLines(Path.Combine(outDir, "results.csv")).Take(6)));
         var first = Directory.GetFiles(Path.Combine(outDir, "chunks"), "*.net").OrderBy(f => f).First();
@@ -127,6 +187,62 @@ static class Program
         Console.WriteLine(File.ReadAllText(first));
         return 0;
     }
+
+    /// <summary>
+    /// The ETA shown at each second against the real remaining time, and the smoothed rate against the old one
+    /// (finished runs only, 45 s window), which jumps when chunks finish together.
+    /// </summary>
+    static void RateReport(System.Collections.Generic.List<double[]> trace, double end)
+    {
+        Console.WriteLine("---- rate / ETA quality ----");
+        Console.WriteLine("    t   done   rate(new)  rate(old 45s)   ETA     real   error");
+        var errs = new System.Collections.Generic.List<double>();
+        var newRates = new System.Collections.Generic.List<double>(); var oldRates = new System.Collections.Generic.List<double>();
+        for (int i = 0; i < trace.Count; i++)
+        {
+            double t = trace[i][0], d = trace[i][1], rate = trace[i][2], eta = trace[i][3], real = end - t;
+            int j = i; while (j > 0 && trace[j - 1][0] >= t - 45) j--;
+            double old = t - trace[j][0] > 1 && d > trace[j][1] ? (d - trace[j][1]) / (t - trace[j][0]) * 60 : 0;
+            if (t > end * 0.2 && t < end * 0.9) { newRates.Add(rate); oldRates.Add(old); if (!double.IsNaN(eta)) errs.Add((eta - real) / end); }
+            if (i % 5 == 0) Console.WriteLine($"{t,5:0} {d,6:0} {rate,10:0.0} {old,14:0.0} {eta,7:0} {real,7:0} {(double.IsNaN(eta) ? "" : ((eta - real) / end * 100).ToString("+0.0;-0.0") + " %"),7}");
+        }
+        double Cv(System.Collections.Generic.List<double> v) { var m = v.Average(); return m <= 0 ? double.NaN : Math.Sqrt(v.Sum(x => (x - m) * (x - m)) / v.Count) / m; }
+        Console.WriteLine($"between 20 % and 90 % of the campaign: rate variation (sigma/mean) new {Cv(newRates):P0}, old {Cv(oldRates):P0}; " +
+                          $"ETA error mean {errs.Average():P1}, worst {errs.Select(Math.Abs).Max():P1} of the campaign time");
+    }
+
+    static int TipTest()
+    {
+        var form = new System.Windows.Forms.Form { ClientSize = new System.Drawing.Size(600, 300), StartPosition = System.Windows.Forms.FormStartPosition.Manual, Location = new System.Drawing.Point(50, 50) };
+        var lv = new Spica.UI.Win98ListView { Dock = System.Windows.Forms.DockStyle.Fill };
+        lv.Columns.Add("Measurement", 120); lv.Columns.Add("Skew", 80);
+        lv.Items.Add(new System.Windows.Forms.ListViewItem(new[] { "vout", "0.8" }));
+        lv.HeaderTip = c => Spica.UI.Glossary.Column(lv.Columns[c].Text);
+        lv.CellTip = (i, c) => $"cell {i},{c}";
+        form.Controls.Add(lv);
+        var tipField = typeof(Spica.UI.Win98ListView).GetField("hoverText", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        int rc = 1;
+        form.Shown += (s, e) =>
+        {
+            System.Windows.Forms.Application.DoEvents();
+            var header = System.Windows.Forms.Control.FromHandle(lv.Handle) == lv ? GetHeader(lv.Handle) : IntPtr.Zero;
+            SendMsg(header, 0x0200, IntPtr.Zero, (IntPtr)((8 << 16) | 150));      // mouse over the "Skew" header
+            string h = (string)tipField.GetValue(lv);
+            System.Windows.Forms.Cursor.Position = lv.PointToScreen(new System.Drawing.Point(150, lv.Items[0].Bounds.Top + 4));
+            SendMsg(lv.Handle, 0x0200, IntPtr.Zero, (IntPtr)(((lv.Items[0].Bounds.Top + 4) << 16) | 150));
+            System.Windows.Forms.Application.DoEvents();
+            string c = (string)tipField.GetValue(lv);
+            Console.WriteLine("header tip: " + (h ?? "(none)").Split('\n')[0]);
+            Console.WriteLine("cell tip:   " + (c ?? "(none)"));
+            rc = h != null && h.StartsWith("Asymmetry") && c == "cell 0,1" ? 0 : 1;
+            form.Close();
+        };
+        System.Windows.Forms.Application.Run(form);
+        return rc;
+    }
+
+    static IntPtr GetHeader(IntPtr lv) => SendMsg(lv, 0x101F, IntPtr.Zero, IntPtr.Zero);
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SendMessage")] static extern IntPtr SendMsg(IntPtr h, int m, IntPtr w, IntPtr l);
 
     static int ResumeTest(string[] args)
     {
@@ -238,13 +354,14 @@ static class Program
                     if (nlField.GetValue(form) == null && ++ticks < 150) return;
                     Snap(args[2]);
                     if (!run) { timer.Stop(); form.Close(); return; }
-                    typeof(Spica.UI.MainForm).GetMethod("StartCampaign", flags).Invoke(form, new object[] { null, null, 0.0 });
+                    typeof(Spica.UI.MainForm).GetMethod("StartCampaign", flags).Invoke(form, new object[] { null, null, 0.0, false });
                     stage = 1; ticks = 0;
                     return;
                 }
                 var engine = (CampaignEngine)typeof(Spica.UI.MainForm).GetField("engine", flags).GetValue(form);
                 if (stage == 1 && ++ticks == 15) Snap(args[2].Replace(".png", "_monitor_running.png"));
                 if (engine == null || !engine.IsFinished) return;
+                if (engine.Options.WcStage == 1 && ++ticks < 600) return;   // worst case: step 2 starts by itself
                 // close the "campaign finished" message box, then capture the results tabs
                 foreach (var f in System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().Where(f => f != form).ToList())
                 {

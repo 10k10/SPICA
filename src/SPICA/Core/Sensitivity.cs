@@ -40,7 +40,8 @@ namespace Spica.Core
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
         /// <summary>Regression on the random parameters (and TEMP when it varies per run).</summary>
-        public static SensitivityReport Parameters(ResultSet rs, string meas, int group)
+        /// <param name="filter">optional: only these rows (e.g. one input band of an error budget)</param>
+        public static SensitivityReport Parameters(ResultSet rs, string meas, int group, Func<ResultSet.Row, bool> filter = null)
         {
             var rep = new SensitivityReport { Meas = meas, OnParameters = true };
             var inputs = new List<string>(rs.Params);
@@ -55,6 +56,7 @@ namespace Spica.Core
             var xs = new List<double[]>(); var ys = new List<double>();
             foreach (var r in rs.InGroup(group))
             {
+                if (filter != null && !filter(r)) continue;
                 double y = rs.Get(r, meas);
                 if (double.IsNaN(y)) continue;
                 var x = new double[inputs.Count];

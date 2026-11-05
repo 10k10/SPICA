@@ -29,6 +29,85 @@ namespace Spica.Core
             return s;
         }
 
+        /// <summary>
+        /// The engineering view: does the design meet its requirement, what range will a production unit fall in,
+        /// how much margin is left, and how far these numbers can be trusted with this many runs.
+        /// The statistical detail behind it is <see cref="Narrative"/>.
+        /// </summary>
+        public string Summary()
+        {
+            var sb = new StringBuilder();
+            var d = D;
+            bool spec = Spec != null && Spec.IsSet;
+            if (d.N < 2) return $"{Meas}: not enough runs with data.\n";
+            if (!(d.Std > 0))
+                return $"{Meas} = {F(d.Mean)} in every run: the tolerances do not move it.\n" +
+                       (spec ? (Spec.Passes(d.Mean) ? "It meets the requirement.\n" : "It does NOT meet the requirement.\n") : "");
+
+            // the range 99.73 % of units fall in ("3 sigma"), from the normal model when it holds, else from the data
+            bool tailsResolved = d.N >= 740;
+            double lo, hi; string how;
+            if (NormalOk) { lo = d.Mean - 3 * d.Std; hi = d.Mean + 3 * d.Std; how = "normal model, mean +/- 3 sigma"; }
+            else if (tailsResolved) { lo = P00135; hi = P99865; how = "read from the runs (the result is not bell-shaped)"; }
+            else { lo = d.Mean - 3 * d.Std; hi = d.Mean + 3 * d.Std; how = $"mean +/- 3 sigma, ROUGH: the result is not bell-shaped and {d.N} runs cannot resolve the tails"; }
+
+            // verdict
+            string verdict;
+            if (!spec) verdict = "no requirement set (enter the limits in 'Spec limits')";
+            else
+            {
+                bool failsSeen = Cap.Pass < Cap.N;
+                bool rangeInside = (double.IsNaN(Spec.Lsl) || lo >= Spec.Lsl) && (double.IsNaN(Spec.Usl) || hi <= Spec.Usl);
+                if (failsSeen) verdict = $"FAILS: {Cap.N - Cap.Pass} of {Cap.N} units out of spec";
+                else if (!rangeInside) verdict = "AT RISK: no failure in the runs, but the 99.73 % range crosses a limit";
+                else if (NormalOk && Cap.Cpk < 1.33) verdict = "MEETS SPEC, small margin (nearest limit within 4 sigma)";
+                else verdict = "MEETS SPEC with margin";
+            }
+            sb.AppendLine($"{Meas}  [{Group}]:  {verdict}");
+            sb.AppendLine();
+
+            sb.AppendLine("What a production unit will show");
+            sb.AppendLine($"  typical       {F(d.Mean)}");
+            sb.AppendLine($"  spread        +/-{F(3 * d.Std)} (3 sigma)" + (d.Mean != 0 ? $" = +/-{Pct(3 * d.Std / Math.Abs(d.Mean))} of typical" : ""));
+            sb.AppendLine($"  99.73 % in    {F(lo)} .. {F(hi)}   ({how})");
+            if (Math.Abs(d.Skew) > 0.5)
+                sb.AppendLine($"  lopsided      the {(d.Skew > 0 ? "high" : "low")} side reaches further than the other");
+            sb.AppendLine($"  seen          {F(d.Min)} .. {F(d.Max)} in {d.N} runs (more runs will widen this)");
+
+            if (spec)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Against the requirement  " + $"{(double.IsNaN(Spec.Lsl) ? "-" : F(Spec.Lsl))} .. {(double.IsNaN(Spec.Usl) ? "-" : F(Spec.Usl))}");
+                string Margin(double m) => m >= 0 ? $"{F(m)} to spare" : $"SHORT by {F(-m)}";
+                if (!double.IsNaN(Spec.Lsl))
+                    sb.AppendLine($"  low margin    {Margin(lo - Spec.Lsl)} (99.73 % range vs LSL)" + (d.Std > 0 ? $"  (LSL is {(d.Mean - Spec.Lsl) / d.Std:0.0} sigma below typical)" : ""));
+                if (!double.IsNaN(Spec.Usl))
+                    sb.AppendLine($"  high margin   {Margin(Spec.Usl - hi)} (99.73 % range vs USL)" + (d.Std > 0 ? $"  (USL is {(Spec.Usl - d.Mean) / d.Std:0.0} sigma above typical)" : ""));
+                sb.AppendLine($"  yield         {Cap.Pass}/{Cap.N} passed; proven at least {Pct(Cap.YieldLo)} (95 % confidence)");
+                if (NormalOk && !double.IsNaN(Cap.PredictedPpm))
+                    sb.AppendLine($"  expected      {(Cap.PredictedPpm < 0.01 ? "" : "about ")}{Ppm(Cap.PredictedPpm)} out of spec in production (normal model, Cpk {Cap.Cpk:0.00})");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("How far to trust this");
+            sb.AppendLine($"  typical known to +/-{F(1.96 * d.Std / Math.Sqrt(d.N))}, spread to +/-{Pct(1.96 / Math.Sqrt(2.0 * (d.N - 1)))} (95 %)");
+            string shape = double.IsNaN(AdP) ? "not tested" :
+                           NormalOk ? "bell-shaped: sigma, Cpk and ppm figures are valid" :
+                           d.ExKurt > 1 ? "heavy tails: sigma figures UNDER-state the extremes, rely on the runs" :
+                           d.ExKurt < -0.8 ? "flat and bounded: sigma figures over-state the extremes (safe side)" :
+                           Math.Abs(d.Skew) > 0.5 ? "lopsided: judge each limit by its own side of the range" :
+                           d.N > 2000 ? "close to bell-shaped (the test is strict with this many runs)" : "not bell-shaped: rely on the runs, not on sigma";
+            sb.AppendLine($"  shape         {shape}");
+            var todo = new List<string>();
+            if (!NormalOk && !tailsResolved) todo.Add($"run 740+ units to read the 99.73 % range from the data (now {d.N})");
+            if (spec && Cap.Pass == Cap.N && Cap.YieldLo < 0.999)
+                todo.Add($"to prove 99.9 % yield with no failure, run about {(int)Math.Ceiling(Math.Log(0.05) / Math.Log(0.999))} units");
+            if (spec && (verdict.StartsWith("FAILS") || verdict.StartsWith("AT RISK") || verdict.StartsWith("MEETS SPEC, small")))
+                todo.Add("the Sensitivity tab shows which tolerances cause the spread: tighten the top ones");
+            foreach (var t in todo) sb.AppendLine("  next          " + t);
+            return sb.ToString();
+        }
+
         /// <summary>Plain-language sigma analysis: what can and cannot be concluded from this sample.</summary>
         public string Narrative()
         {
