@@ -136,7 +136,7 @@ namespace Spica.Core
         /// <summary>Recognises the runs of a worst-case campaign from their parameter values.</summary>
         public static WcReport Of(ResultSet rs)
         {
-            var rep = new WcReport { Method = rs.Setup.WorstCase, K = rs.Setup.WcSigma, Sites = rs.Params.Count };
+            var rep = new WcReport { Method = rs.Record.WorstCase, K = rs.Record.WcSigma, Sites = rs.Params.Count };
             if (rep.Method == WcMethod.Off || rs.Params.Count == 0) return null;
             int n = rs.Params.Count;
             var runs = rs.Rows.Select(r => r.Run).Distinct().OrderBy(r => r).ToList();

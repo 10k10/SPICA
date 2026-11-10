@@ -117,15 +117,54 @@ namespace Spica.UI
         }
 
         /// <summary>Shows a campaign folder on the Results tab (no resume prompt).</summary>
-        void OpenResultsFolder(string dir)
+        /// <summary>
+        /// Opens a campaign folder together with the setup of its schematic: the one open now, else the .spica beside
+        /// the schematic, else the campaign's record as an unsaved setup. One setup serves running and analysing.
+        /// </summary>
+        async void OpenResultsFolder(string dir)
         {
-            try
+            ResultSet rs;
+            try { rs = ResultSet.Load(dir); }
+            catch (Exception ex) { Win98MessageBox.Show(this, "Could not read the results:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); return; }
+
+            string asc = rs.Record.Schematic;
+            if (!Running && asc.Length > 0 && File.Exists(asc) && !SameFile(ascPath, asc) && ConfirmDiscardSetup())
             {
-                resultsView.SetData(ResultSet.Load(dir), false);
-                tabs.SelectedIndex = 2;
-                SetStatus($"Opened results: {dir}");
+                string sidecar = SidecarOf(asc);
+                SpicaProject p = null;
+                if (File.Exists(sidecar)) { try { p = SpicaProject.Load(sidecar); } catch { p = null; } }
+                if (p == null)
+                {
+                    p = rs.Record.Clone();
+                    p.FilePath = null;      // the campaign's record is not the user's setup file: Save asks where
+                    p.Seed = 0;
+                    p.Dirty = false;
+                }
+                await LoadSchematic(asc, false, p);
             }
-            catch (Exception ex) { Win98MessageBox.Show(this, "Could not read the results:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); }
+            if (SameFile(ascPath, asc)) rs.Setup = project;
+            resultsView.SetData(rs, false);
+            tabs.SelectedIndex = 2;
+            SetStatus(rs.Standalone ? $"Opened results: {dir} (analysed with the campaign's own setup: its schematic is not open)"
+                                    : $"Opened results: {dir}, analysed with the setup {(project.FilePath != null ? Path.GetFileName(project.FilePath) : "(unsaved)")}");
+        }
+
+        static bool SameFile(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
+
+        /// <summary>Results opened from disk follow the setup: the open one for their schematic, else their own record.</summary>
+        void AttachResults()
+        {
+            var rs = resultsView.Data;
+            if (rs == null || resultsView.Live) return;
+            var want = SameFile(ascPath, rs.Record.Schematic) ? project : rs.Record;
+            if (ReferenceEquals(rs.Setup, want)) return;
+            rs.Setup = want;
+            resultsView.SetData(rs, false);
         }
 
         /// <summary>Opens a schematic (.asc) or a setup (.spica).</summary>
@@ -203,7 +242,7 @@ namespace Spica.UI
                 return b;
             }
             tbOpen = Btn("Open", "open32", (s, e) => BrowseSchematic(), "Open an LTspice schematic (.asc) or a SPICA setup (.spica)");
-            Btn("Save", "save32", (s, e) => SaveSetup(false), "Save the setup (.spica): runs, temperatures, signals, spec limits, TF");
+            Btn("Save", "save32", (s, e) => SaveSetup(false), "Save the setup (.spica): runs, temperatures, signals, spec limits, TF, error budget, report");
             Btn("Results", "results32", (s, e) => OpenResults(), "Open the results of an earlier campaign");
             toolbar.Items.Add(new ToolStripSeparator());
             tbStart = Btn("Start", "run32", (s, e) => StartCampaign(), "Start the Monte Carlo campaign (F5)");
@@ -648,11 +687,10 @@ namespace Spica.UI
             resultsView.DataChanged += UpdateCommandState;
             resultsView.SetupChanged += () =>
             {
-                // edits on the running/just-finished campaign belong to the current setup
+                // analysis edits on results of the open setup's schematic belong to that setup (saved with File > Save Setup)
                 if (resultsView.Data != null && ReferenceEquals(resultsView.Data.Setup, project))
                 {
                     project.Dirty = true;
-                    resultsView.Data.SaveSetup();
                     UpdateTitle();
                 }
             };
@@ -912,7 +950,7 @@ namespace Spica.UI
             if (ascPath == null) return true;
             ReadUiIntoProject();
             if (!project.Dirty) return true;
-            var r = Win98MessageBox.Show(this, "Save the changes to the setup" + (project.FilePath != null ? " " + Path.GetFileName(project.FilePath) : "") + "?\n(runs, temperatures, signals, spec limits, TF)",
+            var r = Win98MessageBox.Show(this, "Save the changes to the setup" + (project.FilePath != null ? " " + Path.GetFileName(project.FilePath) : "") + "?\n(runs, temperatures, signals, spec limits, TF, error budget, report)",
                 "SPICA", MessageBoxButtons.YesNoCancel, Win98Icon.Question);
             if (r == DialogResult.Cancel) return false;
             if (r == DialogResult.Yes) return SaveSetup(false);
@@ -1086,6 +1124,7 @@ namespace Spica.UI
                 SetStatus($"Loaded {Path.GetFileName(path)}{from}: {nl.Nodes.Count} nets, {nl.MeasNames.Count} measurements.");
                 SaveSettings();
                 UpdateTitle();
+                AttachResults();
             }
             catch (Exception ex)
             {

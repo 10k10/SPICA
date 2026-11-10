@@ -32,7 +32,15 @@ namespace Spica.Core
         public string Title = "";
         public readonly List<string> Meas = new List<string>();
         public readonly List<Row> Rows = new List<Row>();
+        /// <summary>
+        /// The analysis setup (error budget, specs, TF, report): the setup open in SPICA when it belongs to the same
+        /// schematic, so one .spica serves both running and analysing; otherwise the campaign's own record.
+        /// </summary>
         public SpicaProject Setup = new SpicaProject();
+        /// <summary>How the campaign was run (campaign.spica, written when it started): schematic, temperatures, worst case.</summary>
+        public SpicaProject Record = new SpicaProject();
+        /// <summary>Analysed with its own record, not with the user's setup.</summary>
+        public bool Standalone => ReferenceEquals(Setup, Record);
         public TempMode Mode = TempMode.Default;
         public readonly List<double> Corners = new List<double>();
         public bool Paired;
@@ -169,6 +177,7 @@ namespace Spica.Core
                 Folder = opt.OutputDir,
                 Title = Path.GetFileName(opt.AscPath) + "  -  " + Path.GetFileName(opt.OutputDir),
                 Setup = setup ?? new SpicaProject(),
+                Record = (opt.Setup ?? setup)?.Clone() ?? new SpicaProject(),   // a copy: the setup may be edited while it runs
                 Paired = opt.Mc != null,
                 Seed = opt.Seed,
             };
@@ -212,12 +221,12 @@ namespace Spica.Core
             string spica = Path.Combine(folder, "campaign.spica");
             if (File.Exists(spica))
             {
-                rs.Setup = SpicaProject.Load(spica);
-                rs.Paired = rs.Setup.Paired;
-                rs.Seed = rs.Setup.Seed;
+                rs.Record = rs.Setup = SpicaProject.Load(spica);
+                rs.Paired = rs.Record.Paired;
+                rs.Seed = rs.Record.Seed;
             }
             if (File.Exists(Path.Combine(folder, "samples.csv"))) rs.Paired = true;   // written only by the paired generator
-            rs.Title = (rs.Setup.Schematic.Length > 0 ? Path.GetFileName(rs.Setup.Schematic) + "  -  " : "") + Path.GetFileName(folder.TrimEnd('\\', '/'));
+            rs.Title = (rs.Record.Schematic.Length > 0 ? Path.GetFileName(rs.Record.Schematic) + "  -  " : "") + Path.GetFileName(folder.TrimEnd('\\', '/'));
 
             var lines = File.ReadAllLines(csv, Encoding.UTF8);
             if (lines.Length == 0) return rs;
@@ -244,12 +253,12 @@ namespace Spica.Core
 
             // Temperature mode: from the setup when known, otherwise inferred from the data.
             var distinct = temps.Distinct().OrderBy(v => v).ToList();
-            if (File.Exists(spica)) rs.Mode = temps.Count == 0 ? TempMode.Default : rs.Setup.Temp;
+            if (File.Exists(spica)) rs.Mode = temps.Count == 0 ? TempMode.Default : rs.Record.Temp;
             else if (temps.Count == 0) rs.Mode = TempMode.Default;
             else rs.Mode = distinct.Count <= 32 && temps.Count >= 2 * distinct.Count ? TempMode.Corners : TempMode.Random;
             // a stopped campaign may not have reached every corner yet: the setup knows them all
             if (rs.Mode == TempMode.Corners)
-                rs.Corners.AddRange(File.Exists(spica) && rs.Setup.Corners.Count > 0 ? rs.Setup.Corners.Distinct().ToList() : distinct);
+                rs.Corners.AddRange(File.Exists(spica) && rs.Record.Corners.Count > 0 ? rs.Record.Corners.Distinct().ToList() : distinct);
 
             foreach (var kv in parsed)
             {
@@ -317,10 +326,13 @@ namespace Spica.Core
             return res;
         }
 
-        /// <summary>Writes the analysis part of the setup (specs, TF) back to the campaign folder.</summary>
+        /// <summary>
+        /// A campaign analysed on its own (its schematic is not the setup open in SPICA) keeps its analysis edits in
+        /// its record; otherwise they belong to the user's setup and the record is left as the campaign ran.
+        /// </summary>
         public void SaveSetup()
         {
-            if (string.IsNullOrEmpty(Folder) || !Directory.Exists(Folder)) return;
+            if (!Standalone || string.IsNullOrEmpty(Folder) || !Directory.Exists(Folder)) return;
             try
             {
                 var copy = Setup.Clone();

@@ -115,6 +115,7 @@ namespace Spica.UI
 
         /// <summary>The user froze the live view: building new result sets would be wasted work.</summary>
         public bool LivePaused => live && !chkLive.Checked;
+        public bool Live => live;
 
         public int PageCount => tabs.Pages.Count;
         public void SelectPage(int i) => tabs.SelectedIndex = i;
@@ -144,7 +145,7 @@ namespace Spica.UI
             }
             DataChanged?.Invoke();
             // a worst-case campaign opens on its own page (once, so the user can move away)
-            bool isWc = set != null && set.Setup.WorstCase != WcMethod.Off;
+            bool isWc = set != null && set.Record.WorstCase != WcMethod.Off;
             if (set != null) ErrorBudget.Register(set, set.Setup.Errors);
             if (isWc && !shownWc) { shownWc = true; if (!Showing(pgWc)) { Show(pgWc); return; } }
             if (!isWc) shownWc = false;
@@ -2086,7 +2087,7 @@ namespace Spica.UI
         /// </summary>
         string ReportPath(ReportOptions o)
         {
-            string name = !string.IsNullOrEmpty(rs.Setup.Schematic) ? Path.GetFileNameWithoutExtension(rs.Setup.Schematic) : rs.Title;
+            string name = !string.IsNullOrEmpty(rs.Record.Schematic) ? Path.GetFileNameWithoutExtension(rs.Record.Schematic) : rs.Title;
             foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
             string dir = !string.IsNullOrEmpty(rs.Folder) && Directory.Exists(rs.Folder) ? rs.Folder : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             string stem = name + (o.Kind == ReportKind.Concise ? "_error_budget" : "_report");
@@ -2115,7 +2116,7 @@ namespace Spica.UI
             bool anySpec = meas.Any(m => st.Spec(m)?.IsSet == true);
             var tf = st.Tf;
             bool hasTf = !concise && o.Tf && tf.X.Length > 0 && tf.Y.Length > 0 && rs.Col(tf.Y) >= 0;
-            string schematic = string.IsNullOrEmpty(st.Schematic) ? "" : Path.GetFileName(st.Schematic);
+            string schematic = string.IsNullOrEmpty(rs.Record.Schematic) ? "" : Path.GetFileName(rs.Record.Schematic);
             string kk = st.DesignSigma.ToString("0.#", Inv);
 
             var sb = new StringBuilder();
@@ -2157,7 +2158,8 @@ namespace Spica.UI
 
             sb.Append("<table class=\"kv\">");
             void Row(string k, string v) => sb.Append($"<tr><td>{H(k)}</td><td>{H(v)}</td></tr>");
-            Row("Schematic", st.Schematic);
+            Row("Schematic", rs.Record.Schematic);
+            if (!rs.Standalone && !string.IsNullOrEmpty(st.FilePath)) Row("Setup", st.FilePath);
             Row("Results folder", rs.Folder);
             Row("Runs", $"{rs.Rows.Count} ({rs.Rows.Count(r => r.Status == RunStatus.Ok)} with data)");
             Row("Temperature", rs.Mode == TempMode.Corners ? "corners " + string.Join(", ", rs.Corners.Select(t => t.ToString("0.###", Inv))) + " °C"

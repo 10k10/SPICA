@@ -78,6 +78,43 @@ static class Program
             return 0;
         }
 
+        // SPICA.Smoke --attach <campaign folder> : open it in the app; which setup analyses it, and does an edit stay out of campaign.spica
+        if (args.Length > 1 && args[0] == "--attach")
+        {
+            int code = 1;
+            var t = new Thread(() =>
+            {
+                var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]) };
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                string rec = Path.Combine(args[1], "campaign.spica"), before = File.ReadAllText(rec);
+                var timer = new System.Windows.Forms.Timer { Interval = 500 };
+                int ticks = 0;
+                timer.Tick += (s, e) =>
+                {
+                    var view = (Spica.UI.ResultsView)typeof(Spica.UI.MainForm).GetField("resultsView", flags).GetValue(form);
+                    if (view.Data == null && ++ticks < 40) return;
+                    timer.Stop();
+                    var project = (SpicaProject)typeof(Spica.UI.MainForm).GetField("project", flags).GetValue(form);
+                    var rs = view.Data;
+                    Console.WriteLine($"standalone={rs.Standalone} setup-is-project={ReferenceEquals(rs.Setup, project)} project={project.FilePath ?? "(unsaved)"} schematic={project.Schematic}");
+                    Console.WriteLine($"errors={rs.Setup.Errors.Count} report={rs.Setup.Report.Kind}");
+                    // an analysis edit, as the Error Budget page makes it
+                    rs.Setup.DesignSigma = 5.5;
+                    typeof(Spica.UI.ResultsView).GetMethod("NotifySetup", flags).Invoke(view, null);
+                    Console.WriteLine($"after edit: project dirty={project.Dirty}, campaign.spica unchanged={File.ReadAllText(rec) == before}, title={form.Text}");
+                    project.Dirty = false;
+                    code = 0;
+                    form.Close();
+                };
+                form.Shown += (s, e) => timer.Start();
+                System.Windows.Forms.Application.Run(form);
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            return code;
+        }
+
         // SPICA.Smoke --bench <runs> : cost of the live Results refresh and of the per-second results.csv
         if (args.Length > 1 && args[0] == "--bench") return Bench(int.Parse(args[1]));
 

@@ -50,6 +50,14 @@ paired mode, temperature mode, saved signals, spec limits per measurement and th
 `File > Save Setup` writes it; opening an `.asc` also loads `<name>.spica` next to it when present.
 Seed 0 means "a new seed per campaign"; the seed actually used goes into the campaign folder.
 
+One setup per circuit, for both jobs: **schematic + setup** to simulate, **results + setup** to
+analyse. Opening a campaign folder pairs it with the setup of its schematic: the one open now,
+else the `.spica` next to the schematic, else the campaign's record as an unsaved setup (save it
+with `File > Save Setup As`). Error budget, specs, TF and report edits on the Results tab go into
+that setup (`*` in the title, saved with Ctrl+S), so one `.spica` analyses every campaign of the
+circuit, old ones included. The `campaign.spica` in a campaign folder is the record of how that
+campaign ran; it is used for the analysis only when the schematic is not found.
+
 ## Temperature and paired samples
 
 - **Default**: no `.temp`, the schematic decides.
