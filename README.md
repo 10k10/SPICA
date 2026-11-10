@@ -104,10 +104,21 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
   the run number.
 - **Live**: while a campaign runs the tab refreshes every second; untick *Live update* to freeze the
   snapshot while you analyse it.
-- **Report**: one self-contained HTML file: campaign summary, contents, distribution and
-  specification tables, then one section per measurement (key numbers, histogram, convergence,
-  temperature) and the transfer function. Charts are vector (SVG), sharp when zoomed or printed;
-  printing starts each measurement on a new page.
+- **Report**: one self-contained HTML file. *Results > Report...* asks what goes in:
+  - *Error budget only*: one page per error ticked, for checking a requirement: the requirement as
+    entered (definition, boundaries, % of full scale also in absolute terms, the k-sigma criterion),
+    the verdict and the calculated numbers in boxes (mean, sigma, mean ± k sigma, room on each side,
+    bell-shaped), the histogram, the error across the input and against temperature, what drives
+    it, and every condition;
+  - *Full analysis*: the error budget, summary tables and one section per measurement, with the
+    measurements and the sections (histogram, sensitivity, temperature, convergence, transfer
+    function) chosen by checkboxes.
+
+  The choice is saved with the setup and the campaign folder. The file is named after the
+  simulation, `<schematic>_report.html` or `<schematic>_error_budget.html`, in the campaign folder;
+  if that name is taken, a timestamp is added. Setup > *Write the report when it ends* saves it
+  automatically when the campaign ends. Charts are vector (SVG), sharp when zoomed or printed;
+  printing starts each measurement (and each error of the short report) on a new page.
 
 The statistics were checked against SciPy (Anderson-Darling, skewness, kurtosis, quantiles,
 Clopper-Pearson, normal tail ppm, regression standard errors).

@@ -32,6 +32,33 @@ namespace Spica.Core
     /// A SPICA setup (.spica): everything needed to reproduce a campaign's setup and its analysis.
     /// The random seed is stored too, but 0 means "new seed for every campaign".
     /// </summary>
+    public enum ReportKind { Full, Concise }
+
+    /// <summary>What the HTML report holds: the whole analysis, or only the error budget of some errors.</summary>
+    public sealed class ReportOptions
+    {
+        public ReportKind Kind = ReportKind.Full;
+        public bool Auto;                     // write the report into the campaign folder when the campaign ends
+        // left out (by name), so errors and measurements added later are reported by default
+        public List<string> ErrorsOff = new List<string>();
+        public List<string> MeasOff = new List<string>();
+        public bool Budget = true, Summary = true, Histogram = true, Sensitivity = true, Convergence = false, Temperature = true, Tf = true;
+
+        public bool HasError(string name) => !ErrorsOff.Contains(name, StringComparer.OrdinalIgnoreCase);
+        public bool HasMeas(string name) => !MeasOff.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+        public ReportOptions Clone()
+        {
+            var c = (ReportOptions)MemberwiseClone();
+            c.ErrorsOff = new List<string>(ErrorsOff);
+            c.MeasOff = new List<string>(MeasOff);
+            return c;
+        }
+
+        public static List<string> Split(string s) =>
+            (s ?? "").Split('|').Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     public sealed class SpicaProject
     {
         public string FilePath;               // where this setup was loaded from / saved to (null = never saved)
@@ -59,6 +86,7 @@ namespace Spica.Core
         public double DesignSigma = 6;        // error budget: mean +/- this many sigma must stay inside the budget
         public bool PessimisticSigma = true;  // use the 95 % upper bound of sigma
         public List<ErrorItem> Errors = new List<ErrorItem>();
+        public ReportOptions Report = new ReportOptions();
 
         public bool Dirty;
 
@@ -170,6 +198,14 @@ namespace Spica.Core
                 sb.AppendLine("Unit=" + e.Unit);
                 sb.AppendLine("FullScale=" + Num(e.FullScale));
             }
+            sb.AppendLine();
+            sb.AppendLine("[Report]");
+            sb.AppendLine("Kind=" + Report.Kind);
+            sb.AppendLine("Auto=" + (Report.Auto ? 1 : 0));
+            sb.AppendLine("ErrorsOff=" + string.Join(" | ", Report.ErrorsOff));
+            sb.AppendLine("MeasOff=" + string.Join(" | ", Report.MeasOff));
+            sb.AppendLine("Sections=" + string.Join(",", new[] { ("budget", Report.Budget), ("summary", Report.Summary), ("histogram", Report.Histogram),
+                ("sensitivity", Report.Sensitivity), ("convergence", Report.Convergence), ("temperature", Report.Temperature), ("tf", Report.Tf) }.Where(x => x.Item2).Select(x => x.Item1)));
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
             FilePath = path;
             Dirty = false;
@@ -266,6 +302,23 @@ namespace Spica.Core
                         case "fullscale": e.FullScale = ParseNum(val); break;
                     }
                 }
+                else if (section.Equals("Report", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ro = p.Report;
+                    switch (key.ToLowerInvariant())
+                    {
+                        case "kind": if (Enum.TryParse(val, true, out ReportKind rk)) ro.Kind = rk; break;
+                        case "auto": ro.Auto = B(); break;
+                        case "errorsoff": ro.ErrorsOff = ReportOptions.Split(val); break;
+                        case "measoff": ro.MeasOff = ReportOptions.Split(val); break;
+                        case "sections":
+                            var on = ParseNames(val.Replace(',', ' ')).Select(x => x.ToLowerInvariant()).ToList();
+                            ro.Budget = on.Contains("budget"); ro.Summary = on.Contains("summary"); ro.Histogram = on.Contains("histogram");
+                            ro.Sensitivity = on.Contains("sensitivity"); ro.Convergence = on.Contains("convergence");
+                            ro.Temperature = on.Contains("temperature"); ro.Tf = on.Contains("tf");
+                            break;
+                    }
+                }
                 else if (section.Equals("Stop", StringComparison.OrdinalIgnoreCase))
                 {
                     switch (key.ToLowerInvariant())
@@ -299,6 +352,7 @@ namespace Spica.Core
                 TempMin = TempMin, TempMax = TempMax, Dirty = Dirty,
                 WorstCase = WorstCase, WcSigma = WcSigma, Stop = Stop.Clone(),
                 DesignSigma = DesignSigma, PessimisticSigma = PessimisticSigma, Errors = Errors.Select(e => e.Clone()).ToList(),
+                Report = Report.Clone(),
                 Tf = new TfSetup { X = Tf.X, Y = Tf.Y, Theory = Tf.Theory, Budget = Tf.Budget, BudgetPercent = Tf.BudgetPercent, K = Tf.K },
             };
             foreach (var kv in Specs) c.Specs[kv.Key] = new SpecLimit { Lsl = kv.Value.Lsl, Usl = kv.Value.Usl };

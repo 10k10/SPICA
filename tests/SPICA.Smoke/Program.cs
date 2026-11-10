@@ -60,6 +60,24 @@ static class Program
             return 0;
         }
 
+        // SPICA.Smoke --reportform <png> <campaign folder> : capture Results > Report...
+        if (args.Length > 2 && args[0] == "--reportform")
+        {
+            var f = new Spica.UI.ReportForm(ResultSet.Load(args[2])) { StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen };
+            f.Shown += (s, e) =>
+            {
+                f.Refresh();
+                using (var bmp = new System.Drawing.Bitmap(f.Width, f.Height))
+                {
+                    f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f.Width, f.Height));
+                    bmp.Save(args[1]);
+                }
+                f.Close();
+            };
+            System.Windows.Forms.Application.Run(f);
+            return 0;
+        }
+
         // SPICA.Smoke --bench <runs> : cost of the live Results refresh and of the per-second results.csv
         if (args.Length > 1 && args[0] == "--bench") return Bench(int.Parse(args[1]));
 
@@ -116,8 +134,10 @@ static class Program
             {
                 var view = new Spica.UI.ResultsView();
                 view.SetData(rs, false);
-                view.WriteReport(args[2]);
-                Console.WriteLine("report: " + args[2]);
+                // "auto": as the end of a campaign does (campaign folder, <schematic>_report.html, timestamp when taken)
+                string path = args[2] == "auto" ? view.AutoReport() : args[2];
+                if (args[2] != "auto") view.WriteReport(path);
+                Console.WriteLine("report: " + path);
             }
             return 0;
         }

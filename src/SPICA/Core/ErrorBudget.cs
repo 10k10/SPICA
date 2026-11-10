@@ -100,6 +100,22 @@ namespace Spica.Core
             if (double.IsNaN(Upper)) return "≥ " + F(Lower);
             return F(Lower) + " .. " + F(Upper);
         }
+
+        /// <summary>The boundaries as entered, with what the % is taken of: "±0.5000 % of full scale (FS = 10.00)".</summary>
+        public string RequirementText()
+        {
+            if (!HasBounds) return "none";
+            string b = BoundsText();
+            if (Unit == BudgetUnit.PctFs) return $"{b} of full scale (FS = {ErrorBudget.Eng(FullScale)})";
+            if (Unit == BudgetUnit.PctReading) return $"{b} of reading ({(UsesTf && !ReferToInput ? "the ideal output" : X)})";
+            return b;
+        }
+
+        /// <summary>An error value in absolute units (NaN for % of reading: that depends on each run's reading).</summary>
+        public double ToAbs(double v) => Unit == BudgetUnit.Abs ? v : Unit == BudgetUnit.PctFs ? v * FullScale / 100 : double.NaN;
+
+        /// <summary>The quantity the absolute error is in: the input (referred to it) or the output.</summary>
+        public string AbsUnits() => UsesTf && ReferToInput ? $"input units ({X})" : $"units of {Y}";
     }
 
     /// <summary>

@@ -999,23 +999,64 @@ namespace Spica.UI
             BuildBudgetChart(chBud, r, cbBudChart.SelectedIndex, s);
 
             // what drives the spread in this condition
-            chBudSens.Clear();
-            chBudSens.Title = "What drives it";
-            if (rs.Params.Count > 0 || rs.Mode == TempMode.Random)
-            {
-                var set = new HashSet<ResultSet.Row>(s.Rows);
-                var rep = s == r.Worst && r.Sens != null ? r.Sens : SensitivityReport.Parameters(rs, ErrorBudget.Column(r.Item), 0, row => set.Contains(row));
-                var items = rep.Items.Where(x => !double.IsNaN(x.Share)).Take(8).ToList();
-                if (items.Count == 0) chBudSens.EmptyText = rep.Error ?? "Nothing to show.";
-                else
-                {
-                    chBudSens.YCategories = items.Select(x => Short(x.Name)).ToArray();
-                    chBudSens.XLabel = "share of the spread (%)";
-                    chBudSens.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(x => 100 * x.Share).ToArray(), Color = Win98Chart.Navy, InLegend = false });
-                }
-            }
-            else chBudSens.EmptyText = "No tolerances recorded for this campaign.";
+            BuildBudgetSens(chBudSens, r, s, 8);
             chBudSens.Invalidate();
+        }
+
+        /// <summary>Share of the spread of the error in one condition explained by each tolerance; the number of bars drawn.</summary>
+        int BuildBudgetSens(Win98Chart ch, ErrorResult r, ErrorSlice s, int top)
+        {
+            ch.Clear();
+            ch.Title = "What drives it";
+            if (rs.Params.Count == 0 && rs.Mode != TempMode.Random) { ch.EmptyText = "No tolerances recorded for this campaign."; return 0; }
+            var set = new HashSet<ResultSet.Row>(s.Rows);
+            var rep = s == r.Worst && r.Sens != null ? r.Sens : SensitivityReport.Parameters(rs, ErrorBudget.Column(r.Item), 0, row => set.Contains(row));
+            var items = rep.Items.Where(x => !double.IsNaN(x.Share)).Take(top).ToList();
+            if (items.Count == 0) { ch.EmptyText = rep.Error ?? "Nothing to show."; return 0; }
+            ch.YCategories = items.Select(x => Short(x.Name)).ToArray();
+            ch.XLabel = "share of the spread (%)";
+            ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(x => 100 * x.Share).ToArray(), Color = Win98Chart.Navy, InLegend = false });
+            return items.Count;
+        }
+
+        /// <summary>
+        /// The error against temperature: per corner the mean and the widest mean +/- k sigma of its input bands, the
+        /// extremes seen and the boundaries; with a random temperature, every run. False when there is nothing to show.
+        /// </summary>
+        bool BuildBudgetTempChart(Win98Chart ch, ErrorResult r)
+        {
+            ch.Clear();
+            if (r.Error != null || r.Slices.Count == 0 || rs.Mode == TempMode.Default) return false;
+            string unit = r.Item.Suffix().Trim();
+            ch.Title = r.Item.Name + " vs temperature";
+            ch.XLabel = "temperature (°C)"; ch.YLabel = "error" + (unit.Length > 0 ? " (%)" : "");
+            ch.YFromZero = false;
+            string k = r.K.ToString("0.#", Inv);
+            if (rs.Mode == TempMode.Corners)
+            {
+                var cs = r.Slices.Where(x => x.Corner >= 0 && x.Corner < rs.Corners.Count).GroupBy(x => x.Corner).OrderBy(g => rs.Corners[g.Key]).ToList();
+                if (cs.Count < 2) return false;
+                var t = cs.Select(g => rs.Corners[g.Key]).ToArray();
+                var all = cs.Select(g => g.SelectMany(x => x.E).ToArray()).ToArray();
+                ch.Add(new ChartSeries
+                {
+                    Kind = SeriesKind.ErrorBars, X = t, Y = all.Select(e => e.Average()).ToArray(),
+                    Lo = cs.Select(g => g.Min(x => x.Lo)).ToArray(), Hi = cs.Select(g => g.Max(x => x.Hi)).ToArray(),
+                    Color = Win98Chart.Navy, Label = $"mean, and mean +/- {k} sigma" + (cs.Any(g => g.Count() > 1) ? " (widest input band)" : ""),
+                });
+                ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = t, Y = all.Select(e => e.Min()).ToArray(), Color = Win98Chart.Teal, Dashed = true, Label = "min / max seen" });
+                ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = t, Y = all.Select(e => e.Max()).ToArray(), Color = Win98Chart.Teal, Dashed = true, InLegend = false });
+            }
+            else
+            {
+                var tx = r.Slices.SelectMany(x => x.Rows.Select(row => row.Temp)).ToArray();
+                var ey = r.Slices.SelectMany(x => x.E).ToArray();
+                if (tx.Length < 3 || tx.Max() <= tx.Min()) return false;
+                ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = tx, Y = ey, Color = Win98Chart.Navy, Size = 2, Label = "runs" });
+            }
+            var bounds = new[] { r.Item.Lower, r.Item.Upper }.Where(v => !double.IsNaN(v)).ToArray();
+            if (bounds.Length > 0) ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = bounds, Color = Win98Chart.Red, Size = 2, Label = "boundaries" });
+            return true;
         }
 
         void BuildBudgetChart(Win98Chart ch, ErrorResult r, int view, ErrorSlice slice = null)
@@ -2005,13 +2046,22 @@ namespace Spica.UI
         public void ExportReport()
         {
             if (rs == null) return;
-            using (var d = new SaveFileDialog { Title = "Save Analysis Report", Filter = "HTML report (*.html)|*.html", FileName = "SPICA_report.html", InitialDirectory = rs.Folder ?? "", AutoUpgradeEnabled = false })
+            ReportOptions o;
+            using (var f = new ReportForm(rs))
+            {
+                if (f.ShowDialog(FindForm()) != DialogResult.OK || f.Options == null) return;
+                o = f.Options;
+            }
+            rs.Setup.Report = o;      // kept with the setup (and the campaign folder), so the next report and the auto report match
+            NotifySetup();
+            string path = ReportPath(o);
+            using (var d = new SaveFileDialog { Title = "Save Analysis Report", Filter = "HTML report (*.html)|*.html", FileName = Path.GetFileName(path), InitialDirectory = Path.GetDirectoryName(path), AutoUpgradeEnabled = false })
             {
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
                 Cursor = Cursors.WaitCursor;
                 try
                 {
-                    File.WriteAllText(d.FileName, BuildReport(), new UTF8Encoding(false));
+                    File.WriteAllText(d.FileName, BuildReport(o), new UTF8Encoding(false));
                     System.Diagnostics.Process.Start(d.FileName);
                 }
                 catch (Exception ex) { Win98MessageBox.Show(FindForm(), "Could not write the report:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); }
@@ -2019,23 +2069,54 @@ namespace Spica.UI
             }
         }
 
-        /// <summary>Writes the HTML report without dialogs (also used by tests).</summary>
-        public void WriteReport(string path) => File.WriteAllText(path, BuildReport(), new UTF8Encoding(false));
+        /// <summary>Writes the report as set in the setup into the campaign folder; returns its path.</summary>
+        public string AutoReport()
+        {
+            string path = ReportPath(rs.Setup.Report);
+            WriteReport(path);
+            return path;
+        }
 
-        string BuildReport()
+        /// <summary>Writes the HTML report without dialogs (also used by tests).</summary>
+        public void WriteReport(string path, ReportOptions o = null) => File.WriteAllText(path, BuildReport(o ?? rs.Setup.Report), new UTF8Encoding(false));
+
+        /// <summary>
+        /// "&lt;simulation&gt;_report.html" (or _error_budget for the short report) in the campaign folder; when that file
+        /// already exists, a timestamp is added so no report is overwritten.
+        /// </summary>
+        string ReportPath(ReportOptions o)
+        {
+            string name = !string.IsNullOrEmpty(rs.Setup.Schematic) ? Path.GetFileNameWithoutExtension(rs.Setup.Schematic) : rs.Title;
+            foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            string dir = !string.IsNullOrEmpty(rs.Folder) && Directory.Exists(rs.Folder) ? rs.Folder : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            string stem = name + (o.Kind == ReportKind.Concise ? "_error_budget" : "_report");
+            string path = Path.Combine(dir, stem + ".html");
+            if (File.Exists(path)) path = Path.Combine(dir, stem + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss", Inv) + ".html");
+            return path;
+        }
+
+        string BuildReport(ReportOptions o)
         {
             string H(string s) => WebUtility.HtmlEncode(s ?? "");
             string Fig(Win98Chart c, string caption, int w = 760, int h = 340) =>
                 $"<figure>{c.ToSvg(w, h)}" + (caption != null ? $"<figcaption>{H(caption)}</figcaption>" : "") + "</figure>";
             string Pre(string s) => string.IsNullOrWhiteSpace(s) ? "" : "<pre>" + H(s.TrimEnd()) + "</pre>";
-            string Card(string label, string value) => $"<div class=\"card\"><span>{H(label)}</span><b>{H(value)}</b></div>";
+            string Card(string label, string value, string sub = null, string color = null, string back = null) =>
+                $"<div class=\"card\"{(back != null ? $" style=\"background:{back}\"" : "")}><span>{H(label)}</span><b{(color != null ? $" style=\"color:{color}\"" : "")}>{H(value)}</b>" +
+                (string.IsNullOrEmpty(sub) ? "" : $"<i>{H(sub)}</i>") + "</div>";
 
             var st = rs.Setup;
+            bool concise = o.Kind == ReportKind.Concise;
             var groups = rs.GroupNames();
-            bool anySpec = rs.Meas.Any(m => st.Spec(m)?.IsSet == true);
+            var meas = concise ? new List<string>() : rs.Meas.Where(o.HasMeas).ToList();
+            var errItems = st.Errors.Where(e => o.HasError(e.Name)).ToList();
+            bool hasBudget = errItems.Count > 0 && (concise || o.Budget);
+            bool showSummary = !concise && o.Summary && meas.Count > 0;
+            bool anySpec = meas.Any(m => st.Spec(m)?.IsSet == true);
             var tf = st.Tf;
-            bool hasTf = tf.X.Length > 0 && tf.Y.Length > 0 && rs.Col(tf.Y) >= 0;
+            bool hasTf = !concise && o.Tf && tf.X.Length > 0 && tf.Y.Length > 0 && rs.Col(tf.Y) >= 0;
             string schematic = string.IsNullOrEmpty(st.Schematic) ? "" : Path.GetFileName(st.Schematic);
+            string kk = st.DesignSigma.ToString("0.#", Inv);
 
             var sb = new StringBuilder();
             sb.Append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
@@ -2052,21 +2133,26 @@ namespace Spica.UI
               .Append("th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}")
               .Append("th{background:var(--soft);font-weight:600;border-bottom:2px solid #c4c4c4}td:first-child,th:first-child{text-align:left}")
               .Append("table.kv{width:auto}table.kv td{text-align:left;border:none;padding:2px 14px 2px 0}table.kv td:first-child{color:var(--muted)}")
-              .Append(".wide{overflow-x:auto}.note{color:var(--muted);font-size:12px;margin:2px 0 10px}")
+              .Append(".req{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--soft);padding:8px 14px;margin:8px 0 12px}")
+              .Append(".req .t{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:2px}")
+              .Append(".req table.kv td{white-space:normal}.req table.kv td:last-child{font-weight:600}")
+              .Append(".verdict{font-size:14px;font-weight:600;margin:6px 0 2px}")
+              .Append(".wide{overflow-x:auto}.note{color:var(--muted);font-size:12px;margin:2px 0 10px}ul.notes{margin:6px 0 10px;padding-left:20px;color:#333}")
               .Append("figure{margin:12px 0 6px}figure svg{display:block;width:100%;height:auto;border:1px solid var(--line)}")
               .Append("figcaption{color:var(--muted);font-size:12px;margin-top:5px}")
               .Append("pre{background:var(--soft);border-left:3px solid var(--accent);padding:9px 13px;margin:8px 0;font:12px/1.45 Consolas,'Lucida Console',monospace;white-space:pre-wrap}")
               .Append("nav{background:var(--soft);padding:10px 16px;margin:18px 0}nav b{font-size:12px}nav ol{columns:2;margin:4px 0 0;padding-left:20px}nav a{color:var(--accent);text-decoration:none}")
               .Append(".cards{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 4px}.card{border:1px solid var(--line);border-top:3px solid var(--accent);padding:6px 12px;min-width:120px}")
               .Append(".card span{display:block;color:var(--muted);font-size:11px}.card b{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}")
+              .Append(".card i{display:block;color:var(--muted);font-size:11px;font-style:normal}")
               .Append("footer{margin-top:36px;padding-top:8px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}")
               .Append("@media print{body{background:#fff}.page{box-shadow:none;margin:0;max-width:none;padding:0}nav{display:none}")
-              .Append("section.meas{break-before:page}figure,pre,table,.cards{break-inside:avoid}}")
+              .Append("section.meas" + (concise ? ",section.err+section.err" : "") + "{break-before:page}figure,pre,table,.cards,.req{break-inside:avoid}}")
               .Append("</style></head><body><div class=\"page\">");
 
             // ---------------------------------------------------------------- header + campaign
             sb.Append("<header><div class=\"brand\">SPICA - Spice Parallel Instancer Circuit Analysis</div>")
-              .Append($"<h1>Monte Carlo report: {H(schematic.Length > 0 ? schematic : rs.Title)}</h1>")
+              .Append($"<h1>{(concise ? "Error budget" : "Monte Carlo report")}: {H(schematic.Length > 0 ? schematic : rs.Title)}</h1>")
               .Append($"<div class=\"sub\">Campaign {H(rs.Title)} &middot; generated {DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv)} by SPICA {H(MainForm.AppVersion)}</div></header>");
 
             sb.Append("<table class=\"kv\">");
@@ -2077,113 +2163,119 @@ namespace Spica.UI
             Row("Temperature", rs.Mode == TempMode.Corners ? "corners " + string.Join(", ", rs.Corners.Select(t => t.ToString("0.###", Inv))) + " °C"
                               : rs.Mode == TempMode.Random ? "random per run" : "schematic default");
             Row("Sampling", rs.Paired ? $"SPICA paired generator, seed {rs.Seed}" : "LTspice mc()");
+            if (rs.Params.Count > 0) Row("Tolerances", $"{rs.Params.Count} random parameters");
             sb.Append("</table>");
 
-            bool hasBudget = st.Errors.Count > 0;
-            sb.Append("<nav><b>Contents</b><ol>");
-            if (hasBudget) sb.Append("<li><a href=\"#budget\">Error budget</a></li>");
-            sb.Append("<li><a href=\"#summary\">Summary</a></li>");
-            for (int i = 0; i < rs.Meas.Count; i++) sb.Append($"<li><a href=\"#m{i}\">{H(rs.Meas[i])}</a></li>");
-            if (hasTf) sb.Append("<li><a href=\"#tf\">Transfer function</a></li>");
-            sb.Append("</ol></nav>");
+            ErrorBudget.Register(rs, st.Errors);
+            var res = hasBudget ? errItems.Select(e => ErrorBudget.Compute(rs, e, 0, st.DesignSigma, st.PessimisticSigma)).ToList() : new List<ErrorResult>();
+
+            if (!concise || res.Count > 1)
+            {
+                sb.Append("<nav><b>Contents</b><ol>");
+                if (hasBudget) sb.Append("<li><a href=\"#budget\">Error budget</a></li>");
+                for (int j = 0; j < res.Count; j++) sb.Append($"<li><a href=\"#e{j}\">{(concise ? "" : "&nbsp;&nbsp;")}{H(res[j].Item.Name)}</a></li>");
+                if (showSummary) sb.Append("<li><a href=\"#summary\">Summary</a></li>");
+                foreach (var m in meas) sb.Append($"<li><a href=\"#m{rs.Meas.IndexOf(m)}\">{H(m)}</a></li>");
+                if (hasTf) sb.Append("<li><a href=\"#tf\">Transfer function</a></li>");
+                sb.Append("</ol></nav>");
+            }
 
             // ---------------------------------------------------------------- error budget
             if (hasBudget)
             {
-                ErrorBudget.Register(rs, st.Errors);
-                string k = st.DesignSigma.ToString("0.#", Inv);
-                var res = st.Errors.Select(e => ErrorBudget.Compute(rs, e, 0, st.DesignSigma, st.PessimisticSigma)).ToList();
                 int pass = res.Count(r => r.Verdict == "PASS"), fail = res.Count(r => r.Verdict == "FAIL"), check = res.Count(r => r.Verdict == "CHECK");
                 sb.Append("<h2 id=\"budget\">Error budget</h2>");
-                sb.Append("<div class=\"cards\">").Append(Card("Criterion", $"mean ± {k} σ inside the boundaries")).Append(Card("Pass", pass.ToString(Inv)))
-                  .Append(Card("Fail", fail.ToString(Inv))).Append(Card("Check (not normal)", check.ToString(Inv))).Append("</div>");
-                sb.Append("<div class=\"wide\"><table><tr>");
-                foreach (var h in new[] { "Error", "Verdict", "Margin", $"Mean ± {k}σ", "Boundaries", "Mean", "Sigma", "Normality p", "Worst condition", "n", "Definition" })
-                    sb.Append($"<th>{H(h)}</th>");
-                sb.Append("</tr>");
-                foreach (var r in res)
-                {
-                    string u(double v) => ErrorBudget.Fmt(v, r.Item);
-                    string color = r.Verdict == "PASS" ? "#007a00" : r.Verdict == "FAIL" ? "#c00000" : r.Verdict == "CHECK" ? "#8a6d00" : "inherit";
-                    var cells = r.Error != null ? new[] { r.Item.Name, "ERROR", "", r.Error, "", "", "", "", "", "", r.Item.Definition() } : new[]
-                    {
-                        r.Item.Name, r.Verdict, r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "", $"{u(r.Lo)} .. {u(r.Hi)}", r.Item.BoundsText(),
-                        u(r.D.Mean), u(r.Sigma), MeasStats.P(r.AdP), r.Slices.Count > 1 ? r.Worst.Label : "", r.N.ToString(Inv), r.Item.Definition(),
-                    };
-                    sb.Append("<tr>").Append(string.Concat(cells.Select((c, j) => j == 1 ? $"<td style=\"color:{color};font-weight:600;text-align:left\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
-                }
-                sb.Append("</table></div>");
-                sb.Append($"<p class=\"note\">PASS: mean ± {k} σ inside the boundaries and the error bell-shaped (Anderson-Darling p ≥ {MeasStats.NormalAlpha.ToString("0.###", Inv)}). " +
-                          $"CHECK: inside on paper, but not bell-shaped, so the {k} σ extrapolation is not valid. Sigma: " +
-                          (st.PessimisticSigma ? "95 % upper confidence bound." : "sample standard deviation.") +
-                          " Each error is judged per temperature and input band; the figures are those of the worst condition.</p>");
-                using (var cb = new Win98Chart())
-                    foreach (var r in res)
-                    {
-                        sb.Append($"<h3>{H(r.Item.Name)}</h3>");
-                        if (r.Error == null)
-                        {
-                            BuildBudgetChart(cb, r, 0);
-                            sb.Append(Fig(cb, $"Error of {r.Item.Name} in the worst condition ({r.D.N} runs), with mean ± {k} σ and the boundaries.", 760, 280));
-                            if (r.InputVaries) { BuildBudgetChart(cb, r, 1); sb.Append(Fig(cb, "Error across the input range.", 760, 240)); }
-                        }
-                        sb.Append(Pre(r.Summary()));
-                    }
-            }
-
-            // ---------------------------------------------------------------- summary tables
-            sb.Append("<h2 id=\"summary\">Summary</h2>");
-            for (int g = 0; g < groups.Count; g++)
-            {
-                if (groups.Count > 1) sb.Append($"<h3>{H(groups[g])}</h3>");
-                var stats = rs.Meas.Select(m => MeasStats.Of(m, groups[g], rs.Values(m, g), st.Spec(m))).ToList();
-
-                sb.Append("<div class=\"wide\"><table><tr>");
-                foreach (var h in new[] { "Measurement", "n", "Mean", "Std dev", "Min", "Max", "Median", "P0.135 %", "P99.865 %", "Skew", "Ex. kurt", "Normality p" })
-                    sb.Append($"<th>{H(h)}</th>");
-                sb.Append("</tr>");
-                foreach (var s in stats)
-                {
-                    var cells = new[] { s.Meas, s.D.N.ToString(Inv), F(s.D.Mean), F(s.D.Std), F(s.D.Min), F(s.D.Max), F(s.D.Median), F(s.P00135), F(s.P99865),
-                        Num(s.D.Skew, "0.000"), Num(s.D.ExKurt, "0.000"), MeasStats.P(s.AdP) };
-                    sb.Append("<tr>").Append(string.Concat(cells.Select(c => $"<td>{H(c)}</td>"))).Append("</tr>");
-                }
-                sb.Append("</table></div>");
-                sb.Append("<p class=\"note\">P0.135 % and P99.865 % bound the central 99.73 % (&plusmn;3&sigma; for a normal distribution). Normality p is the Anderson-Darling test.</p>");
-
-                if (anySpec)
+                sb.Append("<div class=\"cards\">").Append(Card("Criterion", $"mean ± {kk} σ inside the boundaries", "in every temperature and input band"))
+                  .Append(Card("Pass", pass.ToString(Inv), null, pass > 0 ? "#007a00" : null)).Append(Card("Fail", fail.ToString(Inv), null, fail > 0 ? "#c00000" : null))
+                  .Append(Card("Check (not normal)", check.ToString(Inv), null, check > 0 ? "#8a6d00" : null)).Append("</div>");
+                if (res.Count > 1 || !concise)
                 {
                     sb.Append("<div class=\"wide\"><table><tr>");
-                    foreach (var h in new[] { "Measurement", "LSL", "USL", "Yield", "Yield 95 % CI", "Cpk", "Predicted fails" })
+                    foreach (var h in new[] { "Error", "Verdict", "Margin", $"Mean ± {kk}σ", "Boundaries", "Mean", "Sigma", "Normality p", "Worst condition", "n" })
                         sb.Append($"<th>{H(h)}</th>");
                     sb.Append("</tr>");
-                    foreach (var s in stats.Where(x => x.Spec?.IsSet == true))
+                    foreach (var r in res)
                     {
-                        var cells = new[] { s.Meas, F(s.Spec.Lsl), F(s.Spec.Usl), MeasStats.Pct(s.Cap.Yield), $"{MeasStats.Pct(s.Cap.YieldLo)} .. {MeasStats.Pct(s.Cap.YieldHi)}",
-                            Num(s.Cap.Cpk, "0.000"), s.NormalOk ? MeasStats.Ppm(s.Cap.PredictedPpm) : "not normal" };
-                        sb.Append("<tr>").Append(string.Concat(cells.Select(c => $"<td>{H(c)}</td>"))).Append("</tr>");
+                        string u(double v) => ErrorBudget.Fmt(v, r.Item);
+                        var cells = r.Error != null ? new[] { r.Item.Name, "ERROR", "", r.Error, "", "", "", "", "", "" } : new[]
+                        {
+                            r.Item.Name, r.Verdict, r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "", $"{u(r.Lo)} .. {u(r.Hi)}", r.Item.BoundsText(),
+                            u(r.D.Mean), u(r.Sigma), MeasStats.P(r.AdP), r.Slices.Count > 1 ? r.Worst.Label : "", r.N.ToString(Inv),
+                        };
+                        sb.Append("<tr>").Append(string.Concat(cells.Select((c, j) => j == 1 ? $"<td style=\"color:{HtmlVerdict(r.Verdict)};font-weight:600;text-align:left\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
                     }
                     sb.Append("</table></div>");
                 }
-                if (rs.Mode != TempMode.Corners) break;   // other modes have a single group
+                sb.Append($"<p class=\"note\">PASS: mean ± {kk} σ inside the boundaries in every condition, the error bell-shaped (Anderson-Darling p ≥ {MeasStats.NormalAlpha.ToString("0.###", Inv)}) " +
+                          $"or with tails no longer than a normal's. FAIL: a simulated unit is outside, or mean ± {kk} σ crosses a boundary. " +
+                          $"CHECK: not bell-shaped, so the {kk} σ extrapolation cannot decide. Sigma: " +
+                          (st.PessimisticSigma ? "95 % upper confidence bound." : "sample standard deviation.") + "</p>");
+
+                using (var cb = new Win98Chart())
+                using (var cs = new Win98Chart())
+                    for (int j = 0; j < res.Count; j++)
+                        BudgetBlock(sb, res[j], j, cb, cs, concise, H, Fig, Card);
+            }
+
+            // ---------------------------------------------------------------- summary tables
+            if (showSummary)
+            {
+                sb.Append("<h2 id=\"summary\">Summary</h2>");
+                for (int g = 0; g < groups.Count; g++)
+                {
+                    if (groups.Count > 1) sb.Append($"<h3>{H(groups[g])}</h3>");
+                    var stats = meas.Select(m => MeasStats.Of(m, groups[g], rs.Values(m, g), st.Spec(m))).ToList();
+
+                    sb.Append("<div class=\"wide\"><table><tr>");
+                    foreach (var h in new[] { "Measurement", "n", "Mean", "Std dev", "Min", "Max", "Median", "P0.135 %", "P99.865 %", "Skew", "Ex. kurt", "Normality p" })
+                        sb.Append($"<th>{H(h)}</th>");
+                    sb.Append("</tr>");
+                    foreach (var s in stats)
+                    {
+                        var cells = new[] { s.Meas, s.D.N.ToString(Inv), F(s.D.Mean), F(s.D.Std), F(s.D.Min), F(s.D.Max), F(s.D.Median), F(s.P00135), F(s.P99865),
+                            Num(s.D.Skew, "0.000"), Num(s.D.ExKurt, "0.000"), MeasStats.P(s.AdP) };
+                        sb.Append("<tr>").Append(string.Concat(cells.Select(c => $"<td>{H(c)}</td>"))).Append("</tr>");
+                    }
+                    sb.Append("</table></div>");
+                    sb.Append("<p class=\"note\">P0.135 % and P99.865 % bound the central 99.73 % (&plusmn;3&sigma; for a normal distribution). Normality p is the Anderson-Darling test.</p>");
+
+                    if (anySpec)
+                    {
+                        sb.Append("<div class=\"wide\"><table><tr>");
+                        foreach (var h in new[] { "Measurement", "LSL", "USL", "Yield", "Yield 95 % CI", "Cpk", "Predicted fails" })
+                            sb.Append($"<th>{H(h)}</th>");
+                        sb.Append("</tr>");
+                        foreach (var s in stats.Where(x => x.Spec?.IsSet == true))
+                        {
+                            var cells = new[] { s.Meas, F(s.Spec.Lsl), F(s.Spec.Usl), MeasStats.Pct(s.Cap.Yield), $"{MeasStats.Pct(s.Cap.YieldLo)} .. {MeasStats.Pct(s.Cap.YieldHi)}",
+                                Num(s.Cap.Cpk, "0.000"), s.NormalOk ? MeasStats.Ppm(s.Cap.PredictedPpm) : "not normal" };
+                            sb.Append("<tr>").Append(string.Concat(cells.Select(c => $"<td>{H(c)}</td>"))).Append("</tr>");
+                        }
+                        sb.Append("</table></div>");
+                    }
+                    if (rs.Mode != TempMode.Corners) break;   // other modes have a single group
+                }
             }
 
             // ---------------------------------------------------------------- one section per measurement
             using (var c1 = new Win98Chart())
             using (var c2 = new Win98Chart())
             {
-                for (int i = 0; i < rs.Meas.Count; i++)
+                foreach (var m in meas)
                 {
-                    string m = rs.Meas[i];
-                    sb.Append($"<section class=\"meas\"><h2 id=\"m{i}\">{H(m)}</h2>");
+                    sb.Append($"<section class=\"meas\"><h2 id=\"m{rs.Meas.IndexOf(m)}\">{H(m)}</h2>");
                     var s = BuildHistogram(c1, m, 0, true);
-                    sb.Append("<div class=\"cards\">").Append(Card("Runs", s.D.N.ToString(Inv))).Append(Card("Mean", Win98Chart.Fmt(s.D.Mean))).Append(Card("Std dev", Win98Chart.Fmt(s.D.Std)));
+                    sb.Append("<div class=\"cards\">").Append(Card("Runs", s.D.N.ToString(Inv))).Append(Card("Mean", Win98Chart.Fmt(s.D.Mean))).Append(Card("Std dev", Win98Chart.Fmt(s.D.Std)))
+                      .Append(Card("Bell-shaped", s.NormalOk ? "yes" : "no", "p = " + MeasStats.P(s.AdP)));
                     if (s.Spec?.IsSet == true) sb.Append(Card("Yield", MeasStats.Pct(s.Cap.Yield))).Append(Card("Cpk", Num(s.Cap.Cpk, "0.000")));
                     sb.Append("</div>");
-                    sb.Append(Fig(c1, $"Distribution of {m} over {s.D.N} runs" + (s.Spec?.IsSet == true ? ", with the specification limits." : ".")));
-                    sb.Append(Pre(s.Narrative()));
+                    if (o.Histogram)
+                    {
+                        sb.Append(Fig(c1, $"Distribution of {m} over {s.D.N} runs" + (s.Spec?.IsSet == true ? ", with the specification limits." : ".")));
+                        sb.Append(Pre(s.Narrative()));
+                    }
 
-                    if (rs.Params.Count > 0)
+                    if (o.Sensitivity && rs.Params.Count > 0)
                     {
                         // what drives the spread: share of variance per random parameter
                         var sr = BuildSensitivity(c1, m, 0, true, false, 12);
@@ -2199,17 +2291,20 @@ namespace Spica.UI
                         }
                     }
 
-                    sb.Append("<h3>Convergence</h3>");
-                    string conv = BuildConvergence(c1, c2, m, 0);
-                    sb.Append(Fig(c1, null, 760, 240)).Append(Fig(c2, null, 760, 240));
-                    sb.Append(Pre(conv));
+                    if (o.Convergence)
+                    {
+                        sb.Append("<h3>Convergence</h3>");
+                        string conv = BuildConvergence(c1, c2, m, 0);
+                        sb.Append(Fig(c1, null, 760, 240)).Append(Fig(c2, null, 760, 240));
+                        sb.Append(Pre(conv));
+                    }
 
-                    if (rs.Mode == TempMode.Corners)
+                    if (o.Temperature && rs.Mode == TempMode.Corners)
                     {
                         string t = BuildTempCorners(c1, new ListView(), m);
                         sb.Append("<h3>Temperature</h3>").Append(Fig(c1, $"{m} at each temperature corner.")).Append(Pre(t));
                     }
-                    else if (rs.Mode == TempMode.Random)
+                    else if (o.Temperature && rs.Mode == TempMode.Random)
                     {
                         string t = BuildTempRandom(c1, new ListView(), m);
                         sb.Append("<h3>Temperature</h3>").Append(Fig(c1, $"{m} against the random temperature of each run.")).Append(Pre(t));
@@ -2233,6 +2328,106 @@ namespace Spica.UI
             sb.Append($"<footer>Generated by SPICA {H(MainForm.AppVersion)} - Spice Parallel Instancer Circuit Analysis. ")
               .Append("Figures are vector graphics (SVG): they stay sharp when zoomed or printed.</footer></div></body></html>");
             return sb.ToString();
+        }
+
+        static string HtmlVerdict(string v) => v == "PASS" ? "#007a00" : v == "FAIL" ? "#c00000" : v == "CHECK" ? "#8a6d00" : "inherit";
+
+        /// <summary>
+        /// One error in the report: the requirement as entered (for a reviewer to check), the figures calculated from
+        /// it, the histogram, the error across the input and temperature, what drives it and every condition.
+        /// </summary>
+        void BudgetBlock(StringBuilder sb, ErrorResult r, int j, Win98Chart cb, Win98Chart cs, bool concise,
+                         Func<string, string> H, Func<Win98Chart, string, int, int, string> Fig, Func<string, string, string, string, string, string> Card)
+        {
+            var it = r.Item;
+            string k = r.K.ToString("0.#", Inv);
+            string u(double v) => ErrorBudget.Fmt(v, it);
+            string abs(double v) => ErrorBudget.Eng(it.ToAbs(v));
+            bool pctFs = it.Unit == BudgetUnit.PctFs;
+            string hx = concise ? "h2" : "h3";
+
+            sb.Append($"<section class=\"err\"><{hx} id=\"e{j}\">{H(it.Name)}</{hx}>");
+
+            // the requirement, as entered
+            sb.Append("<div class=\"req\"><div class=\"t\">Requirement (as entered)</div><table class=\"kv\">");
+            void Req(string a, string b) => sb.Append($"<tr><td>{H(a)}</td><td>{H(b)}</td></tr>");
+            Req("Error", it.UsesTf ? "error = " + it.Definition() : $"{it.Y}, computed by a .meas in LTspice");
+            if (it.UsesTf) Req("Referred to", it.ReferToInput ? $"the input: divided by the ideal gain, in units of {it.X}" : $"the output, in units of {it.Y}");
+            Req("Boundaries", it.RequirementText());
+            if (pctFs && it.HasBounds)
+            {
+                string b = it.Symmetric && !double.IsNaN(it.Upper) ? "±" + abs(it.Upper)
+                         : double.IsNaN(it.Lower) ? "≤ " + abs(it.Upper) : double.IsNaN(it.Upper) ? "≥ " + abs(it.Lower) : abs(it.Lower) + " .. " + abs(it.Upper);
+                Req("In absolute terms", $"{b} ({it.AbsUnits()})");
+            }
+            else if (it.Unit == BudgetUnit.PctReading) Req("In absolute terms", "depends on the reading of each run");
+            Req("Criterion", $"mean ± {k} σ inside the boundaries in every condition ({(r.Slices.Count > 1 ? r.Slices.Count + " conditions: temperature × input band" : "one condition")}); " +
+                             (r.Pessimistic ? "σ = 95 % upper confidence bound" : "σ = sample standard deviation"));
+            Req("Shape test", $"Anderson-Darling, bell-shaped when p ≥ {MeasStats.NormalAlpha.ToString("0.###", Inv)}");
+            sb.Append("</table></div>");
+
+            if (r.Error != null)
+            {
+                sb.Append($"<p class=\"verdict\" style=\"color:#c00000\">Cannot be evaluated: {H(r.Error)}</p></section>");
+                return;
+            }
+
+            // what was calculated
+            var w = r.Worst;
+            string vc = HtmlVerdict(r.Verdict);
+            string vb = r.Verdict == "PASS" ? "#eef8ee" : r.Verdict == "FAIL" ? "#fbeeee" : r.Verdict == "CHECK" ? "#fbf6e6" : null;
+            string Side(double sig, double m) => double.IsNaN(m) ? "open" : double.IsNaN(sig) ? "-" : sig.ToString("0.0", Inv) + " σ";
+            string SideSub(double m) => double.IsNaN(m) ? "no boundary" : m >= 0 ? $"needs {k} σ: {u(m)} to spare" : $"needs {k} σ: short by {u(-m)}";
+            string SideColor(double m) => double.IsNaN(m) ? null : m >= 0 ? "#007a00" : "#c00000";
+            sb.Append("<div class=\"cards\">")
+              .Append(Card("Verdict", r.Verdict == "-" ? "no boundaries" : r.Verdict, r.Verdict == "-" ? null : $"at {k} σ" + (r.Slices.Count > 1 ? ", all conditions" : ""), vc, vb))
+              .Append(Card("Margin", r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "-", "of half the allowed range", null, null))
+              .Append(Card("Mean", u(w.D.Mean), pctFs ? "= " + abs(w.D.Mean) : null, null, null))
+              .Append(Card("Sigma", u(w.Sigma), r.Pessimistic ? "95 % upper bound" : "sample", null, null))
+              .Append(Card($"Mean ± {k} σ", $"{u(w.Lo)} .. {u(w.Hi)}", pctFs ? $"= {abs(w.Lo)} .. {abs(w.Hi)}" : null, null, null))
+              .Append(Card("Low side", Side(w.SigmasLo, w.MarginLo), SideSub(w.MarginLo), SideColor(w.MarginLo), null))
+              .Append(Card("High side", Side(w.SigmasHi, w.MarginHi), SideSub(w.MarginHi), SideColor(w.MarginHi), null))
+              .Append(Card("Bell-shaped", w.Normal ? "yes" : w.TailsOk ? "shorter tails" : "no", "p = " + MeasStats.P(w.AdP), w.Normal ? "#007a00" : w.TailsOk ? "#6b6b00" : "#8a0000", null))
+              .Append(Card("Seen", $"{u(w.D.Min)} .. {u(w.D.Max)}", $"{r.Outside} of {r.N} units outside", r.Outside > 0 ? "#c00000" : null, null))
+              .Append(Card("Runs", r.N.ToString(Inv), r.Slices.Count > 1 ? $"worst: {w.Label} ({w.D.N})" : null, null, null))
+              .Append("</div>");
+            sb.Append($"<p class=\"verdict\" style=\"color:{vc}\">{H((r.Verdict == "-" ? "" : r.Verdict + ": ") + r.VerdictText())}</p>");
+
+            // figures
+            BuildBudgetChart(cb, r, 0);
+            sb.Append(Fig(cb, $"Error of {it.Name}" + (r.Slices.Count > 1 ? $" in the worst condition, {w.Label} ({w.D.N} runs)" : $" ({w.D.N} runs)") +
+                              $", with the normal fit, mean ± {k} σ and the boundaries.", 760, 300));
+            if (r.InputVaries) { BuildBudgetChart(cb, r, 1); sb.Append(Fig(cb, $"Error across the input range ({it.X}), with mean ± {k} σ per input band.", 760, 260)); }
+            if (BuildBudgetTempChart(cb, r))
+                sb.Append(Fig(cb, rs.Mode == TempMode.Corners ? $"Error at each temperature corner: mean, mean ± {k} σ and the extremes seen." : "Error against the random temperature of each run.", 760, 260));
+            int bars = BuildBudgetSens(cs, r, w, 10);
+            if (bars > 0)
+                sb.Append(Fig(cs, $"What drives the error{(r.Slices.Count > 1 ? " in the worst condition" : "")}: share of its variance explained by each tolerance" +
+                                  (r.Sens != null && r.Sens.Error == null ? $" (linear model, R² = {(100 * r.Sens.R2).ToString("0.0", Inv)} %)." : "."), 760, 70 + 24 * bars));
+
+            // every condition
+            if (r.Slices.Count > 1)
+            {
+                sb.Append("<h3>Every condition</h3><div class=\"wide\"><table><tr>");
+                foreach (var h in new[] { "Condition", "n", "Mean", "Sigma", $"Mean ± {k}σ", "Low side", "High side", "Margin", "Bell-shaped", "Verdict" })
+                    sb.Append($"<th>{H(h)}</th>");
+                sb.Append("</tr>");
+                foreach (var s in r.Slices)
+                {
+                    var cells = new[]
+                    {
+                        s.Label, s.D.N.ToString(Inv), u(s.D.Mean), u(s.Sigma), $"{u(s.Lo)} .. {u(s.Hi)}", Side(s.SigmasLo, s.MarginLo), Side(s.SigmasHi, s.MarginHi),
+                        r.HasBudget ? r.SlicePct(s).ToString("0", Inv) + " %" : "", s.Normal ? "yes" : s.TailsOk ? "shorter tails" : "no", s.Verdict,
+                    };
+                    sb.Append(s == w ? "<tr style=\"background:#fff8d8\">" : "<tr>")
+                      .Append(string.Concat(cells.Select((c, i) => i == 9 ? $"<td style=\"color:{HtmlVerdict(c)};font-weight:600\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
+                }
+                sb.Append("</table></div><p class=\"note\">Highlighted: the condition the figures above refer to. Low / high side: how many σ the boundary is from the mean.</p>");
+            }
+
+            var notes = r.Notes();
+            if (notes.Count > 0) sb.Append("<ul class=\"notes\">").Append(string.Concat(notes.Select(n => $"<li>{H(n)}</li>"))).Append("</ul>");
+            sb.Append("</section>");
         }
     }
 }

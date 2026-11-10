@@ -42,7 +42,7 @@ namespace Spica.UI
         // setup page
         Win98TextField txtAsc, txtLtspice, txtRuns, txtOut, txtInstances, txtThreads, txtFilter, txtSeed;
         Win98TextField txtCorners, txtTempMin, txtTempMax;
-        Win98CheckBox chkReseed, chkKeepRaw, chkPaired;
+        Win98CheckBox chkReseed, chkKeepRaw, chkPaired, chkAutoReport;
         Win98RadioButton rbAuto, rbManual, rbSaveSel, rbSaveAll, rbTempDefault, rbTempCorners, rbTempRandom;
         CheckedListBox lstSignals;
         Label lblSignalCount, lblHwHint;
@@ -292,8 +292,9 @@ namespace Spica.UI
             btnOut.Click += (s, e) => BrowseOutput();
             chkReseed = new Win98CheckBox { Text = "Reseed LTspice's mc() from the clock (recommended)", Location = new Point(10, 78) };
             chkKeepRaw = new Win98CheckBox { Text = "Keep .raw waveform files", Location = new Point(10, 100) };
+            chkAutoReport = new Win98CheckBox { Text = "Write the report when it ends", Location = new Point(200, 100) };
             var seedHint = new Label { AutoSize = true, Location = new Point(10, 126), ForeColor = Win98.Shadow, BackColor = Win98.Face, Text = "Seed 0 = new seed per campaign (recorded with the results)." };
-            grpMc.Controls.AddRange(new Control[] { Lbl("Number of runs:", 10, 20), txtRuns, Lbl("Seed:", 212, 20), txtSeed, Lbl("Output folder:", 10, 48), txtOut, btnOut, chkReseed, chkKeepRaw, seedHint });
+            grpMc.Controls.AddRange(new Control[] { Lbl("Number of runs:", 10, 20), txtRuns, Lbl("Seed:", 212, 20), txtSeed, Lbl("Output folder:", 10, 48), txtOut, btnOut, chkReseed, chkKeepRaw, chkAutoReport, seedHint });
             grpMc.Resize += (s, e) => { btnOut.Location = new Point(grpMc.Width - 10 - btnOut.Width, 46); txtOut.Width = btnOut.Left - 6 - txtOut.Left; };
 
             var spacer1 = new Panel { Dock = DockStyle.Top, Height = 6, BackColor = Win98.Face };
@@ -405,6 +406,7 @@ namespace Spica.UI
             grp.Resize += (s, e) => { lblAnalysisHint.Width = grp.Width - 20; txtWatch.Width = Math.Max(60, grp.Width - 10 - txtWatch.Left); };
 
             var tip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
+            tip.SetToolTip(chkAutoReport, "When the campaign ends, save the HTML report in the campaign folder, with the contents chosen in Results > Report...");
             tip.SetToolTip(chkStop, "The campaign ends as soon as the result is known well enough, at most after 'Number of runs'.\n" +
                 "Measurements with spec limits: stop when the yield is proven at least the required yield (or proven below it), 95 % confidence.\n" +
                 "Measurements without limits: stop when their spread (sigma) is known within the given percentage.");
@@ -785,6 +787,7 @@ namespace Spica.UI
             project.Seed = uint.TryParse(txtSeed.Text.Trim(), out var seed) ? seed : 0;
             project.ClockReseed = chkReseed.Checked;
             project.KeepRaw = chkKeepRaw.Checked;
+            project.Report.Auto = chkAutoReport.Checked;
             project.SaveSelected = rbSaveSel.Checked;
             if (netlist != null) project.Signals = allSignals.Where(s => !s.Locked && checkedSignals.Contains(s.Signal)).Select(s => s.Signal).ToList();
             project.Temp = rbTempCorners.Checked ? TempMode.Corners : rbTempRandom.Checked ? TempMode.Random : TempMode.Default;
@@ -813,6 +816,7 @@ namespace Spica.UI
                 txtSeed.Text = project.Seed.ToString(inv);
                 chkReseed.Checked = project.ClockReseed;
                 chkKeepRaw.Checked = project.KeepRaw;
+                chkAutoReport.Checked = project.Report.Auto;
                 rbSaveSel.Checked = project.SaveSelected;
                 rbSaveAll.Checked = !project.SaveSelected;
                 txtCorners.Text = string.Join(", ", project.Corners.Select(t => t.ToString("0.###", inv)));
@@ -936,7 +940,7 @@ namespace Spica.UI
 
             // any edit on the Setup tab makes the setup "unsaved"
             foreach (var t in new[] { txtRuns, txtSeed, txtCorners, txtTempMin, txtTempMax, txtSpread, txtYield, txtMinRuns, txtWatch, txtWcSigma }) t.Box.TextChanged += (s, e) => MarkDirty();
-            foreach (var c in new[] { chkReseed, chkKeepRaw, chkPaired, chkStop }) c.CheckedChanged += (s, e) => MarkDirty();
+            foreach (var c in new[] { chkReseed, chkKeepRaw, chkPaired, chkStop, chkAutoReport }) c.CheckedChanged += (s, e) => MarkDirty();
             rbWc.CheckedChanged += (s, e) => MarkDirty();
             cbWc.SelectedIndexChanged += (s, e) => MarkDirty();
             txtYield.Box.TextChanged += (s, e) => UpdateAnalysisUi();
@@ -1475,6 +1479,18 @@ namespace Spica.UI
                 Win98MessageBox.Show(this, s.FatalError, "SPICA", MessageBoxButtons.OK, Win98Icon.Error);
                 return;
             }
+            // Setup > "Write the report when it ends": into the campaign folder, as set in Results > Report...
+            string reportNote = "";
+            if (project.Report.Auto && s.Ok > 0 && resultsView.Data != null)
+            {
+                try
+                {
+                    string file = resultsView.AutoReport();
+                    reportNote = "\nReport saved: " + Path.GetFileName(file);
+                    SetStatus("Campaign finished. Report: " + file);
+                }
+                catch (Exception ex) { reportNote = "\nThe report could not be written: " + ex.Message; }
+            }
             if (analyzeOnFinish)
             {
                 analyzeOnFinish = false;
@@ -1482,7 +1498,7 @@ namespace Spica.UI
                 return;
             }
             string msg = $"{(s.Cancelled ? "Campaign stopped" : "Campaign finished")} in {s.Elapsed:hh\\:mm\\:ss}.\n\n" +
-                         $"{s.Ok} runs with data, {s.NoData} without data, {s.Failed} failed.\n\nOpen the Results tab?";
+                         $"{s.Ok} runs with data, {s.NoData} without data, {s.Failed} failed.{reportNote}\n\nOpen the Results tab?";
             if (Win98MessageBox.Show(this, msg, "SPICA", MessageBoxButtons.YesNo, s.Failed > 0 ? Win98Icon.Warning : Win98Icon.Information) == DialogResult.Yes)
                 tabs.SelectedIndex = 2;
         }
