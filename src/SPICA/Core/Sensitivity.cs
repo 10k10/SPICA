@@ -13,12 +13,12 @@ namespace Spica.Core
     /// parameter (and on temperature for a random-temperature campaign), on standardized values. The
     /// standardized coefficient (SRC) of an input is the shift of the measurement, in its own sigmas, for
     /// one sigma of that input. The draws are independent by construction, so SRC^2 is the share of the
-    /// variance that input explains and the shares add up to R^2; what R^2 leaves out is nonlinearity,
-    /// interactions, and random values LTspice draws inside .subckt definitions (invisible to SPICA).
+    /// variance that input explains and the shares add up to R^2; what R^2 leaves out is nonlinearity and
+    /// interactions. Parameters that are the circuit's input (see <see cref="Excitation"/>) are set apart first.
     ///
     /// Measurements: the Pearson correlation with every other measurement (no causality implied).
     /// </summary>
-    public sealed class SensitivityReport
+    public sealed partial class SensitivityReport
     {
         public sealed class Item
         {
@@ -29,6 +29,10 @@ namespace Spica.Core
             public double Slope = double.NaN;    // measurement units per input unit
             public double AtLimit = double.NaN;  // shift of the measurement with the input at its tolerance limit
             public string LimitText = "";
+            public bool IsInput;                 // the circuit's input (excitation), set apart
+            public double ShareRest = double.NaN; // share of the variance the input leaves (with an input set apart)
+            /// <summary>What a bar shows: the share of what the input leaves, or of the whole variance.</summary>
+            public double Bar => double.IsNaN(ShareRest) ? Share : ShareRest;
         }
 
         public string Meas, Error;
@@ -41,10 +45,12 @@ namespace Spica.Core
 
         /// <summary>Regression on the random parameters (and TEMP when it varies per run).</summary>
         /// <param name="filter">optional: only these rows (e.g. one input band of an error budget)</param>
-        public static SensitivityReport Parameters(ResultSet rs, string meas, int group, Func<ResultSet.Row, bool> filter = null)
+        /// <param name="setInputApart">false: every parameter as a tolerance, the input included</param>
+        public static SensitivityReport Parameters(ResultSet rs, string meas, int group, Func<ResultSet.Row, bool> filter = null, bool setInputApart = true)
         {
             var rep = new SensitivityReport { Meas = meas, OnParameters = true };
             var inputs = new List<string>(rs.Params);
+            var excitation = setInputApart ? Excitation.Columns(rs, out rep.InputAuto, out rep.InputWhy) : new List<string>();
             if (rs.Mode == TempMode.Random) inputs.Add(ResultSet.TempColumn);
             if (inputs.Count == 0)
             {
@@ -70,6 +76,16 @@ namespace Spica.Core
             rep.MeanY = dy.Mean; rep.StdY = dy.Std;
             if (n < 5) { rep.Error = "Not enough runs with data."; return rep; }
             if (!(dy.Std > 0)) { rep.Error = $"{meas} does not vary, so nothing drives it."; return rep; }
+
+            var stim = Enumerable.Range(0, inputs.Count).Where(j => excitation.Contains(inputs[j])).ToList();
+            if (stim.Count > 0 && stim.Count < inputs.Count)
+            {
+                rep.InputNames.AddRange(stim.Select(j => Excitation.Label(inputs[j])));
+                Conditioned_(rep, inputs, xs, ys, stim);
+                if (rep.Conditioned) return rep;
+                rep.InputNames.Clear();       // too few runs: the plain regression below, with the reason
+                rep.Items.Clear();
+            }
 
             // standardize; inputs that do not vary drop out of the regression
             int p = inputs.Count;
@@ -132,6 +148,8 @@ namespace Spica.Core
                 rep.Items.Add(it);
             }
             rep.Items.Sort((u, v) => (double.IsNaN(v.Share) ? -1 : v.Share).CompareTo(double.IsNaN(u.Share) ? -1 : u.Share));
+            var top = rep.Items.FirstOrDefault();
+            if (top != null && top.Share > 0.9 && top.Name != ResultSet.TempColumn && !excitation.Contains(top.Name)) rep.Dominant = top.Name;
             return rep;
         }
 
@@ -198,7 +216,25 @@ namespace Spica.Core
             if (OnParameters)
             {
                 sb.AppendLine($"{Meas}: n = {N}, sigma = {F(StdY)}");
-                if (Error != null) { sb.AppendLine(Error); if (Items.Count == 0) return sb.ToString(); }
+                if (Error != null) { sb.AppendLine(Error); if (Items.Count == 0 || Conditioned) return sb.ToString(); }
+                if (Conditioned)
+                {
+                    sb.AppendLine($"Input (excitation): {string.Join(", ", InputNames)}{(InputAuto && InputWhy.Length > 0 ? " (found by SPICA: " + InputWhy + ")" : "")}.");
+                    sb.AppendLine($"It explains {ShareText(InputShare)} of the variance and is left out of");
+                    sb.AppendLine($"the bars: they share the other {ShareText(1 - InputShare)} among the tolerances");
+                    sb.AppendLine($"(what is left: sigma = {ErrorBudget.Eng(RestStd)}, against {ErrorBudget.Eng(StdY)} in all).");
+                    sb.AppendLine("A tolerance whose effect grows with the input (a gain\nerror) is counted in full.");
+                    sb.AppendLine();
+                    sb.AppendLine($"The tolerances explain {Pct((R2 - InputShare) / Math.Max(1e-300, 1 - InputShare))} of what is left.");
+                    sb.AppendLine();
+                    sb.AppendLine("Share of what the input leaves:");
+                    var tl = Items.Where(i => !i.IsInput && !double.IsNaN(i.Share)).ToList();
+                    foreach (var it in tl.Take(top)) sb.AppendLine($"  {Pct(it.ShareRest),7}  {it.Name}");
+                    if (tl.Count > top) sb.AppendLine($"  ... {tl.Count - top} more in the table");
+                    sb.AppendLine();
+                    sb.AppendLine($"The table gives the shift of {Meas} with each tolerance\nat its limit, at the input where it is largest.\nDouble-click an input to see its scatter plot.");
+                    return sb.ToString();
+                }
                 sb.AppendLine($"A linear model on {Items.Count(i => !double.IsNaN(i.Share))} inputs explains R2 = {Pct(R2)}");
                 sb.AppendLine("of the variance.");
                 sb.AppendLine();
@@ -211,8 +247,13 @@ namespace Spica.Core
                 if (R2 > 0.95)
                     sb.AppendLine($"Close to linear: the remaining {Pct(1 - R2)} is\nnonlinearity, interactions and noise.");
                 else
-                    sb.AppendLine($"{Pct(1 - R2)} is not explained linearly: nonlinear or\ninteracting inputs, or random values LTspice draws\n" +
-                                  "inside .subckt definitions (SPICA cannot see those).\nDouble-click an input to see its scatter plot.");
+                    sb.AppendLine($"{Pct(1 - R2)} is not explained linearly: nonlinear or\ninteracting inputs, or random values SPICA does\n" +
+                                  "not draw (LTspice's mc() without paired samples,\nencrypted models).\nDouble-click an input to see its scatter plot.");
+                if (Dominant != null)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine($"{Excitation.Label(Dominant)} explains most of {Meas}. If it is the circuit's\ninput (the excitation sweeping the range), mark it with\nInputs... so the tolerances are shown without it.");
+                }
                 sb.AppendLine();
                 sb.AppendLine($"The table gives the shift of {Meas} with each input\nat its limit. Uniform inputs run -1 .. 1 across their\ntolerance; gauss inputs are in sigmas.");
             }

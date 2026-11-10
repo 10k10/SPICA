@@ -146,6 +146,7 @@ namespace Spica.Core
         volatile bool cancel, draining, dirty;
         bool finished, saveWarned;
         string fatal;
+        DateTime started = DateTime.Now;      // when the campaign first started (kept when it is resumed)
 
         public CampaignEngine(CampaignOptions options, HardwareInfo hardware, ProfileStore profileStore)
         {
@@ -200,6 +201,7 @@ namespace Spica.Core
                 Log($"MC generator: SPICA paired samples, {opt.Mc.Sites.Count} random sites (same unit at every temperature, reproducible from the seed).");
                 foreach (var s in opt.Mc.Sites) Log($"  site {s.Index}: {s.Label} = {s.Original}");
                 if (opt.Mc.Inlined.Count > 0) Log($"  .func inlined at each call: {string.Join(", ", opt.Mc.Inlined)}");
+                foreach (var t in opt.Mc.TakenOver) Log("  drawn by SPICA: " + t);
                 foreach (var w in opt.Mc.Warnings) Log("  WARNING " + w);
             }
             else Log(opt.ClockReseed ? "MC generator: LTspice mc(), reseeded from the clock (private ini), launches staggered."
@@ -225,6 +227,8 @@ namespace Spica.Core
                 }
                 catch (Exception ex) { Log("Could not write campaign.spica: " + ex.Message); }
             }
+            if (resuming && CampaignState.Load(opt.OutputDir)?.Started is DateTime first) started = first;
+            WriteBundle();
 
             var warm = profiles.Find(hw.MachineKey, opt.Netlist.CircuitHash());
             sched = new RunScheduler(hw, Math.Max(1, pendingCount), warm, opt.Manual, Log);
@@ -854,6 +858,19 @@ namespace Spica.Core
             }
         }
 
+        /// <summary>The snapshot of what is simulated and where (written once: a resumed campaign keeps the first).</summary>
+        void WriteBundle()
+        {
+            if (SourceBundle.Find(opt.OutputDir) != null) return;
+            try
+            {
+                var warnings = new List<string>();
+                Log("Sources: " + SourceBundle.Write(SourceBundle.PathFor(opt.OutputDir, opt.AscPath), opt, hw, started, warnings));
+                foreach (var w in warnings) Log("  WARNING " + w);
+            }
+            catch (Exception ex) { Log("Could not write the sources bundle: " + ex.Message); }
+        }
+
         void WriteState(string status)
         {
             try
@@ -865,6 +882,8 @@ namespace Spica.Core
                     Done = results.Count,
                     ElapsedSeconds = opt.PriorSeconds + clock.Elapsed.TotalSeconds,
                     CircuitHash = opt.Netlist.CircuitHash(),
+                    Started = started,
+                    Ended = status == "Running" ? (DateTime?)null : DateTime.Now,
                 };
                 s.Save(opt.OutputDir);
             }

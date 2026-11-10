@@ -69,8 +69,16 @@ campaign ran; it is used for the analysis only when the schematic is not found.
   `mc()`, `flat()` and `gauss()` in its chunk copy with a parameter whose value is a pure function
   of (seed, site, run), injected as `table(run, ...)`. Run 37 is then the same unit at every
   temperature and in any chunk, and the campaign is reproducible from its seed. `.func` bodies that
-  draw random numbers are inlined at each call so every call stays independent. Random values
-  inside `.subckt` definitions are left to LTspice (warned). LTspice's own `rand()` was not used: its
+  draw random numbers are inlined at each call so every call stays independent.
+  Random values inside sub-circuits are drawn by SPICA too, per instance: SPICA reads the
+  sub-circuits the netlist defines and the ones in the files it includes (`.lib`, `.include`,
+  found as LTspice finds them, nested sub-circuits and `.model` lines inside them too), gives each
+  definition one parameter per random value (`spica_r1..n`) and passes every instance its own
+  paired values, named by where they are (`U3.R5`, `U3.X1.Rin`). Library sub-circuits are copied
+  into the campaign's netlist renamed (`NAME__spica`); the files are not touched. A `.include`
+  file with random values at its own top level (a netlist saved as a library) is placed into the
+  netlist so those are paired as well. Encrypted models cannot be read: SPICA warns, and their
+  tolerances, if any, stay with LTspice. LTspice's own `rand()` was not used: its
   consecutive values show a small but systematic correlation (about -0.03).
 
 ## Results analysis
@@ -104,6 +112,17 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
   effect, and the shift of the measurement with the input at its tolerance limit, as a tornado chart
   and a table (double-click an input for its scatter plot). Without paired samples: correlation with
   the other measurements.
+  The circuit's **input** (a random parameter sweeping the operating range, e.g. the input voltage)
+  drives the outputs by design and would fill the chart with one 99.99 % bar. It is set apart: SPICA
+  first removes its own effect (a cubic in the input, so a nonlinear transfer goes too), then shares
+  what is left among the tolerances, each with a term that grows with the input, so a gain error
+  counts in full even when the input sweeps around zero. The chart title gives the input's share
+  and the narrative the sigma of what is left. The input is found automatically (the reference x of
+  an error or of the TF when it is a parameter, or a parameter that sets it, |r| > 0.95) or chosen
+  with *Inputs...*; *Range* shows one band of the input (five bands, equal numbers of runs). The
+  choice is saved with the setup. In the Error Budget the error is already referred to the ideal TF,
+  so an input that still explains most of it is flagged as a systematic error (gain, offset or
+  nonlinearity), not a tolerance.
 - **Convergence**: running mean with its 95 % band, running sigma and yield.
 - **Charts**: drag a box to zoom (a flat box zooms X only), wheel to zoom (Shift: X, Ctrl: Y),
   middle-drag to pan, double-click to reset, click a legend entry to hide a series; right-click to
@@ -122,11 +141,37 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
     measurements and the sections (histogram, sensitivity, temperature, convergence, transfer
     function) chosen by checkboxes.
 
-  The choice is saved with the setup and the campaign folder. The file is named after the
-  simulation, `<schematic>_report.html` or `<schematic>_error_budget.html`, in the campaign folder;
+  The dialog also takes a *Title* (the report's heading; empty = the campaign folder's name; the
+  schematic is listed under it) and free *Notes* shown in a box at the top. All of it is saved with
+  the setup and the campaign folder. The file is named after the title (else the schematic),
+  `<title>_report.html` or `<title>_error_budget.html`, in the campaign folder;
   if that name is taken, a timestamp is added. Setup > *Write the report when it ends* saves it
   automatically when the campaign ends. Charts are vector (SVG), sharp when zoomed or printed;
   printing starts each measurement (and each error of the short report) on a new page.
+  The report ends with *Traceability*: when the campaign ran (start, end, simulating time), on
+  which computer (name, user, Windows build, CPU, cores, RAM), with which SPICA, LTspice and
+  LTspice model library, the seed, and every file simulated with its SHA-256. The header warns
+  when the schematic was edited after the simulation.
+
+## Source bundle (reproducing a campaign)
+
+When a campaign starts, SPICA writes `<schematic>_sources.zip` into the campaign folder: a snapshot
+of what is simulated and where.
+
+- the schematic, its hierarchical sheets and the symbols that do not ship with LTspice (found
+  beside the schematic, in LTspice's `lib\sym` or in the Control Panel's symbol search paths);
+- every model file the netlist uses (`.lib`, `.include`, PWL `file=`), including LTspice's own
+  `standard.*` files and anything those files include, found as LTspice finds them: beside the
+  schematic, `lib\sub`, `lib\cmp`, the library search paths;
+- the setup, named like the schematic, with the campaign's seed, and the netlist SPICA simulated;
+- `SPICA_bundle.txt`: start time, computer, Windows, CPU/RAM, SPICA and LTspice versions, the
+  date of LTspice's model library, search paths, each file with its SHA-256 and original path.
+
+To run it again: unzip anywhere and open the schematic in SPICA; its setup loads with it, and the
+library references are redirected to the copies in the bundle (the status bar says how many), so
+the same models are simulated even if the originals changed or the PC is another. With SPICA's
+paired generator the results are identical run by run; with LTspice's `mc()` reseeded from the
+clock only the statistics repeat. A resumed campaign keeps its first bundle.
 
 The statistics were checked against SciPy (Anderson-Darling, skewness, kurtosis, quantiles,
 Clopper-Pearson, normal tail ppm, regression standard errors).

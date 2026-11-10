@@ -16,6 +16,7 @@ namespace Spica.UI
         readonly Win98GroupBox grpErr, grpMeas, grpSec;
         readonly Label lblHint;
         readonly Win98Button btnOk;
+        readonly Win98TextField txtTitle, txtNotes;
 
         public ReportOptions Options { get; private set; }
 
@@ -29,8 +30,16 @@ namespace Spica.UI
             Resizable = false;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(620, 444 + Padding.Vertical);
+            ClientSize = new Size(620, 548 + Padding.Vertical);
             int x = Padding.Left + 10, y = Padding.Top + 8;
+
+            string folderName = string.IsNullOrEmpty(rs.Folder) ? "" : System.IO.Path.GetFileName(rs.Folder.TrimEnd('\\', '/'));
+            Controls.Add(new Label { Text = "&Title:", Location = new Point(x, y + 3), AutoSize = true });
+            txtTitle = new Win98TextField { Location = new Point(x + 44, y), Width = 556, Text = o.Title };
+            Controls.Add(txtTitle);
+            Controls.Add(new Label { Text = o.Title.Length == 0 && folderName.Length > 0 ? $"Empty: the campaign folder's name ({folderName})." : "The report's heading; the schematic is listed below it.",
+                                     Location = new Point(x + 44, y + 22), AutoSize = true, ForeColor = Win98.Shadow, UseMnemonic = false });
+            y += 46;
 
             rbConcise = new Win98RadioButton { Text = "Error budget only: one page per error, for checking a requirement", Location = new Point(x, y), Width = 590 };
             rbFull = new Win98RadioButton { Text = "Full analysis: every measurement and analysis chosen below", Location = new Point(x, y + 22), Width = 590 };
@@ -38,9 +47,9 @@ namespace Spica.UI
             Controls.Add(rbFull);
 
             // errors (both kinds), measurements and sections (full only)
-            grpErr = new Win98GroupBox { Text = "Errors", Location = new Point(x, y + 52), Size = new Size(196, 336) };
-            grpMeas = new Win98GroupBox { Text = "Measurements", Location = new Point(x + 204, y + 52), Size = new Size(196, 336) };
-            grpSec = new Win98GroupBox { Text = "Sections", Location = new Point(x + 408, y + 52), Size = new Size(192, 336) };
+            grpErr = new Win98GroupBox { Text = "Errors", Location = new Point(x, y + 52), Size = new Size(196, 290) };
+            grpMeas = new Win98GroupBox { Text = "Measurements", Location = new Point(x + 204, y + 52), Size = new Size(196, 290) };
+            grpSec = new Win98GroupBox { Text = "Sections", Location = new Point(x + 408, y + 52), Size = new Size(192, 290) };
             Controls.Add(grpErr); Controls.Add(grpMeas); Controls.Add(grpSec);
             FillList(grpErr, errBoxes, errors, o.HasError, errors.Count == 0 ? "No error defined: add one on the Error Budget tab." : null);
             FillList(grpMeas, measBoxes, rs.Meas, o.HasMeas, rs.Meas.Count == 0 ? "No measurements." : null);
@@ -61,7 +70,15 @@ namespace Spica.UI
             chkTemp.Enabled = rs.Mode != TempMode.Default;
             chkTf.Enabled = rs.Setup.Tf.X.Length > 0 && rs.Setup.Tf.Y.Length > 0;
 
-            lblHint = new Label { Location = new Point(x, y + 394), Size = new Size(410, 32), ForeColor = Win98.Shadow, UseMnemonic = false };
+            Controls.Add(new Label { Text = "&Notes (free text, at the top of the report):", Location = new Point(x, y + 350), AutoSize = true });
+            txtNotes = new Win98TextField { Location = new Point(x, y + 368), Width = 600, Text = o.Notes ?? "" };
+            txtNotes.Box.Multiline = true;
+            txtNotes.Box.AcceptsReturn = true;
+            txtNotes.Box.ScrollBars = ScrollBars.Vertical;
+            txtNotes.Height = 64;
+            Controls.Add(txtNotes);
+
+            lblHint = new Label { Location = new Point(x, y + 440), Size = new Size(410, 32), ForeColor = Win98.Shadow, UseMnemonic = false };
             Controls.Add(lblHint);
 
             int by = ClientSize.Height - Padding.Bottom - 33;
@@ -111,6 +128,8 @@ namespace Spica.UI
         ReportOptions Read(ReportOptions o, List<string> errors, List<string> meas)
         {
             o.Kind = rbConcise.Checked ? ReportKind.Concise : ReportKind.Full;
+            o.Title = txtTitle.Text.Trim();
+            o.Notes = txtNotes.Text.TrimEnd();
             o.ErrorsOff = errors.Where((e, i) => !errBoxes[i].Checked).ToList();
             o.MeasOff = meas.Where((m, i) => !measBoxes[i].Checked).ToList();
             o.Budget = chkBudget.Checked; o.Summary = chkSummary.Checked; o.Histogram = chkHist.Checked;

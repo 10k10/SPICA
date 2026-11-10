@@ -60,7 +60,9 @@ namespace Spica.UI
         Win98Chart chTf, chTfErr;
 
         // sensitivity
-        ComboBox cbSensMeas, cbSensGroup, cbSensInputs, cbSensShow;
+        ComboBox cbSensMeas, cbSensGroup, cbSensInputs, cbSensShow, cbSensRange;
+        List<KeyValuePair<string, Func<ResultSet.Row, bool>>> sensBands = new List<KeyValuePair<string, Func<ResultSet.Row, bool>>>();
+        string sensBandsFor;      // the input the bands were made for
         Win98Chart chSens;
         Win98ListView lvSens;
         TextBox txtSens;
@@ -1012,11 +1014,19 @@ namespace Spica.UI
             if (rs.Params.Count == 0 && rs.Mode != TempMode.Random) { ch.EmptyText = "No tolerances recorded for this campaign."; return 0; }
             var set = new HashSet<ResultSet.Row>(s.Rows);
             var rep = s == r.Worst && r.Sens != null ? r.Sens : SensitivityReport.Parameters(rs, ErrorBudget.Column(r.Item), 0, row => set.Contains(row));
-            var items = rep.Items.Where(x => !double.IsNaN(x.Share)).Take(top).ToList();
+            var items = rep.Items.Where(x => !x.IsInput && !double.IsNaN(x.Share)).Take(top).ToList();
+            if (rep.Conditioned)
+            {
+                // the error is already referred to the ideal TF: an input that still explains much of it is a systematic error
+                string pct = SensitivityReport.ShareText(rep.InputShare);
+                ch.Title = rep.InputShare > 0.5
+                    ? $"What drives it  -  input {string.Join(", ", rep.InputNames)}: {pct} (the ideal TF does not match: systematic gain/offset)"
+                    : $"What drives it  -  input {string.Join(", ", rep.InputNames)}: {pct}, left out";
+            }
             if (items.Count == 0) { ch.EmptyText = rep.Error ?? "Nothing to show."; return 0; }
             ch.YCategories = items.Select(x => Short(x.Name)).ToArray();
-            ch.XLabel = "share of the spread (%)";
-            ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(x => 100 * x.Share).ToArray(), Color = Win98Chart.Navy, InLegend = false });
+            ch.XLabel = rep.Conditioned ? "share of the spread the input leaves (%)" : "share of the spread (%)";
+            ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(x => 100 * x.Bar).ToArray(), Color = Win98Chart.Navy, InLegend = false });
             return items.Count;
         }
 
@@ -1656,8 +1666,17 @@ namespace Spica.UI
             cbSensShow = Combo(704, 2, 150);
             cbSensShow.Items.AddRange(new object[] { "Share of variance", "Signed effect" });
             cbSensShow.SelectedIndex = 0;
+            cbSensRange = Combo(916, 2, 170);
+            cbSensRange.Items.Add("Whole input range");
+            cbSensRange.SelectedIndex = 0;
+            var tips = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
+            var btnInputs = new Win98Button { Text = "&Inputs...", Location = new Point(1094, 1), Size = new Size(76, 24) };
+            btnInputs.Click += (s, e) => ChooseInputs();
+            tips.SetToolTip(btnInputs, "Which random parameters are the circuit's input (the excitation sweeping its range), not tolerances.\n" +
+                                       "The input is set apart and the bars share what it leaves among the tolerances.");
+            tips.SetToolTip(cbSensRange, "Only the runs with the input in one band of its range (equal numbers of runs per band).");
             bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbSensMeas, Lbl("Group:", 246, 2), cbSensGroup,
-                Lbl("Inputs:", 454, 2), cbSensInputs, Lbl("Show:", 664, 2), cbSensShow, Hint("Double-click a row to plot it.", 866, 2) });
+                Lbl("Inputs:", 454, 2), cbSensInputs, Lbl("Show:", 664, 2), cbSensShow, Lbl("Range:", 870, 2), cbSensRange, btnInputs });
 
             chSens = new Win98Chart();
             txtSens = Memo();
@@ -1701,15 +1720,21 @@ namespace Spica.UI
         void RefreshSens()
         {
             if (rs == null || !(cbSensMeas.SelectedItem is string m)) { chSens.Clear(); lvSens.Items.Clear(); txtSens.Text = ""; return; }
-            sensRep = BuildSensitivity(chSens, m, Math.Max(0, cbSensGroup.SelectedIndex), cbSensInputs.SelectedIndex == 0, cbSensShow.SelectedIndex == 1);
+            bool onParams = cbSensInputs.SelectedIndex == 0;
+            FillSensBands(onParams);
+            var band = cbSensRange.SelectedIndex > 0 && cbSensRange.SelectedIndex <= sensBands.Count ? sensBands[cbSensRange.SelectedIndex - 1] : default;
+            sensRep = BuildSensitivity(chSens, m, Math.Max(0, cbSensGroup.SelectedIndex), onParams, cbSensShow.SelectedIndex == 1, 20, band.Value, band.Key);
             txtSens.Text = sensRep.Narrative().Replace("\n", "\r\n").Replace("\r\r\n", "\r\n");
             lvSens.BeginUpdate();
             lvSens.Items.Clear();
+            lvSens.Columns[2].Text = sensRep.Conditioned ? "Share (w/o input)" : "Share of variance";
             int k = 1;
             foreach (var it in sensRep.Items)
             {
                 var row = new ListViewItem((k++).ToString(Inv));
-                foreach (var x in new[] { it.Name, double.IsNaN(it.Share) ? "" : (100 * it.Share).ToString("0.0", Inv) + " %", Num(it.Src, "+0.000;-0.000"),
+                string share = double.IsNaN(it.Bar) ? "" : (100 * it.Bar).ToString("0.0", Inv) + " %";
+                if (it.IsInput) share = double.IsNaN(it.Share) ? "input" : $"input: {SensitivityReport.ShareText(it.Share)} of all";
+                foreach (var x in new[] { it.Name, share, Num(it.Src, "+0.000;-0.000"),
                                           Num(it.R, "+0.000;-0.000"), double.IsNaN(it.Slope) ? "" : F(it.Slope), double.IsNaN(it.AtLimit) ? "" : F(it.AtLimit), it.LimitText })
                     row.SubItems.Add(x);
                 lvSens.Items.Add(row);
@@ -1717,12 +1742,16 @@ namespace Spica.UI
             lvSens.EndUpdate();
         }
 
-        SensitivityReport BuildSensitivity(Win98Chart ch, string m, int group, bool onParams, bool signed, int top = 20)
+        SensitivityReport BuildSensitivity(Win98Chart ch, string m, int group, bool onParams, bool signed, int top = 20,
+                                           Func<ResultSet.Row, bool> filter = null, string band = null)
         {
             ch.Clear();
-            var rep = onParams ? SensitivityReport.Parameters(rs, m, group) : SensitivityReport.Measurements(rs, m, group);
-            var items = rep.Items.Where(i => !double.IsNaN(i.Share)).Take(top).ToList();
-            ch.Title = onParams ? $"What drives {m}" : $"Correlation of {m} with the other measurements";
+            var rep = onParams ? SensitivityReport.Parameters(rs, m, group, filter) : SensitivityReport.Measurements(rs, m, group);
+            // the input (excitation) is set apart: the bars are the tolerances
+            var items = rep.Items.Where(i => !i.IsInput && !double.IsNaN(i.Share)).Take(top).ToList();
+            ch.Title = onParams ? $"What drives {m}" + (band != null ? $" ({band})" : "") : $"Correlation of {m} with the other measurements";
+            if (rep.Conditioned)
+                ch.Title += $"  -  input {string.Join(", ", rep.InputNames)}: {SensitivityReport.ShareText(rep.InputShare)}, left out";
             if (items.Count == 0) { ch.EmptyText = rep.Error ?? "Nothing to show."; ch.Invalidate(); return rep; }
             ch.YCategories = items.Select(i => i.Name).ToArray();
             if (signed)
@@ -1732,11 +1761,42 @@ namespace Spica.UI
             }
             else
             {
-                ch.XLabel = onParams ? $"share of the variance of {m} (%)" : "r squared (%)";
-                ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(i => 100 * i.Share).ToArray(), Color = Win98Chart.Navy, InLegend = false });
+                ch.XLabel = !onParams ? "r squared (%)" : rep.Conditioned ? $"share of the variance of {m} the input leaves (%)" : $"share of the variance of {m} (%)";
+                ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(i => 100 * i.Bar).ToArray(), Color = Win98Chart.Navy, InLegend = false });
             }
             ch.Invalidate();
             return rep;
+        }
+
+        /// <summary>The Range choices: bands of the (first) input, remade when the input changes.</summary>
+        void FillSensBands(bool onParams)
+        {
+            string input = null;
+            if (onParams && rs != null) input = Excitation.Columns(rs, out _, out _).FirstOrDefault();
+            if (input == sensBandsFor && cbSensRange.Items.Count == sensBands.Count + 1) { cbSensRange.Enabled = input != null && sensBands.Count > 0; return; }
+            sensBandsFor = input;
+            sensBands = input != null ? Excitation.Bands(rs, input, 5) : new List<KeyValuePair<string, Func<ResultSet.Row, bool>>>();
+            bool was = filling;
+            filling = true;
+            cbSensRange.Items.Clear();
+            cbSensRange.Items.Add("Whole input range");
+            foreach (var b in sensBands) cbSensRange.Items.Add(b.Key);
+            cbSensRange.SelectedIndex = 0;
+            cbSensRange.Enabled = sensBands.Count > 0;
+            filling = was;
+        }
+
+        void ChooseInputs()
+        {
+            if (rs == null) return;
+            using (var f = new InputsForm(rs))
+            {
+                if (f.ShowDialog(FindForm()) != DialogResult.OK) return;
+                rs.Setup.Inputs = f.Inputs;
+            }
+            NotifySetup();
+            sensBandsFor = "\0";      // remake the bands
+            RefreshPage();
         }
 
         // =====================================================================================
@@ -2087,7 +2147,8 @@ namespace Spica.UI
         /// </summary>
         string ReportPath(ReportOptions o)
         {
-            string name = !string.IsNullOrEmpty(rs.Record.Schematic) ? Path.GetFileNameWithoutExtension(rs.Record.Schematic) : rs.Title;
+            string name = !string.IsNullOrWhiteSpace(o.Title) ? o.Title.Trim()
+                        : !string.IsNullOrEmpty(rs.Record.Schematic) ? Path.GetFileNameWithoutExtension(rs.Record.Schematic) : rs.Title;
             foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
             string dir = !string.IsNullOrEmpty(rs.Folder) && Directory.Exists(rs.Folder) ? rs.Folder : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             string stem = name + (o.Kind == ReportKind.Concise ? "_error_budget" : "_report");
@@ -2117,11 +2178,14 @@ namespace Spica.UI
             var tf = st.Tf;
             bool hasTf = !concise && o.Tf && tf.X.Length > 0 && tf.Y.Length > 0 && rs.Col(tf.Y) >= 0;
             string schematic = string.IsNullOrEmpty(rs.Record.Schematic) ? "" : Path.GetFileName(rs.Record.Schematic);
+            string folderName = string.IsNullOrEmpty(rs.Folder) ? "" : Path.GetFileName(rs.Folder.TrimEnd('\\', '/'));
+            string title = !string.IsNullOrWhiteSpace(o.Title) ? o.Title.Trim() : folderName.Length > 0 ? folderName : rs.Title;
+            var trace = Trace.Of(rs);
             string kk = st.DesignSigma.ToString("0.#", Inv);
 
             var sb = new StringBuilder();
             sb.Append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
-              .Append($"<title>SPICA report - {H(rs.Title)}</title><style>")
+              .Append($"<title>{H(title)} - SPICA report</title><style>")
               .Append(":root{--ink:#1d1d1f;--muted:#5f5f5f;--line:#dedede;--accent:#000080;--soft:#f5f5f7}")
               .Append("*{box-sizing:border-box}body{margin:0;background:#e9e9e6;color:var(--ink);font:13px/1.5 'Segoe UI',Tahoma,Arial,sans-serif}")
               .Append(".page{max-width:1020px;margin:24px auto;background:#fff;padding:36px 44px 28px;box-shadow:0 1px 4px rgba(0,0,0,.18)}")
@@ -2137,6 +2201,7 @@ namespace Spica.UI
               .Append(".req{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--soft);padding:8px 14px;margin:8px 0 12px}")
               .Append(".req .t{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:2px}")
               .Append(".req table.kv td{white-space:normal}.req table.kv td:last-child{font-weight:600}")
+              .Append(".memo{white-space:pre-wrap;margin:0}.warn{color:#c00000;font-weight:600}td.hash{font:11px Consolas,monospace;color:var(--muted)}")
               .Append(".verdict{font-size:14px;font-weight:600;margin:6px 0 2px}")
               .Append(".wide{overflow-x:auto}.note{color:var(--muted);font-size:12px;margin:2px 0 10px}ul.notes{margin:6px 0 10px;padding-left:20px;color:#333}")
               .Append("figure{margin:12px 0 6px}figure svg{display:block;width:100%;height:auto;border:1px solid var(--line)}")
@@ -2153,11 +2218,17 @@ namespace Spica.UI
 
             // ---------------------------------------------------------------- header + campaign
             sb.Append("<header><div class=\"brand\">SPICA - Spice Parallel Instancer Circuit Analysis</div>")
-              .Append($"<h1>{(concise ? "Error budget" : "Monte Carlo report")}: {H(schematic.Length > 0 ? schematic : rs.Title)}</h1>")
-              .Append($"<div class=\"sub\">Campaign {H(rs.Title)} &middot; generated {DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv)} by SPICA {H(MainForm.AppVersion)}</div></header>");
+              .Append($"<h1>{(concise ? "Error budget" : "Analysis report")}: {H(title)}</h1>")
+              .Append($"<div class=\"sub\">{(schematic.Length > 0 ? $"Schematic {H(schematic)} &middot; " : "")}" +
+                      $"report generated {DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv)} by SPICA {H(MainForm.AppVersion)}</div></header>");
+
+            if (!string.IsNullOrWhiteSpace(o.Notes))
+                sb.Append("<div class=\"req\"><div class=\"t\">Notes</div><p class=\"memo\">").Append(H(o.Notes.Trim())).Append("</p></div>");
 
             sb.Append("<table class=\"kv\">");
             void Row(string k, string v) => sb.Append($"<tr><td>{H(k)}</td><td>{H(v)}</td></tr>");
+            Row("Simulated", trace.When);
+            if (trace.Machine != null) Row("On", trace.Machine);
             Row("Schematic", rs.Record.Schematic);
             if (!rs.Standalone && !string.IsNullOrEmpty(st.FilePath)) Row("Setup", st.FilePath);
             Row("Results folder", rs.Folder);
@@ -2179,6 +2250,7 @@ namespace Spica.UI
                 if (showSummary) sb.Append("<li><a href=\"#summary\">Summary</a></li>");
                 foreach (var m in meas) sb.Append($"<li><a href=\"#m{rs.Meas.IndexOf(m)}\">{H(m)}</a></li>");
                 if (hasTf) sb.Append("<li><a href=\"#tf\">Transfer function</a></li>");
+                sb.Append("<li><a href=\"#trace\">Traceability</a></li>");
                 sb.Append("</ol></nav>");
             }
 
@@ -2281,14 +2353,18 @@ namespace Spica.UI
                     {
                         // what drives the spread: share of variance per random parameter
                         var sr = BuildSensitivity(c1, m, 0, true, false, 12);
-                        var top = sr.Items.Where(x => !double.IsNaN(x.Share)).Take(12).ToList();
+                        var top = sr.Items.Where(x => !x.IsInput && !double.IsNaN(x.Share)).Take(12).ToList();
                         if (top.Count > 0)
                         {
                             sb.Append("<h3>Sensitivity</h3>");
-                            sb.Append(Fig(c1, $"Share of the variance of {m} explained by each random parameter (linear model, R² = {(100 * sr.R2).ToString("0.0", Inv)} %).", 760, 70 + 24 * top.Count));
-                            sb.Append("<div class=\"wide\"><table><tr><th>Input</th><th>Share of variance</th><th>Signed effect (SRC)</th><th>Shift at limit</th><th style=\"text-align:left\">Limit</th></tr>");
+                            string cap = sr.Conditioned
+                                ? $"The input {string.Join(", ", sr.InputNames)} (the excitation, not a tolerance) explains {SensitivityReport.ShareText(sr.InputShare)} of the variance of {m} and is left out; " +
+                                  $"the bars share the other {SensitivityReport.ShareText(1 - sr.InputShare)} (sigma {ErrorBudget.Eng(sr.RestStd)}) among the tolerances, counting effects that grow with the input."
+                                : $"Share of the variance of {m} explained by each random parameter (linear model, R² = {(100 * sr.R2).ToString("0.0", Inv)} %).";
+                            sb.Append(Fig(c1, cap, 760, 70 + 24 * top.Count));
+                            sb.Append($"<div class=\"wide\"><table><tr><th>Input</th><th>{(sr.Conditioned ? "Share without the input" : "Share of variance")}</th><th>Signed effect (SRC)</th><th>Shift at limit</th><th style=\"text-align:left\">Limit</th></tr>");
                             foreach (var it in top)
-                                sb.Append($"<tr><td>{H(it.Name)}</td><td>{(100 * it.Share).ToString("0.0", Inv)} %</td><td>{Num(it.Src, "+0.000;-0.000")}</td><td>{H(F(it.AtLimit))}</td><td style=\"text-align:left\">{H(it.LimitText)}</td></tr>");
+                                sb.Append($"<tr><td>{H(it.Name)}</td><td>{(100 * it.Bar).ToString("0.0", Inv)} %</td><td>{Num(it.Src, "+0.000;-0.000")}</td><td>{H(F(it.AtLimit))}</td><td style=\"text-align:left\">{H(it.LimitText)}</td></tr>");
                             sb.Append("</table></div>");
                         }
                     }
@@ -2327,6 +2403,28 @@ namespace Spica.UI
                     sb.Append("</section>");
                 }
             }
+            // ---------------------------------------------------------------- traceability
+            sb.Append("<section><h2 id=\"trace\">Traceability</h2>");
+            sb.Append("<p class=\"note\">A snapshot taken when the campaign started: where it ran, with what, and every file it simulated.</p>");
+            sb.Append("<table class=\"kv\">");
+            Row("Simulated", trace.When);
+            if (trace.Status != null) Row("Status", trace.Status);
+            foreach (var kv in trace.Environment) Row(kv.Key, kv.Value);
+            if (trace.Seed != null) Row("Seed", trace.Seed);
+            if (trace.Generator != null) Row("Random generator", trace.Generator);
+            Row("Sources", trace.Bundle ?? "no source bundle (campaign run before SPICA 0.5)");
+            sb.Append("</table>");
+            if (trace.Files.Count > 0)
+            {
+                sb.Append("<h3>Files in the source bundle</h3><div class=\"wide\"><table><tr><th>Kind</th><th>File</th><th>Bytes</th><th>SHA-256</th><th>Original</th></tr>");
+                foreach (var f in trace.Files)
+                    sb.Append($"<tr><td>{H(f[0])}</td><td>{H(f[1])}</td><td>{H(f[2])}</td><td class=\"hash\">{H(f[3].Length > 16 ? f[3].Substring(0, 16) : f[3])}</td><td>{H(f[4])}</td></tr>");
+                sb.Append("</table></div>");
+            }
+            if (trace.Missing.Count > 0)
+                sb.Append("<p class=\"warn\">Not in the bundle (not found when the campaign started): ").Append(H(string.Join("; ", trace.Missing))).Append("</p>");
+            sb.Append("</section>");
+
             sb.Append($"<footer>Generated by SPICA {H(MainForm.AppVersion)} - Spice Parallel Instancer Circuit Analysis. ")
               .Append("Figures are vector graphics (SVG): they stay sharp when zoomed or printed.</footer></div></body></html>");
             return sb.ToString();
@@ -2404,8 +2502,13 @@ namespace Spica.UI
                 sb.Append(Fig(cb, rs.Mode == TempMode.Corners ? $"Error at each temperature corner: mean, mean ± {k} σ and the extremes seen." : "Error against the random temperature of each run.", 760, 260));
             int bars = BuildBudgetSens(cs, r, w, 10);
             if (bars > 0)
-                sb.Append(Fig(cs, $"What drives the error{(r.Slices.Count > 1 ? " in the worst condition" : "")}: share of its variance explained by each tolerance" +
-                                  (r.Sens != null && r.Sens.Error == null ? $" (linear model, R² = {(100 * r.Sens.R2).ToString("0.0", Inv)} %)." : "."), 760, 70 + 24 * bars));
+                sb.Append(Fig(cs, $"What drives the error{(r.Slices.Count > 1 ? " in the worst condition" : "")}: " +
+                                  (r.Sens != null && r.Sens.Conditioned
+                                      ? $"the input {string.Join(", ", r.Sens.InputNames)} explains {SensitivityReport.ShareText(r.Sens.InputShare)} of its variance" +
+                                        (r.Sens.InputShare > 0.5 ? " (the ideal TF does not match the circuit: a systematic error)" : "") +
+                                        "; the bars share the rest among the tolerances."
+                                      : "share of its variance explained by each tolerance" +
+                                        (r.Sens != null && r.Sens.Error == null ? $" (linear model, R² = {(100 * r.Sens.R2).ToString("0.0", Inv)} %)." : ".")), 760, 70 + 24 * bars));
 
             // every condition
             if (r.Slices.Count > 1)

@@ -39,6 +39,8 @@ namespace Spica.Core
     {
         public ReportKind Kind = ReportKind.Full;
         public bool Auto;                     // write the report into the campaign folder when the campaign ends
+        public string Title = "";             // the report's title ("" = the campaign folder's name)
+        public string Notes = "";             // free text shown at the top of the report (several lines)
         // left out (by name), so errors and measurements added later are reported by default
         public List<string> ErrorsOff = new List<string>();
         public List<string> MeasOff = new List<string>();
@@ -53,6 +55,22 @@ namespace Spica.Core
             c.ErrorsOff = new List<string>(ErrorsOff);
             c.MeasOff = new List<string>(MeasOff);
             return c;
+        }
+
+        /// <summary>Several lines on one setup line: \n for a line break, \\ for a backslash.</summary>
+        public static string Escape(string s) =>
+            (s ?? "").Replace("\\", "\\\\").Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\\n");
+
+        public static string Unescape(string s)
+        {
+            s = s ?? "";
+            var sb = new StringBuilder();
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] == '\\' && i + 1 < s.Length && (s[i + 1] == 'n' || s[i + 1] == '\\')) { sb.Append(s[i + 1] == 'n' ? "\r\n" : "\\"); i++; }
+                else sb.Append(s[i]);
+            }
+            return sb.ToString();
         }
 
         public static List<string> Split(string s) =>
@@ -87,6 +105,8 @@ namespace Spica.Core
         public bool PessimisticSigma = true;  // use the 95 % upper bound of sigma
         public List<ErrorItem> Errors = new List<ErrorItem>();
         public ReportOptions Report = new ReportOptions();
+        /// <summary>Random parameters that are the circuit's input (its excitation), not tolerances; null = SPICA decides.</summary>
+        public List<string> Inputs;
 
         public bool Dirty;
 
@@ -199,9 +219,14 @@ namespace Spica.Core
                 sb.AppendLine("FullScale=" + Num(e.FullScale));
             }
             sb.AppendLine();
+            sb.AppendLine("[Sensitivity]");
+            sb.AppendLine("Inputs=" + (Inputs == null ? "auto" : string.Join(" | ", Inputs)));
+            sb.AppendLine();
             sb.AppendLine("[Report]");
             sb.AppendLine("Kind=" + Report.Kind);
             sb.AppendLine("Auto=" + (Report.Auto ? 1 : 0));
+            sb.AppendLine("Title=" + ReportOptions.Escape(Report.Title));
+            sb.AppendLine("Notes=" + ReportOptions.Escape(Report.Notes));
             sb.AppendLine("ErrorsOff=" + string.Join(" | ", Report.ErrorsOff));
             sb.AppendLine("MeasOff=" + string.Join(" | ", Report.MeasOff));
             sb.AppendLine("Sections=" + string.Join(",", new[] { ("budget", Report.Budget), ("summary", Report.Summary), ("histogram", Report.Histogram),
@@ -302,6 +327,11 @@ namespace Spica.Core
                         case "fullscale": e.FullScale = ParseNum(val); break;
                     }
                 }
+                else if (section.Equals("Sensitivity", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (key.Equals("inputs", StringComparison.OrdinalIgnoreCase))
+                        p.Inputs = val.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase) ? null : ReportOptions.Split(val);
+                }
                 else if (section.Equals("Report", StringComparison.OrdinalIgnoreCase))
                 {
                     var ro = p.Report;
@@ -309,6 +339,8 @@ namespace Spica.Core
                     {
                         case "kind": if (Enum.TryParse(val, true, out ReportKind rk)) ro.Kind = rk; break;
                         case "auto": ro.Auto = B(); break;
+                        case "title": ro.Title = ReportOptions.Unescape(val).Trim(); break;
+                        case "notes": ro.Notes = ReportOptions.Unescape(val); break;
                         case "errorsoff": ro.ErrorsOff = ReportOptions.Split(val); break;
                         case "measoff": ro.MeasOff = ReportOptions.Split(val); break;
                         case "sections":
@@ -353,6 +385,7 @@ namespace Spica.Core
                 WorstCase = WorstCase, WcSigma = WcSigma, Stop = Stop.Clone(),
                 DesignSigma = DesignSigma, PessimisticSigma = PessimisticSigma, Errors = Errors.Select(e => e.Clone()).ToList(),
                 Report = Report.Clone(),
+                Inputs = Inputs == null ? null : new List<string>(Inputs),
                 Tf = new TfSetup { X = Tf.X, Y = Tf.Y, Theory = Tf.Theory, Budget = Tf.Budget, BudgetPercent = Tf.BudgetPercent, K = Tf.K },
             };
             foreach (var kv in Specs) c.Specs[kv.Key] = new SpecLimit { Lsl = kv.Value.Lsl, Usl = kv.Value.Usl };

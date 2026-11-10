@@ -1071,13 +1071,16 @@ namespace Spica.UI
             SetBusy(true);
             try
             {
+                int redirected = 0;
                 var nl = await Task.Run(() =>
                 {
                     string tmp = Path.Combine(Path.GetTempPath(), "SPICA");
                     Directory.CreateDirectory(tmp);
                     string ini = Ltspice.WritePrivateIni(Path.Combine(tmp, "convert.ini"), true);
                     string text = Ltspice.ConvertSchematic(lt, path, ini, out var enc);
-                    return Netlist.Parse(text, path, enc);
+                    var parsed = Netlist.Parse(text, path, enc);
+                    redirected = SourceBundle.Redirect(parsed);   // unzipped from a campaign's source bundle: use its libraries
+                    return parsed;
                 });
 
                 // the setup: given, kept (reload), the .spica beside the schematic, or a fresh one
@@ -1110,7 +1113,7 @@ namespace Spica.UI
                 foreach (var n in nl.Nodes) { var s = $"V({n})"; if (!req.Contains(s)) allSignals.Add(new SignalItem { Signal = s }); }
                 foreach (var c in nl.Currents) if (!req.Contains(c)) allSignals.Add(new SignalItem { Signal = c });
 
-                siteCount = McPlan.Build(nl.Lines).Sites.Count;
+                siteCount = McPlan.Build(nl.Lines, nl.SourcePath).Sites.Count;
                 bool wasDirty = project.Dirty;
                 var remembered = project.Signals.Count > 0 || project.FilePath != null ? project.Signals : nl.ExistingSaves;
                 foreach (var s in remembered) if (allSignals.Any(a => a.Signal.Equals(s, StringComparison.OrdinalIgnoreCase))) checkedSignals.Add(s);
@@ -1121,7 +1124,8 @@ namespace Spica.UI
                 txtCircuit.Text = DescribeCircuit(nl);
                 string from = withSetup != null ? $" with setup {Path.GetFileName(withSetup.FilePath)}" :
                               !reload && project.FilePath != null ? $" with its setup {Path.GetFileName(project.FilePath)}" : "";
-                SetStatus($"Loaded {Path.GetFileName(path)}{from}: {nl.Nodes.Count} nets, {nl.MeasNames.Count} measurements.");
+                SetStatus($"Loaded {Path.GetFileName(path)}{from}: {nl.Nodes.Count} nets, {nl.MeasNames.Count} measurements" +
+                          (redirected > 0 ? $"; {redirected} library reference{(redirected == 1 ? "" : "s")} taken from the source bundle beside it." : "."));
                 SaveSettings();
                 UpdateTitle();
                 AttachResults();
@@ -1160,10 +1164,11 @@ namespace Spica.UI
             foreach (var m in nl.MeasNames) sb.AppendLine("  " + m);
             sb.AppendLine();
 
-            var plan = McPlan.Build(nl.Lines);
+            var plan = McPlan.Build(nl.Lines, nl.SourcePath);
             sb.AppendLine($"Random values ({plan.Sites.Count}):");
             foreach (var s in plan.Sites) sb.AppendLine($"  {s.Label}: {s.Original}");
             if (plan.Inlined.Count > 0) sb.AppendLine($"  via .func: {string.Join(", ", plan.Inlined)}");
+            foreach (var t in plan.TakenOver) sb.AppendLine("  drawn by SPICA: " + t);
             foreach (var w in plan.Warnings) sb.AppendLine("  ! " + w);
             if (plan.Sites.Count == 0 && plan.Warnings.Count == 0) sb.AppendLine("  (no mc()/gauss()/flat() found - every run will be identical)");
             sb.AppendLine();
@@ -1248,7 +1253,7 @@ namespace Spica.UI
             bool wc = project.WorstCase != WcMethod.Off;
             if (project.Paired || wc)
             {
-                plan = McPlan.Build(netlist.Lines);
+                plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
                 if (wc && (plan.Sites.Count == 0 || netlist.MeasNames.Count == 0))
                 {
                     Win98MessageBox.Show(this, plan.Sites.Count == 0

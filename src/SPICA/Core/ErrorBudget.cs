@@ -215,8 +215,10 @@ namespace Spica.Core
             else if (!double.IsNaN(FitOffset) && Math.Abs(w.D.Mean) > 0.5 * w.Sigma)
                 n.Add($"Removing the mean (a calibration) leaves ±{K0} sigma = ±{F(K * w.Sigma)}" +
                       (HasBudget ? (Item.Inside(-K * w.Sigma) && Item.Inside(K * w.Sigma) ? ", inside the boundaries." : ", still outside the boundaries.") : "."));
+            if (Sens != null && Sens.Conditioned && Sens.InputShare > 0.5)
+                n.Add($"The input ({string.Join(", ", Sens.InputNames)}) explains {(100 * Sens.InputShare).ToString("0", Inv)} % of the error's spread: the ideal TF does not match the circuit (a systematic gain or offset error, or a nonlinearity), not a tolerance.");
             if (Sens != null && Sens.Error == null && Sens.Items.Count > 0 && Sens.R2 < 0.9)
-                n.Add($"{(100 * (1 - Sens.R2)).ToString("0", Inv)} % of the spread is not explained by the tolerances: nonlinear effects, or randoms inside .subckt models.");
+                n.Add($"{(100 * (1 - Sens.R2)).ToString("0", Inv)} % of the spread is not explained by the tolerances: nonlinear effects, or random values SPICA does not draw (LTspice's mc() without paired samples, encrypted models).");
             return n;
         }
 
@@ -256,9 +258,10 @@ namespace Spica.Core
             if (Sens != null && Sens.Error == null && Sens.Items.Count > 0)
             {
                 sb.AppendLine();
-                sb.AppendLine($"What drives the spread{(Slices.Count > 1 ? " in the worst condition" : "")} (share of the variance)");
-                foreach (var it in Sens.Items.Where(i => !double.IsNaN(i.Share)).Take(6))
-                    sb.AppendLine($"  {(100 * it.Share).ToString("0.0", Inv),5} %  {it.Name}");
+                sb.AppendLine($"What drives the spread{(Slices.Count > 1 ? " in the worst condition" : "")} (share of the variance" +
+                              (Sens.Conditioned ? $" the input {string.Join(", ", Sens.InputNames)} leaves; it explains {SensitivityReport.ShareText(Sens.InputShare)})" : ")"));
+                foreach (var it in Sens.Items.Where(i => !i.IsInput && !double.IsNaN(i.Share)).Take(6))
+                    sb.AppendLine($"  {(100 * it.Bar).ToString("0.0", Inv),5} %  {it.Name}");
             }
             return sb.ToString();
         }

@@ -292,8 +292,8 @@ namespace Spica.Core
             }
         }
 
-        static readonly Regex IncludeRx = new Regex(@"^(\.(?:inc|include|lib)\s+)(""[^""]+""|\S+)(.*)$", RegexOptions.IgnoreCase);
-        static readonly Regex FileArgRx = new Regex(@"(\bfile\s*=\s*)(""[^""]+""|[^\s)]+)", RegexOptions.IgnoreCase);
+        internal static readonly Regex IncludeRx = new Regex(@"^(\.(?:inc|include|lib)\s+)(""[^""]+""|\S+)(.*)$", RegexOptions.IgnoreCase);
+        internal static readonly Regex FileArgRx = new Regex(@"(\bfile\s*=\s*)(""[^""]+""|[^\s)]+)", RegexOptions.IgnoreCase);
 
         /// <summary>Makes include / lib / PWL file references absolute when they are relative to the schematic folder.</summary>
         static string FixPaths(string line, string baseDir)

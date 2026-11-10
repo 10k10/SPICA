@@ -26,7 +26,7 @@ namespace Spica.Core
     /// each chunk as a table(run, ...). The same run is therefore the same unit in any chunk, at any
     /// temperature, and the whole campaign is reproducible from its seed.
     /// </summary>
-    public sealed class McPlan
+    public sealed partial class McPlan
     {
         public readonly List<string> Lines = new List<string>();     // rewritten netlist lines
         public readonly List<McSite> Sites = new List<McSite>();
@@ -49,9 +49,22 @@ namespace Spica.Core
             public string Body;
         }
 
-        public static McPlan Build(IList<string> lines)
+        /// <param name="ascPath">The schematic: with it the libraries the netlist includes are read too, so random values
+        /// inside their sub-circuits (and at the top of included files) are drawn by SPICA as well.</param>
+        public static McPlan Build(IList<string> lines, string ascPath = null)
         {
             var plan = new McPlan();
+            ModelLibrary lib;
+            if (!string.IsNullOrEmpty(ascPath))
+            {
+                lib = ModelLibrary.Load(lines, ascPath, plan.Warnings);
+                if (lib.RandomIncludes.Count > 0)
+                {
+                    lines = InlineIncludes(lines, lib, plan);
+                    lib = ModelLibrary.Load(lines, ascPath, null);
+                }
+            }
+            else lib = ModelLibrary.FromNetlist(lines);
             var funcs = ParseFuncs(lines);
 
             // Functions whose body draws random numbers, directly or through another such function.
@@ -68,14 +81,51 @@ namespace Spica.Core
                     }
             }
 
+            // sub-circuits with random values: each instance gets its own paired values ("U3.R5")
+            var take = new Takeover(lib, funcs, randomFuncs, plan);
+            string Bind(string code) =>
+                take.Bind(code, null, (kind, label, original) =>
+                {
+                    var site = new McSite { Index = plan.Sites.Count + 1, Kind = kind, Label = label, Original = original };
+                    plan.Sites.Add(site);
+                    return site.Param;
+                });
+
             int subckt = 0;
-            foreach (var line in lines)
+            for (int li = 0; li < lines.Count; li++)
             {
+                string line = lines[li];
                 string t = line.TrimStart();
                 string low = t.ToLowerInvariant();
                 if (t.Length == 0 || t[0] == '*') { plan.Lines.Add(line); continue; }
-                if (low.StartsWith(".subckt")) subckt++;
+                if (low.StartsWith(".subckt"))
+                {
+                    var own = subckt == 0 ? take.Get(Netlist.Tokenize(t).ElementAtOrDefault(1)) : null;
+                    if (own != null && !own.FromLibrary)
+                    {
+                        plan.Lines.AddRange(own.Lines);       // the definition, rewritten with its parameters
+                        for (int depth = 0; li < lines.Count; li++)
+                        {
+                            string u = lines[li].TrimStart().ToLowerInvariant();
+                            if (u.StartsWith(".subckt")) depth++;
+                            else if (u.StartsWith(".ends") && --depth == 0) break;
+                        }
+                        continue;
+                    }
+                    subckt++;
+                }
                 else if (low.StartsWith(".ends")) subckt = Math.Max(0, subckt - 1);
+                if (low == ".end" || low.StartsWith(".end ") || low.StartsWith(".backanno"))
+                {
+                    foreach (var c in take.Copied) plan.Lines.AddRange(c.Lines);   // library sub-circuits, renamed copies
+                    take.Copied.Clear();
+                }
+                if (subckt == 0 && char.ToUpperInvariant(t[0]) == 'X' && !HasCall(t, RandomFuncs) && !HasCall(t, randomFuncs))
+                {
+                    SplitComment(line, out string xc, out string xcom);
+                    plan.Lines.Add(Bind(xc) + xcom);
+                    continue;
+                }
 
                 // .func definitions stay as they are (sub-circuits may still call them).
                 if (low.StartsWith(".func") || low.StartsWith(".meas") || low.StartsWith(".step"))
@@ -102,7 +152,7 @@ namespace Spica.Core
                 string label = LabelOf(t);
                 string rewritten;
                 if (char.ToUpperInvariant(label[0]) == 'X')
-                    rewritten = RewriteInstance(expanded, plan, Netlist.InstanceName(label));
+                    rewritten = Bind(RewriteInstance(expanded, plan, Netlist.InstanceName(label)));
                 else
                 {
                     int before = plan.Sites.Count;
@@ -112,6 +162,7 @@ namespace Spica.Core
                 }
                 plan.Lines.Add(rewritten + comment);
             }
+            foreach (var c in take.Copied) plan.Lines.AddRange(c.Lines);      // no .end line
             return plan;
         }
 
@@ -185,25 +236,30 @@ namespace Spica.Core
             });
         }
 
-        static string RewriteCalls(string code, McPlan plan, string label)
+        static string RewriteCalls(string code, McPlan plan, string label) =>
+            RewriteCalls(code, (kind, original) =>
+            {
+                var site = new McSite { Index = plan.Sites.Count + 1, Label = label, Original = original, Kind = kind };
+                plan.Sites.Add(site);
+                return site.Param;
+            });
+
+        /// <summary>Replaces each random call by an expression of the parameter <paramref name="alloc"/> gives it.</summary>
+        static string RewriteCalls(string code, Func<SiteKind, string, string> alloc)
         {
             return ReplaceCalls(code, RandomFuncs, (name, args) =>
             {
                 // Arguments may contain random calls themselves (e.g. mc(mc(1k,.1),.05)).
-                var a = args.Select(x => HasCall(x, RandomFuncs) ? RewriteCalls(x, plan, label) : x).ToList();
-                var site = new McSite { Index = plan.Sites.Count + 1, Label = label, Original = $"{name}({string.Join(",", args)})" };
-                plan.Sites.Add(site);
+                var a = args.Select(x => HasCall(x, RandomFuncs) ? RewriteCalls(x, alloc) : x).ToList();
+                string original = $"{name}({string.Join(",", args)})";
                 switch (name.ToLowerInvariant())
                 {
                     case "mc":     // uniform in nominal*(1 +/- tol)
-                        site.Kind = SiteKind.Uniform;
-                        return $"(({Arg(a, 0)})*(1+({Arg(a, 1)})*{site.Param}))";
+                        return $"(({Arg(a, 0)})*(1+({Arg(a, 1)})*{alloc(SiteKind.Uniform, original)}))";
                     case "flat":   // uniform in [-x, x]
-                        site.Kind = SiteKind.Uniform;
-                        return $"(({Arg(a, 0)})*{site.Param})";
+                        return $"(({Arg(a, 0)})*{alloc(SiteKind.Uniform, original)})";
                     default:       // gauss(sigma): normal, mean 0
-                        site.Kind = SiteKind.Gaussian;
-                        return $"(({Arg(a, 0)})*{site.Param})";
+                        return $"(({Arg(a, 0)})*{alloc(SiteKind.Gaussian, original)})";
                 }
             });
         }

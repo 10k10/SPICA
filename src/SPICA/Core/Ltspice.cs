@@ -77,6 +77,54 @@ namespace Spica.Core
             return null;
         }
 
+        /// <summary>The user's LTspice library folder (lib\cmp, lib\sub, lib\sym), or null.</summary>
+        public static string LibDir()
+        {
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            return new[] { Path.Combine(local, @"LTspice\lib"), Path.Combine(docs, @"LTspiceXVII\lib") }.FirstOrDefault(Directory.Exists);
+        }
+
+        /// <summary>
+        /// The extra folders set in LTspice's Control Panel > Search Paths (LibrarySearchPath or SymbolSearchPath),
+        /// existing folders only. The value is read tolerantly: one or several lines, separated by ; | or newlines.
+        /// </summary>
+        public static List<string> SearchPaths(string key)
+        {
+            var found = new List<string>();
+            var path = UserIniPath();
+            if (path == null) return found;
+            byte[] bytes;
+            try { bytes = File.ReadAllBytes(path); } catch { return found; }
+            var texts = new List<string> { Encoding.Unicode.GetString(bytes) };
+            if (bytes.Length > 3) texts.Add(Encoding.Unicode.GetString(bytes, 1, bytes.Length - 1));
+            texts.Add(Encoding.Default.GetString(bytes));
+            var offRx = new Regex(@"^\s*" + Regex.Escape(key) + @"Disabled\s*=\s*(true|1)\s*$", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            if (texts.Any(t => offRx.IsMatch(t))) return found;     // unticked in LTspice's Control Panel
+            var keyRx = new Regex(@"^\s*" + Regex.Escape(key) + @"\s*=(.*)$", RegexOptions.IgnoreCase);
+            var pathLine = new Regex(@"^\s*""?([A-Za-z]:\\|\\\\|%)");
+            var split = new Regex(@"[;|\t]+|\\n(?=[A-Za-z]:\\|\\\\)|(?<=\S)(?=[A-Za-z]:\\)");
+            foreach (var text in texts)
+            {
+                var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim('﻿', '\0', ' ')).ToList();
+                for (int i = 0; i < lines.Count; i++)
+                {
+                    var m = keyRx.Match(lines[i]);
+                    if (!m.Success) continue;
+                    var parts = new List<string> { m.Groups[1].Value };
+                    for (int j = i + 1; j < lines.Count && pathLine.IsMatch(lines[j]); j++) parts.Add(lines[j]);   // a value spread over lines
+                    foreach (var part in parts)
+                        foreach (var raw in split.Split(part))
+                        {
+                            string p = Environment.ExpandEnvironmentVariables(raw.Trim().Trim('"').Trim());
+                            try { if (p.Length > 2 && Directory.Exists(p) && !found.Contains(p, StringComparer.OrdinalIgnoreCase)) found.Add(Path.GetFullPath(p)); }
+                            catch { }
+                        }
+                }
+            }
+            return found;
+        }
+
         static readonly Regex SectionRx = new Regex(@"^\[([A-Za-z0-9 _]+)\]$");
         static readonly Regex KeyRx = new Regex(@"^([A-Za-z0-9_ ]{1,64})=([\x20-\x7E]*)$");
 

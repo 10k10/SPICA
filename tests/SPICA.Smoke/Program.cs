@@ -61,9 +61,12 @@ static class Program
         }
 
         // SPICA.Smoke --reportform <png> <campaign folder> : capture Results > Report...
-        if (args.Length > 2 && args[0] == "--reportform")
+        if (args.Length > 2 && (args[0] == "--reportform" || args[0] == "--inputsform"))
         {
-            var f = new Spica.UI.ReportForm(ResultSet.Load(args[2])) { StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen };
+            var rsf = ResultSet.Load(args[2]);
+            ErrorBudget.Register(rsf, rsf.Setup.Errors);
+            System.Windows.Forms.Form f = args[0] == "--inputsform" ? (System.Windows.Forms.Form)new Spica.UI.InputsForm(rsf) : new Spica.UI.ReportForm(rsf);
+            f.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             f.Shown += (s, e) =>
             {
                 f.Refresh();
@@ -180,10 +183,27 @@ static class Program
         }
         if (args.Length > 2 && args[0] == "--sens")
         {
+            // SPICA_INPUTS=Vin|... chooses the inputs (default: automatic); also prints the old view, the input as a tolerance
             var rs = ResultSet.Load(args[1]);
+            var inEnv = Environment.GetEnvironmentVariable("SPICA_INPUTS");
+            if (inEnv != null) rs.Setup.Inputs = ReportOptions.Split(inEnv);
+            ErrorBudget.Register(rs, rs.Setup.Errors);
             var names = rs.GroupNames();
             for (int g = 0; g < names.Count; g++)
-                Console.WriteLine($"== {names[g]}\n" + SensitivityReport.Parameters(rs, args[2], g).Narrative(12));
+            {
+                var rep = SensitivityReport.Parameters(rs, args[2], g);
+                Console.WriteLine($"== {names[g]}\n" + rep.Narrative(12));
+                foreach (var it in rep.Items)
+                    Console.WriteLine($"   {it.Name,-28} share {100 * it.Share,7:0.000} %  w/o input {100 * it.ShareRest,7:0.00} %  src {it.Src,8:0.0000}  at limit {it.AtLimit:G4} ({it.LimitText}){(it.IsInput ? "  INPUT" : "")}");
+                var plain = SensitivityReport.Parameters(rs, args[2], g, null, false);
+                Console.WriteLine("-- input as a tolerance (before 0.5):");
+                foreach (var it in plain.Items.Take(6)) Console.WriteLine($"   {it.Name,-28} share {100 * it.Share,7:0.000} %");
+            }
+            foreach (var e in rs.Setup.Errors)
+            {
+                var r = ErrorBudget.Compute(rs, e, 0, rs.Setup.DesignSigma, rs.Setup.PessimisticSigma);
+                Console.WriteLine(r.Summary());
+            }
             return 0;
         }
 
@@ -229,6 +249,8 @@ static class Program
         string ini = Ltspice.WritePrivateIni(Path.Combine(tmp, "convert.ini"), true);
         string text = Ltspice.ConvertSchematic(lt, asc, ini, out var enc);
         var nl = Netlist.Parse(text, asc, enc);
+        int redirected = SourceBundle.Redirect(nl);
+        if (redirected > 0) Console.WriteLine($"Redirected to the source bundle: {redirected} references");
         Console.WriteLine($"Nodes: {string.Join(" ", nl.Nodes)}");
         Console.WriteLine($"Currents: {string.Join(" ", nl.Currents)}");
         Console.WriteLine($"Meas: {string.Join(" ", nl.MeasNames)}  required: {string.Join(" ", nl.RequiredSignals)}");
@@ -251,10 +273,12 @@ static class Program
         }
         if (Environment.GetEnvironmentVariable("SPICA_PAIRED") == "1")
         {
-            options.Mc = McPlan.Build(nl.Lines);
+            options.Mc = McPlan.Build(nl.Lines, nl.SourcePath);
             foreach (var s in options.Mc.Sites) Console.WriteLine($"site {s.Index} {s.Kind} {s.Label}: {s.Original}");
             foreach (var w in options.Mc.Warnings) Console.WriteLine("WARN " + w);
         }
+        string sidecar = Path.ChangeExtension(asc, ".spica");
+        if (File.Exists(sidecar)) options.Setup = SpicaProject.Load(sidecar);   // copied into campaign.spica and the source bundle
         var engine = new CampaignEngine(options, hw, new ProfileStore());
 
         var done = new ManualResetEventSlim();
@@ -351,7 +375,7 @@ static class Program
         CampaignOptions Opt(string dir) => new CampaignOptions
         {
             LtspiceExe = lt, AscPath = asc, OutputDir = dir, Netlist = nl, Runs = runs, SaveSignals = nl.RequiredSignals.ToList(),
-            KeepRaw = false, ClockReseed = true, Corners = corners, Mc = McPlan.Build(nl.Lines), Seed = 777,
+            KeepRaw = false, ClockReseed = true, Corners = corners, Mc = McPlan.Build(nl.Lines, nl.SourcePath), Seed = 777,
             Setup = new SpicaProject { Schematic = asc, Runs = runs, Seed = 777, Paired = true, Temp = TempMode.Corners, Corners = corners },
         };
         CampaignEngine Run(CampaignOptions o, Action<CampaignEngine> during)

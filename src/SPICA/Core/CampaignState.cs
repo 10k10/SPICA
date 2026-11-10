@@ -18,6 +18,7 @@ namespace Spica.Core
         public int Jobs, Done;
         public double ElapsedSeconds;
         public string CircuitHash = "";
+        public DateTime? Started, Ended;      // wall clock: first start, and when it last finished or stopped
 
         public bool Unfinished => !Status.Equals("Finished", StringComparison.OrdinalIgnoreCase) && Done < Jobs;
 
@@ -33,6 +34,8 @@ namespace Spica.Core
             sb.AppendLine("Done=" + Done.ToString(Inv));
             sb.AppendLine("ElapsedSeconds=" + ElapsedSeconds.ToString("0.###", Inv));
             sb.AppendLine("CircuitHash=" + CircuitHash);
+            if (Started.HasValue) sb.AppendLine("Started=" + Started.Value.ToString("yyyy-MM-dd HH:mm:ss", Inv));
+            if (Ended.HasValue) sb.AppendLine("Ended=" + Ended.Value.ToString("yyyy-MM-dd HH:mm:ss", Inv));
             sb.AppendLine("Updated=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", Inv));
             File.WriteAllText(PathIn(folder), sb.ToString(), new UTF8Encoding(false));
         }
@@ -55,6 +58,8 @@ namespace Spica.Core
                     case "done": int.TryParse(val, NumberStyles.Integer, Inv, out s.Done); break;
                     case "elapsedseconds": double.TryParse(val, NumberStyles.Float, Inv, out s.ElapsedSeconds); break;
                     case "circuithash": s.CircuitHash = val; break;
+                    case "started": if (DateTime.TryParseExact(val, "yyyy-MM-dd HH:mm:ss", Inv, DateTimeStyles.None, out var st)) s.Started = st; break;
+                    case "ended": if (DateTime.TryParseExact(val, "yyyy-MM-dd HH:mm:ss", Inv, DateTimeStyles.None, out var en)) s.Ended = en; break;
                 }
             }
             return s;

@@ -9,7 +9,7 @@
     <RootNamespace>Spica</RootNamespace>
     <ApplicationIcon>Resources\spica.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.4.2</Version>
+    <Version>0.5.0</Version>
     <Product>SPICA - Spice Parallel Instancer Circuit Analysis</Product>
     <Copyright>SPICA project</Copyright>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -20,6 +20,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
 
   <ItemGroup>
