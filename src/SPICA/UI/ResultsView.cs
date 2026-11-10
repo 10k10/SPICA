@@ -431,7 +431,9 @@ namespace Spica.UI
         Win98Tile[] budTiles;
         readonly List<ErrorResult> budRows = new List<ErrorResult>();
         ErrorResult budShown;
-        ErrorSlice budSlice;         // the condition in the tiles and the chart (the worst one unless picked in the table)
+        ErrorSlice budSlice;         // the point in the tiles and the chart (the tightest one unless picked in the table)
+        readonly List<ErrorSlice> budCond = new List<ErrorSlice>();   // the rows of the table: the tightest point of each temperature
+        readonly List<string> budCondVerdict = new List<string>();
         bool loadingBud;
 
         static readonly Color PassBack = Color.FromArgb(222, 242, 222), FailBack = Color.FromArgb(250, 222, 222), CheckBack = Color.FromArgb(246, 238, 204);
@@ -447,7 +449,7 @@ namespace Spica.UI
             chkBudPess.CheckedChanged += (s, e) => { if (filling || rs == null) return; rs.Setup.PessimisticSigma = chkBudPess.Checked; rs.Setup.Dirty = true; NotifySetup(); RefreshBudget(); };
             cbBudGroup = Combo(414, 2, 140);
             bar.Controls.AddRange(new Control[] { Lbl("Design sigma:", 0, 2), txtBudSigma, chkBudPess, Lbl("Group:", 370, 2), cbBudGroup,
-                Hint("PASS: mean +/- k sigma inside the boundaries in every condition, and the error bell-shaped.", 566, 2) });
+                Hint("PASS: mean +/- k sigma inside the boundaries everywhere (every temperature and input), and the error bell-shaped.", 566, 2) });
 
             // ---------------------------------------------------------------- left: the definition
             var grp = new Win98GroupBox { Text = "Error definition", Dock = DockStyle.Left, Width = 292 };
@@ -516,7 +518,8 @@ namespace Spica.UI
             tip.SetToolTip(txtBudSigma, "The error must stay inside the boundaries at mean +/- this many sigma (6 = very conservative, 3 = 99.73 %).");
             tip.SetToolTip(chkBudPess, "Sigma from n runs is itself uncertain. Ticked: use its 95 % upper bound (about +12 % at 200 runs, +4 % at 2000).");
             tip.SetToolTip(cbBudX, "Output vs reference: the measurement the ideal output is computed from (e.g. vin), or a fixed number.\n" +
-                                   "A .meas error with a % of reading boundary: the measurement the % is taken of.");
+                                   "A .meas error with a % of reading boundary: the measurement the % is taken of.\n" +
+                                   "A .meas error otherwise: the input it is swept over (optional), so the error is judged across it, not pooled.");
             tip.SetToolTip(txtBudTf, "Any expression of x (the reference) and T (temperature in °C), e.g. 2*x + 10m, or 2*x*(1 + 50u*(T-25)).");
             tip.SetToolTip(chkBudRefer, "Divide the error by the ideal gain (d ideal / dx): the error as seen at the input.");
             tip.SetToolTip(chkBudSym, "Ticked: one value, +/- around zero. Clear it to enter a lower and an upper boundary.");
@@ -524,7 +527,7 @@ namespace Spica.UI
             // ---------------------------------------------------------------- right: the verdict
             lvBud = new Win98ListView();
             foreach (var (t, w) in new[] { ("Error", 150), ("Verdict", 60), ("Margin", 60), ("Mean ± 6 sigma", 150), ("Boundaries", 110),
-                                           ("Worst condition", 180), ("Definition", 300) })
+                                           ("Worst point", 180), ("Definition", 300) })
                 lvBud.Columns.Add(t, w, t == "Margin" ? HorizontalAlignment.Right : HorizontalAlignment.Left);
             lvBud.CellColor = (i, c) =>
             {
@@ -555,7 +558,7 @@ namespace Spica.UI
                 }
             };
             foreach (var (t, i) in new[] {
-                ("PASS: mean ± k sigma inside the boundaries in every condition, and the error bell-shaped (or with shorter tails).\nFAIL: outside at k sigma, or units already outside.\nCHECK: not bell-shaped, the k-sigma figure cannot decide.", 0),
+                ("PASS: mean ± k sigma inside the boundaries everywhere (every temperature and input), and the error bell-shaped (or with shorter tails).\nFAIL: outside at k sigma, or units already outside.\nCHECK: not bell-shaped, the k-sigma figure cannot decide.", 0),
                 ("Average error in this condition: the same in every unit, so a better TF or a calibration can remove it.", 1),
                 ("Unit-to-unit spread in this condition (its 95 % upper bound when Pessimistic sigma is ticked).", 2),
                 ("The extrapolated range of a production unit.", 3),
@@ -586,29 +589,30 @@ namespace Spica.UI
             middle.Resize += (s, e) => sensWell.Width = Math.Max(240, Math.Min(380, middle.Width / 3));
 
             lvBudCond = new Win98ListView();
-            foreach (var (t, w) in new[] { ("Condition", 190), ("n", 50), ("Mean", 80), ("Sigma", 80), ("Mean ± 6 sigma", 150), ("Low side", 76), ("High side", 76),
+            foreach (var (t, w) in new[] { ("Temperature", 100), ("Tightest at", 110), ("Mean", 80), ("Sigma", 80), ("Mean ± k sigma", 150), ("Low side", 76), ("High side", 76),
                                            ("Margin", 60), ("Bell-shaped", 90), ("Verdict", 60) })
-                lvBudCond.Columns.Add(t, w, t == "Condition" || t == "Bell-shaped" || t == "Verdict" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
+                lvBudCond.Columns.Add(t, w, t == "Temperature" || t == "Tightest at" || t == "Bell-shaped" || t == "Verdict" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
             lvBudCond.CellColor = (i, c) =>
             {
-                if (budShown == null || i >= budShown.Slices.Count) return null;
-                var s = budShown.Slices[i];
-                if (c == 9) return VerdictColor(s.Verdict);
+                if (budShown == null || i >= budCond.Count) return null;
+                var s = budCond[i];
+                if (c == 9) return VerdictColor(budCondVerdict[i]);
                 if (c == 5) return SideColor(s.SigmasLo, s.MarginLo);
                 if (c == 6) return SideColor(s.SigmasHi, s.MarginHi);
                 if (c == 7 && s.Margin < 0) return Win98Chart.Red;
                 if (c == 8) return s.Normal ? Win98Chart.Green : s.TailsOk ? Win98Chart.Olive : Win98Chart.Maroon;
                 return null;
             };
-            lvBudCond.HeaderTip = c => c == 0 ? "Each error is judged per temperature and per band of the input range: units in the same condition differ only by their tolerances. Click a row to see it above."
+            lvBudCond.HeaderTip = c => c == 0 ? "One row per temperature. The error must be met everywhere: each row is the input value with the least margin at that temperature. Click a row to see it above."
+                                     : c == 1 ? "The input value where the error comes closest to a boundary at this temperature (with an input that varies)."
                                      : c == 5 || c == 6 ? "Distance of the boundary from the mean, in sigma (needed: k)." : c == 7 ? "Room left at k sigma, as a share of half the allowed range." : null;
             lvBudCond.SelectedIndexChanged += (s, e) =>
             {
                 if (budShown == null || lvBudCond.SelectedIndices.Count == 0) return;
                 int i = lvBudCond.SelectedIndices[0];
-                if (i < budShown.Slices.Count && budShown.Slices[i] != budSlice) { budSlice = budShown.Slices[i]; ShowBudgetSlice(); }
+                if (i < budCond.Count && budCond[i] != budSlice) { budSlice = budCond[i]; ShowBudgetSlice(); }
             };
-            var condWell = new Win98Well(lvBudCond) { Dock = DockStyle.Bottom, Height = 150 };
+            var condWell = new Win98Well(lvBudCond) { Dock = DockStyle.Bottom, Height = 96 };
             lblBudNotes = new Label { Dock = DockStyle.Bottom, Height = 40, BackColor = Win98.Face, ForeColor = Win98.Shadow, UseMnemonic = false };
 
             var right = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
@@ -643,13 +647,13 @@ namespace Spica.UI
         static readonly string[] BudTips =
         {
             "Your name for this error.",
-            "PASS: mean +/- k sigma inside the boundaries in every condition, and the error is bell-shaped (or has shorter tails, so the bound is safe).\n" +
+            "PASS: mean +/- k sigma inside the boundaries everywhere (every temperature and input), and the error is bell-shaped (or has shorter tails, so the bound is safe).\n" +
             "FAIL: outside the boundaries at k sigma, or simulated units already outside.\n" +
             "CHECK: the k-sigma extrapolation cannot decide (tails longer than normal, or flat-shaped and over on paper): run a worst case or many more runs.",
             "Room left at k sigma in the worst condition, as a share of half the allowed range. Negative = outside.",
             "The extrapolated error range of a production unit: mean +/- k sigma, in the worst condition.",
             "The allowed error.",
-            "Each error is judged per temperature and per band of the input range. This is the condition with the least margin.",
+            "Each error is judged per temperature and across the input (each level swept, or along the fitted envelope). This is the point with the least margin.",
             "How the error is obtained: a .meas that already is the error, or output - ideal(reference), optionally referred to the input.",
         };
 
@@ -660,8 +664,7 @@ namespace Spica.UI
         {
             bool cmp = rbBudCmp.Checked, pctRdg = cbBudUnit.SelectedIndex == 1;
             lblBudY.Text = cmp ? "Output:" : "Error:";
-            lblBudX.Text = cmp ? "Reference:" : "Reading:";
-            lblBudX.Enabled = cbBudX.Enabled = cmp || pctRdg;
+            lblBudX.Text = cmp ? "Reference:" : pctRdg ? "Reading:" : "Input:";
             pnlBudIdeal.Enabled = cmp;
             txtBudGain.Enabled = txtBudOff.Enabled = cmp && rbBudLin.Checked;
             txtBudTf.Enabled = cmp && rbBudExpr.Checked;
@@ -717,7 +720,6 @@ namespace Spica.UI
             else
             {
                 it.Tf = "";
-                if (it.Unit != BudgetUnit.PctReading) it.X = "";
             }
             if (it.Symmetric)
             {
@@ -941,18 +943,30 @@ namespace Spica.UI
 
             lvBudCond.BeginUpdate();
             lvBudCond.Items.Clear();
+            budCond.Clear(); budCondVerdict.Clear();
+            // an input that varies: the error across it is the main view
+            if (budShown != null && budShown.Error == null && budShown.InputVaries && cbBudChart.SelectedIndex != 1) cbBudChart.SelectedIndex = 1;
             if (budShown != null && budShown.Error == null)
             {
                 var r = budShown;
                 string u(double v) => ErrorBudget.Fmt(v, r.Item);
                 string side(double sig, double m) => double.IsNaN(m) ? "open" : double.IsNaN(sig) ? "-" : sig.ToString("0.0", Inv) + " sigma";
-                foreach (var s in r.Slices)
+                var order = new[] { "FAIL", "CHECK", "PASS", "-" };
+                foreach (var g in r.Slices.GroupBy(x => x.Corner))
+                {
+                    var tight = r.Slices.Contains(r.Worst) && r.Worst.Corner == g.Key ? r.Worst
+                              : g.OrderBy(x => r.HasBudget ? x.Margin : -Math.Max(Math.Abs(x.Lo), Math.Abs(x.Hi))).First();
+                    string verdict = g.Select(x => x.Verdict).OrderBy(v => Array.IndexOf(order, v)).First();
+                    budCond.Add(tight); budCondVerdict.Add(verdict);
+                    var s = tight;
                     lvBudCond.Items.Add(new ListViewItem(new[]
                     {
-                        s.Label, s.D.N.ToString(Inv), u(s.D.Mean), u(s.Sigma), $"{u(s.Lo)} .. {u(s.Hi)}", side(s.SigmasLo, s.MarginLo), side(s.SigmasHi, s.MarginHi),
-                        r.HasBudget ? r.SlicePct(s).ToString("0", Inv) + " %" : "", s.Normal ? "yes" : s.TailsOk ? "shorter tails" : "no", s.Verdict,
+                        g.Key >= 0 ? ResultSet.TempLabel(rs.Corners[g.Key]) : "all runs", double.IsNaN(s.X) ? "-" : $"{r.Item.X} = {ErrorBudget.Eng(s.X)}",
+                        u(s.Mean), u(s.Sigma), $"{u(s.Lo)} .. {u(s.Hi)}", side(s.SigmasLo, s.MarginLo), side(s.SigmasHi, s.MarginHi),
+                        r.HasBudget ? r.SlicePct(s).ToString("0", Inv) + " %" : "", s.Normal ? "yes" : s.TailsOk ? "shorter tails" : "no", verdict,
                     }));
-                int w = r.Slices.IndexOf(r.Worst);
+                }
+                int w = budCond.IndexOf(r.Worst);
                 if (w >= 0) { lvBudCond.Items[w].Selected = true; lvBudCond.Items[w].Focused = true; }
             }
             lvBudCond.EndUpdate();
@@ -982,7 +996,7 @@ namespace Spica.UI
             var vc = VerdictColor(r.Verdict);
             budTiles[0].Set(r.Verdict == "-" ? "no boundaries" : r.Verdict, r.Verdict == "-" ? "" : $"at {k} sigma" + (r.Slices.Count > 1 ? ", all conditions" : ""),
                 vc, r.Verdict == "PASS" ? PassBack : r.Verdict == "FAIL" ? FailBack : r.Verdict == "CHECK" ? CheckBack : (Color?)null);
-            budTiles[1].Set(u(s.D.Mean), "same in every unit");
+            budTiles[1].Set(u(s.Mean), s.Modelled ? "fitted, at this input" : "same in every unit");
             budTiles[2].Set(u(s.Sigma), r.Pessimistic ? "95 % upper bound" : "sample");
             budTiles[3].Set($"{u(s.Lo)} .. {u(s.Hi)}", $"seen {u(s.D.Min)} .. {u(s.D.Max)}");
             void Side(Win98Tile t, double sig, double m)
@@ -997,7 +1011,7 @@ namespace Spica.UI
                 s.Normal ? Win98Chart.Green : s.TailsOk ? Win98Chart.Olive : Win98Chart.Maroon);
 
             lblBudVerdict.ForeColor = vc ?? Color.Black;
-            lblBudVerdict.Text = $"  {(s == r.Worst ? (r.Slices.Count > 1 ? "Worst condition" : "All runs") : "Condition")}: {s.Label}.   {(r.Verdict == "-" ? "" : r.Verdict + ": ")}{r.VerdictText()}";
+            lblBudVerdict.Text = $"  {(s == r.Worst ? (r.Slices.Count > 1 ? "Worst point" : "All runs") : "Condition")}: {s.Label}.   {(r.Verdict == "-" ? "" : r.Verdict + ": ")}{r.VerdictText()}";
             lblBudNotes.Text = string.Join("\n", r.Notes());
             BuildBudgetChart(chBud, r, cbBudChart.SelectedIndex, s);
 
@@ -1031,7 +1045,7 @@ namespace Spica.UI
         }
 
         /// <summary>
-        /// The error against temperature: per corner the mean and the widest mean +/- k sigma of its input bands, the
+        /// The error against temperature: per corner the mean and the widest mean +/- k sigma across the input, the
         /// extremes seen and the boundaries; with a random temperature, every run. False when there is nothing to show.
         /// </summary>
         bool BuildBudgetTempChart(Win98Chart ch, ErrorResult r)
@@ -1048,20 +1062,20 @@ namespace Spica.UI
                 var cs = r.Slices.Where(x => x.Corner >= 0 && x.Corner < rs.Corners.Count).GroupBy(x => x.Corner).OrderBy(g => rs.Corners[g.Key]).ToList();
                 if (cs.Count < 2) return false;
                 var t = cs.Select(g => rs.Corners[g.Key]).ToArray();
-                var all = cs.Select(g => g.SelectMany(x => x.E).ToArray()).ToArray();
+                var all = cs.Select(g => r.E.Where((e, i) => r.Rows[i].Corner == g.Key).ToArray()).ToArray();
                 ch.Add(new ChartSeries
                 {
                     Kind = SeriesKind.ErrorBars, X = t, Y = all.Select(e => e.Average()).ToArray(),
                     Lo = cs.Select(g => g.Min(x => x.Lo)).ToArray(), Hi = cs.Select(g => g.Max(x => x.Hi)).ToArray(),
-                    Color = Win98Chart.Navy, Label = $"mean, and mean +/- {k} sigma" + (cs.Any(g => g.Count() > 1) ? " (widest input band)" : ""),
+                    Color = Win98Chart.Navy, Label = $"mean, and mean +/- {k} sigma" + (cs.Any(g => g.Count() > 1) ? " (widest across the input)" : ""),
                 });
                 ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = t, Y = all.Select(e => e.Min()).ToArray(), Color = Win98Chart.Teal, Dashed = true, Label = "min / max seen" });
                 ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = t, Y = all.Select(e => e.Max()).ToArray(), Color = Win98Chart.Teal, Dashed = true, InLegend = false });
             }
             else
             {
-                var tx = r.Slices.SelectMany(x => x.Rows.Select(row => row.Temp)).ToArray();
-                var ey = r.Slices.SelectMany(x => x.E).ToArray();
+                var tx = r.Rows.Select(row => row.Temp).ToArray();
+                var ey = r.E;
                 if (tx.Length < 3 || tx.Max() <= tx.Min()) return false;
                 ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = tx, Y = ey, Color = Win98Chart.Navy, Size = 2, Label = "runs" });
             }
@@ -1084,18 +1098,19 @@ namespace Spica.UI
                 ch.YFromZero = false;
                 ch.XLabel = r.Item.X; ch.YLabel = "error" + (unit.Length > 0 ? " (%)" : "");
                 ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = r.X, Y = r.E, Color = Win98Chart.Navy, Size = 2, Label = "runs" });
-                // the +/- k sigma band of every input band, at the temperature of the condition shown
-                bool first = true;
-                foreach (var b in r.Slices.Where(x => x.Corner == s.Corner && !double.IsNaN(x.XLo)))
+                // mean and mean +/- k sigma across the input, at the temperature of the condition shown
+                var env = r.Envelopes.FirstOrDefault(x => x.Corner == s.Corner);
+                if (env != null && env.X.Length > 1)
                 {
-                    foreach (var v in new[] { b.Lo, b.Hi })
-                    {
-                        ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = new[] { b.XLo, b.XHi }, Y = new[] { v, v }, Color = Win98Chart.Purple, Size = 2,
-                                                 Label = $"mean +/- {k:0.#} sigma per band" + (s.Corner >= 0 && rs != null ? $" ({ResultSet.TempLabel(rs.Corners[s.Corner])})" : ""), InLegend = first });
-                        first = false;
-                    }
+                    string at = s.Corner >= 0 && rs != null ? $" ({ResultSet.TempLabel(rs.Corners[s.Corner])})" : "";
+                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = env.X, Y = env.Mean, Color = Win98Chart.Teal, Size = 2, Label = "mean" + (env.Levels ? "" : " (fit)") + at });
+                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = env.X, Y = env.Hi, Color = Win98Chart.Purple, Size = 2, Label = $"mean +/- {k:0.#} sigma" + at });
+                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = env.X, Y = env.Lo, Color = Win98Chart.Purple, Size = 2, InLegend = false });
+                    if (!double.IsNaN(s.X))
+                        ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = new[] { s.X, s.X }, Y = new[] { s.Lo, s.Hi }, Color = Win98Chart.Red, Size = 6,
+                                                 Label = s == r.Worst ? "worst point" : "condition shown" });
                 }
-                if (first) ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = new[] { s.Lo, s.Hi }, Color = Win98Chart.Purple, Dashed = true, Label = $"mean +/- {k:0.#} sigma" });
+                else ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = new[] { s.Lo, s.Hi }, Color = Win98Chart.Purple, Dashed = true, Label = $"mean +/- {k:0.#} sigma" });
                 if (bounds.Length > 0)
                 {
                     double pad = 0.12 * Math.Max(r.Item.Span, 1e-30);
@@ -2160,12 +2175,13 @@ namespace Spica.UI
         string BuildReport(ReportOptions o)
         {
             string H(string s) => WebUtility.HtmlEncode(s ?? "");
+            int figNo = 0;
             string Fig(Win98Chart c, string caption, int w = 760, int h = 340) =>
-                $"<figure>{c.ToSvg(w, h)}" + (caption != null ? $"<figcaption>{H(caption)}</figcaption>" : "") + "</figure>";
+                $"<figure>{c.ToSvg(w, h)}<figcaption><b>Figure {++figNo}.</b> {H(caption ?? "")}</figcaption></figure>";
             string Pre(string s) => string.IsNullOrWhiteSpace(s) ? "" : "<pre>" + H(s.TrimEnd()) + "</pre>";
+            // a figure (label, value, remark) as one row of a plain key/value table
             string Card(string label, string value, string sub = null, string color = null, string back = null) =>
-                $"<div class=\"card\"{(back != null ? $" style=\"background:{back}\"" : "")}><span>{H(label)}</span><b{(color != null ? $" style=\"color:{color}\"" : "")}>{H(value)}</b>" +
-                (string.IsNullOrEmpty(sub) ? "" : $"<i>{H(sub)}</i>") + "</div>";
+                $"<tr><td>{H(label)}</td><td{(color != null ? $" style=\"color:{color}\"" : "")}>{H(value)}</td><td>{H(sub ?? "")}</td></tr>";
 
             var st = rs.Setup;
             bool concise = o.Kind == ReportKind.Concise;
@@ -2186,44 +2202,41 @@ namespace Spica.UI
             var sb = new StringBuilder();
             sb.Append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
               .Append($"<title>{H(title)} - SPICA report</title><style>")
-              .Append(":root{--ink:#1d1d1f;--muted:#5f5f5f;--line:#dedede;--accent:#000080;--soft:#f5f5f7}")
-              .Append("*{box-sizing:border-box}body{margin:0;background:#e9e9e6;color:var(--ink);font:13px/1.5 'Segoe UI',Tahoma,Arial,sans-serif}")
-              .Append(".page{max-width:1020px;margin:24px auto;background:#fff;padding:36px 44px 28px;box-shadow:0 1px 4px rgba(0,0,0,.18)}")
-              .Append("header{border-bottom:3px solid var(--accent);padding-bottom:14px;margin-bottom:8px}")
-              .Append("header .brand{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}")
-              .Append("h1{margin:4px 0 2px;font-size:24px;font-weight:600}header .sub{color:var(--muted)}")
-              .Append("h2{font-size:18px;font-weight:600;margin:36px 0 10px;padding-top:14px;border-top:1px solid var(--line)}")
-              .Append("h3{font-size:14px;font-weight:600;margin:22px 0 6px}")
-              .Append("table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums;margin:6px 0 4px}")
-              .Append("th,td{padding:5px 9px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}")
-              .Append("th{background:var(--soft);font-weight:600;border-bottom:2px solid #c4c4c4}td:first-child,th:first-child{text-align:left}")
-              .Append("table.kv{width:auto}table.kv td{text-align:left;border:none;padding:2px 14px 2px 0}table.kv td:first-child{color:var(--muted)}")
-              .Append(".req{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--soft);padding:8px 14px;margin:8px 0 12px}")
-              .Append(".req .t{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:2px}")
-              .Append(".req table.kv td{white-space:normal}.req table.kv td:last-child{font-weight:600}")
-              .Append(".memo{white-space:pre-wrap;margin:0}.warn{color:#c00000;font-weight:600}td.hash{font:11px Consolas,monospace;color:var(--muted)}")
-              .Append(".verdict{font-size:14px;font-weight:600;margin:6px 0 2px}")
-              .Append(".wide{overflow-x:auto}.note{color:var(--muted);font-size:12px;margin:2px 0 10px}ul.notes{margin:6px 0 10px;padding-left:20px;color:#333}")
-              .Append("figure{margin:12px 0 6px}figure svg{display:block;width:100%;height:auto;border:1px solid var(--line)}")
-              .Append("figcaption{color:var(--muted);font-size:12px;margin-top:5px}")
-              .Append("pre{background:var(--soft);border-left:3px solid var(--accent);padding:9px 13px;margin:8px 0;font:12px/1.45 Consolas,'Lucida Console',monospace;white-space:pre-wrap}")
-              .Append("nav{background:var(--soft);padding:10px 16px;margin:18px 0}nav b{font-size:12px}nav ol{columns:2;margin:4px 0 0;padding-left:20px}nav a{color:var(--accent);text-decoration:none}")
-              .Append(".cards{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 4px}.card{border:1px solid var(--line);border-top:3px solid var(--accent);padding:6px 12px;min-width:120px}")
-              .Append(".card span{display:block;color:var(--muted);font-size:11px}.card b{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}")
-              .Append(".card i{display:block;color:var(--muted);font-size:11px;font-style:normal}")
-              .Append("footer{margin-top:36px;padding-top:8px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}")
-              .Append("@media print{body{background:#fff}.page{box-shadow:none;margin:0;max-width:none;padding:0}nav{display:none}")
-              .Append("section.meas" + (concise ? ",section.err+section.err" : "") + "{break-before:page}figure,pre,table,.cards,.req{break-inside:avoid}}")
+              .Append("body{margin:0;background:#fff;color:#000;font:13px/1.4 Arial,Helvetica,sans-serif;counter-reset:h2}")
+              .Append(".page{max-width:900px;margin:0 auto;padding:32px 44px 20px}")
+              .Append("header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #000080;padding-bottom:8px}")
+              .Append("header .kind{font-size:12px;font-weight:bold;color:#000080;text-transform:uppercase;letter-spacing:.04em}")
+              .Append("h1{margin:2px 0 3px;font-size:24px}header .sub{font-size:12px;color:#333}")
+              .Append(".mark{text-align:center;font:bold 11px Arial,sans-serif;letter-spacing:.12em;color:#000080;margin-left:24px}")
+              .Append(".mark img{display:block;width:48px;height:48px;margin:0 auto 2px;image-rendering:pixelated}")
+              .Append("h2{font-size:16px;margin:30px 0 8px;padding-bottom:2px;border-bottom:1px solid #000080;counter-increment:h2;counter-reset:h3}")
+              .Append("h2::before{content:counter(h2) \"  \";color:#000080}")
+              .Append("h3{font-size:14px;margin:20px 0 6px;counter-increment:h3}h3::before{content:counter(h2) \".\" counter(h3) \"  \";color:#000080}")
+              .Append("h3.plain::before{content:none}")
+              .Append("table{border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;margin:6px 0 8px}")
+              .Append("th,td{border:1px solid #9a9a9a;padding:3px 8px;text-align:right;white-space:nowrap}")
+              .Append("th{background:#e4e4e4;font-weight:bold;text-align:center}td:first-child{text-align:left}")
+              .Append("table.kv td{text-align:left;white-space:normal;vertical-align:top}table.kv td:first-child{background:#f0f0f0;font-weight:bold;white-space:nowrap}")
+              .Append("table.fig{min-width:65%}table.fig td:nth-child(2){font-weight:bold;white-space:nowrap}table.fig td:nth-child(3){color:#333}")
+              .Append(".memo{white-space:pre-wrap;margin:4px 0 0;padding:6px 10px;border:1px solid #9a9a9a}.warn{color:#b00000}td.hash{font:11px Consolas,monospace;color:#333}")
+              .Append(".verdict{font-weight:bold;margin:8px 0 4px}")
+              .Append(".wide{overflow-x:auto}.note{color:#222;font-size:12px;margin:4px 0 8px}ul.notes{margin:6px 0 10px;padding-left:20px}")
+              .Append("figure{margin:14px 0 18px}figure svg{display:block;width:100%;height:auto}")
+              .Append("figcaption{font-size:12px;margin-top:4px}")
+              .Append("pre{padding:6px 10px;margin:8px 0;border:1px solid #c8c8c8;background:#fafafa;font:12px/1.35 Consolas,'Courier New',monospace;white-space:pre-wrap}")
+              .Append("nav{margin:14px 0}nav b{color:#000080;text-transform:uppercase;font-size:12px}nav ol{columns:2;margin:4px 0 0;padding-left:4px;list-style:none}nav a{color:#000;text-decoration:none}")
+              .Append("footer{margin-top:36px;padding-top:5px;border-top:1px solid #000080;font-size:11px;color:#333;display:flex;justify-content:space-between}")
+              .Append("@media print{.page{margin:0;max-width:none;padding:0}nav{display:none}")
+              .Append("section.meas" + (concise ? ",section.err+section.err" : "") + "{break-before:page}figure,pre,table{break-inside:avoid}}")
               .Append("</style></head><body><div class=\"page\">");
 
             // ---------------------------------------------------------------- header + campaign
-            sb.Append("<header><div class=\"brand\">SPICA - Spice Parallel Instancer Circuit Analysis</div>")
-              .Append($"<h1>{(concise ? "Error budget" : "Analysis report")}: {H(title)}</h1>")
-              .Append($"<div class=\"sub\">{(schematic.Length > 0 ? $"Schematic {H(schematic)} &middot; " : "")}" +
-                      $"report generated {DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv)} by SPICA {H(MainForm.AppVersion)}</div></header>");
+            sb.Append($"<header><div><div class=\"kind\">{(concise ? "Error budget" : "Analysis report")}</div><h1>{H(title)}</h1>")
+              .Append(schematic.Length > 0 ? $"<div class=\"sub\">Schematic {H(schematic)}</div>" : "")
+              .Append("</div><div class=\"mark\">").Append(AppMark()).Append("S.P.I.C.A.</div></header>");
 
             if (!string.IsNullOrWhiteSpace(o.Notes))
-                sb.Append("<div class=\"req\"><div class=\"t\">Notes</div><p class=\"memo\">").Append(H(o.Notes.Trim())).Append("</p></div>");
+                sb.Append("<h3 class=\"plain\">Notes</h3><p class=\"memo\">").Append(H(o.Notes.Trim())).Append("</p>");
 
             sb.Append("<table class=\"kv\">");
             void Row(string k, string v) => sb.Append($"<tr><td>{H(k)}</td><td>{H(v)}</td></tr>");
@@ -2244,13 +2257,18 @@ namespace Spica.UI
 
             if (!concise || res.Count > 1)
             {
+                // numbered as the headings are (h2 = 1, 2, ...; the errors of the full report are 1.1, 1.2, ...)
+                int sec = 0;
+                void Toc(string id, string text, string no = null) => sb.Append($"<li><a href=\"#{id}\">{no ?? (++sec).ToString(Inv)}&nbsp;&nbsp;{H(text)}</a></li>");
                 sb.Append("<nav><b>Contents</b><ol>");
-                if (hasBudget) sb.Append("<li><a href=\"#budget\">Error budget</a></li>");
-                for (int j = 0; j < res.Count; j++) sb.Append($"<li><a href=\"#e{j}\">{(concise ? "" : "&nbsp;&nbsp;")}{H(res[j].Item.Name)}</a></li>");
-                if (showSummary) sb.Append("<li><a href=\"#summary\">Summary</a></li>");
-                foreach (var m in meas) sb.Append($"<li><a href=\"#m{rs.Meas.IndexOf(m)}\">{H(m)}</a></li>");
-                if (hasTf) sb.Append("<li><a href=\"#tf\">Transfer function</a></li>");
-                sb.Append("<li><a href=\"#trace\">Traceability</a></li>");
+                if (hasBudget) Toc("budget", "Error budget");
+                int top = sec;
+                for (int j = 0; j < res.Count; j++)
+                    if (concise) Toc("e" + j, res[j].Item.Name); else Toc("e" + j, res[j].Item.Name, $"&nbsp;&nbsp;{top}.{j + 1}");
+                if (showSummary) Toc("summary", "Summary");
+                foreach (var m in meas) Toc("m" + rs.Meas.IndexOf(m), m);
+                if (hasTf) Toc("tf", "Transfer function");
+                Toc("trace", "Traceability");
                 sb.Append("</ol></nav>");
             }
 
@@ -2259,13 +2277,12 @@ namespace Spica.UI
             {
                 int pass = res.Count(r => r.Verdict == "PASS"), fail = res.Count(r => r.Verdict == "FAIL"), check = res.Count(r => r.Verdict == "CHECK");
                 sb.Append("<h2 id=\"budget\">Error budget</h2>");
-                sb.Append("<div class=\"cards\">").Append(Card("Criterion", $"mean ± {kk} σ inside the boundaries", "in every temperature and input band"))
-                  .Append(Card("Pass", pass.ToString(Inv), null, pass > 0 ? "#007a00" : null)).Append(Card("Fail", fail.ToString(Inv), null, fail > 0 ? "#c00000" : null))
-                  .Append(Card("Check (not normal)", check.ToString(Inv), null, check > 0 ? "#8a6d00" : null)).Append("</div>");
+                sb.Append($"<p>Criterion: mean ± {kk} σ inside the boundaries at every temperature and across the input range. " +
+                          $"Result: {pass} pass, {fail} fail, {check} to check (not bell-shaped).</p>");
                 if (res.Count > 1 || !concise)
                 {
                     sb.Append("<div class=\"wide\"><table><tr>");
-                    foreach (var h in new[] { "Error", "Verdict", "Margin", $"Mean ± {kk}σ", "Boundaries", "Mean", "Sigma", "Normality p", "Worst condition", "n" })
+                    foreach (var h in new[] { "Error", "Verdict", "Margin", $"Mean ± {kk}σ", "Boundaries", "Mean", "Sigma", "Normality p", "Worst point", "n" })
                         sb.Append($"<th>{H(h)}</th>");
                     sb.Append("</tr>");
                     foreach (var r in res)
@@ -2274,13 +2291,13 @@ namespace Spica.UI
                         var cells = r.Error != null ? new[] { r.Item.Name, "ERROR", "", r.Error, "", "", "", "", "", "" } : new[]
                         {
                             r.Item.Name, r.Verdict, r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "", $"{u(r.Lo)} .. {u(r.Hi)}", r.Item.BoundsText(),
-                            u(r.D.Mean), u(r.Sigma), MeasStats.P(r.AdP), r.Slices.Count > 1 ? r.Worst.Label : "", r.N.ToString(Inv),
+                            u(r.Worst.Mean), u(r.Sigma), MeasStats.P(r.AdP), r.Slices.Count > 1 ? r.Worst.Label : "", r.N.ToString(Inv),
                         };
-                        sb.Append("<tr>").Append(string.Concat(cells.Select((c, j) => j == 1 ? $"<td style=\"color:{HtmlVerdict(r.Verdict)};font-weight:600;text-align:left\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
+                        sb.Append("<tr>").Append(string.Concat(cells.Select((c, j) => j == 1 ? $"<td style=\"color:{HtmlVerdict(r.Verdict)};font-weight:bold;text-align:left\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
                     }
                     sb.Append("</table></div>");
                 }
-                sb.Append($"<p class=\"note\">PASS: mean ± {kk} σ inside the boundaries in every condition, the error bell-shaped (Anderson-Darling p ≥ {MeasStats.NormalAlpha.ToString("0.###", Inv)}) " +
+                sb.Append($"<p class=\"note\">PASS: mean ± {kk} σ inside the boundaries everywhere, the error bell-shaped (Anderson-Darling p ≥ {MeasStats.NormalAlpha.ToString("0.###", Inv)}) " +
                           $"or with tails no longer than a normal's. FAIL: a simulated unit is outside, or mean ± {kk} σ crosses a boundary. " +
                           $"CHECK: not bell-shaped, so the {kk} σ extrapolation cannot decide. Sigma: " +
                           (st.PessimisticSigma ? "95 % upper confidence bound." : "sample standard deviation.") + "</p>");
@@ -2339,10 +2356,10 @@ namespace Spica.UI
                 {
                     sb.Append($"<section class=\"meas\"><h2 id=\"m{rs.Meas.IndexOf(m)}\">{H(m)}</h2>");
                     var s = BuildHistogram(c1, m, 0, true);
-                    sb.Append("<div class=\"cards\">").Append(Card("Runs", s.D.N.ToString(Inv))).Append(Card("Mean", Win98Chart.Fmt(s.D.Mean))).Append(Card("Std dev", Win98Chart.Fmt(s.D.Std)))
+                    sb.Append("<table class=\"kv fig\">").Append(Card("Runs", s.D.N.ToString(Inv))).Append(Card("Mean", Win98Chart.Fmt(s.D.Mean))).Append(Card("Std dev", Win98Chart.Fmt(s.D.Std)))
                       .Append(Card("Bell-shaped", s.NormalOk ? "yes" : "no", "p = " + MeasStats.P(s.AdP)));
                     if (s.Spec?.IsSet == true) sb.Append(Card("Yield", MeasStats.Pct(s.Cap.Yield))).Append(Card("Cpk", Num(s.Cap.Cpk, "0.000")));
-                    sb.Append("</div>");
+                    sb.Append("</table>");
                     if (o.Histogram)
                     {
                         sb.Append(Fig(c1, $"Distribution of {m} over {s.D.N} runs" + (s.Spec?.IsSet == true ? ", with the specification limits." : ".")));
@@ -2373,7 +2390,7 @@ namespace Spica.UI
                     {
                         sb.Append("<h3>Convergence</h3>");
                         string conv = BuildConvergence(c1, c2, m, 0);
-                        sb.Append(Fig(c1, null, 760, 240)).Append(Fig(c2, null, 760, 240));
+                        sb.Append(Fig(c1, $"Running mean of {m} as runs were added.", 760, 240)).Append(Fig(c2, $"Running standard deviation of {m}.", 760, 240));
                         sb.Append(Pre(conv));
                     }
 
@@ -2397,7 +2414,7 @@ namespace Spica.UI
                     {
                         var rep = BuildTf(c1, c2, tf, g);
                         if (groups.Count > 1) sb.Append($"<h3>{H(groups[g])}</h3>");
-                        sb.Append(Fig(c1, $"{tf.Y} against {tf.X}.")).Append(Fig(c2, null, 760, 240)).Append(Pre(rep.Narrative()));
+                        sb.Append(Fig(c1, $"{tf.Y} against {tf.X}.")).Append(Fig(c2, $"Residuals of {tf.Y} around the fitted line.", 760, 240)).Append(Pre(rep.Narrative()));
                         if (rs.Mode != TempMode.Corners) break;
                     }
                     sb.Append("</section>");
@@ -2405,7 +2422,6 @@ namespace Spica.UI
             }
             // ---------------------------------------------------------------- traceability
             sb.Append("<section><h2 id=\"trace\">Traceability</h2>");
-            sb.Append("<p class=\"note\">A snapshot taken when the campaign started: where it ran, with what, and every file it simulated.</p>");
             sb.Append("<table class=\"kv\">");
             Row("Simulated", trace.When);
             if (trace.Status != null) Row("Status", trace.Status);
@@ -2425,16 +2441,26 @@ namespace Spica.UI
                 sb.Append("<p class=\"warn\">Not in the bundle (not found when the campaign started): ").Append(H(string.Join("; ", trace.Missing))).Append("</p>");
             sb.Append("</section>");
 
-            sb.Append($"<footer>Generated by SPICA {H(MainForm.AppVersion)} - Spice Parallel Instancer Circuit Analysis. ")
-              .Append("Figures are vector graphics (SVG): they stay sharp when zoomed or printed.</footer></div></body></html>");
+            sb.Append($"<footer><span>Automatically generated by SPICA {H(MainForm.AppVersion)} on {DateTime.Now.ToString("yyyy-MM-dd HH:mm", Inv)}</span>")
+              .Append($"<span>{H(title)}</span></footer></div></body></html>");
             return sb.ToString();
         }
 
-        static string HtmlVerdict(string v) => v == "PASS" ? "#007a00" : v == "FAIL" ? "#c00000" : v == "CHECK" ? "#8a6d00" : "inherit";
+        static string HtmlVerdict(string v) => v == "PASS" ? "#006400" : v == "FAIL" ? "#a00000" : v == "CHECK" ? "#7a5c00" : "inherit";
+
+        /// <summary>The report's mark: the application's own icon (32 x 32, drawn pixel for pixel), as an embedded PNG.</summary>
+        static string AppMark()
+        {
+            using (var st = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Spica.Resources.Icons.app32.png"))
+            {
+                if (st == null) return "";
+                using (var ms = new MemoryStream()) { st.CopyTo(ms); return $"<img alt=\"SPICA\" src=\"data:image/png;base64,{Convert.ToBase64String(ms.ToArray())}\">"; }
+            }
+        }
 
         /// <summary>
         /// One error in the report: the requirement as entered (for a reviewer to check), the figures calculated from
-        /// it, the histogram, the error across the input and temperature, what drives it and every condition.
+        /// it, the histogram, the error across the input and temperature, what drives it.
         /// </summary>
         void BudgetBlock(StringBuilder sb, ErrorResult r, int j, Win98Chart cb, Win98Chart cs, bool concise,
                          Func<string, string> H, Func<Win98Chart, string, int, int, string> Fig, Func<string, string, string, string, string, string> Card)
@@ -2449,7 +2475,7 @@ namespace Spica.UI
             sb.Append($"<section class=\"err\"><{hx} id=\"e{j}\">{H(it.Name)}</{hx}>");
 
             // the requirement, as entered
-            sb.Append("<div class=\"req\"><div class=\"t\">Requirement (as entered)</div><table class=\"kv\">");
+            sb.Append("<p class=\"note\"><i>Requirement, as entered:</i></p><table class=\"kv\">");
             void Req(string a, string b) => sb.Append($"<tr><td>{H(a)}</td><td>{H(b)}</td></tr>");
             Req("Error", it.UsesTf ? "error = " + it.Definition() : $"{it.Y}, computed by a .meas in LTspice");
             if (it.UsesTf) Req("Referred to", it.ReferToInput ? $"the input: divided by the ideal gain, in units of {it.X}" : $"the output, in units of {it.Y}");
@@ -2461,10 +2487,14 @@ namespace Spica.UI
                 Req("In absolute terms", $"{b} ({it.AbsUnits()})");
             }
             else if (it.Unit == BudgetUnit.PctReading) Req("In absolute terms", "depends on the reading of each run");
-            Req("Criterion", $"mean ± {k} σ inside the boundaries in every condition ({(r.Slices.Count > 1 ? r.Slices.Count + " conditions: temperature × input band" : "one condition")}); " +
+            Req("Criterion", $"mean ± {k} σ inside the boundaries" + (r.Envelopes.Count > 0 ? " at every input value" : "") + (rs.Mode == TempMode.Corners && r.Slices.Select(x => x.Corner).Distinct().Count() > 1 ? " and temperature" : "") + "; " +
                              (r.Pessimistic ? "σ = 95 % upper confidence bound" : "σ = sample standard deviation"));
             Req("Shape test", $"Anderson-Darling, bell-shaped when p ≥ {MeasStats.NormalAlpha.ToString("0.###", Inv)}");
-            sb.Append("</table></div>");
+            sb.Append("</table>");
+            if (r.Envelopes.Count > 0)
+                sb.Append("<p class=\"note\">" + (r.Envelopes.All(e => e.Levels)
+                    ? "The input was swept in levels: each level is judged on its own runs."
+                    : $"The input varies from run to run: the mean error is fitted as a polynomial of {H(it.X)} and its variance as a quadratic (an offset and a gain tolerance give exactly that), so mean ± {k} σ is a curve that widens where the error spreads more; it is judged at 11 points across the range.") + "</p>");
 
             if (r.Error != null)
             {
@@ -2475,60 +2505,44 @@ namespace Spica.UI
             // what was calculated
             var w = r.Worst;
             string vc = HtmlVerdict(r.Verdict);
-            string vb = r.Verdict == "PASS" ? "#eef8ee" : r.Verdict == "FAIL" ? "#fbeeee" : r.Verdict == "CHECK" ? "#fbf6e6" : null;
             string Side(double sig, double m) => double.IsNaN(m) ? "open" : double.IsNaN(sig) ? "-" : sig.ToString("0.0", Inv) + " σ";
             string SideSub(double m) => double.IsNaN(m) ? "no boundary" : m >= 0 ? $"needs {k} σ: {u(m)} to spare" : $"needs {k} σ: short by {u(-m)}";
-            string SideColor(double m) => double.IsNaN(m) ? null : m >= 0 ? "#007a00" : "#c00000";
-            sb.Append("<div class=\"cards\">")
-              .Append(Card("Verdict", r.Verdict == "-" ? "no boundaries" : r.Verdict, r.Verdict == "-" ? null : $"at {k} σ" + (r.Slices.Count > 1 ? ", all conditions" : ""), vc, vb))
+            string SideColor(double m) => double.IsNaN(m) ? null : m >= 0 ? "#006400" : "#a00000";
+            sb.Append("<p class=\"note\"><i>Result" + (r.Slices.Count > 1 ? $", at the worst point ({H(w.Label)}):" : ":") + "</i></p><table class=\"kv fig\">")
+              .Append(Card("Verdict", r.Verdict == "-" ? "no boundaries" : r.Verdict, r.Verdict == "-" ? null : $"at {k} σ", vc, null))
               .Append(Card("Margin", r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "-", "of half the allowed range", null, null))
-              .Append(Card("Mean", u(w.D.Mean), pctFs ? "= " + abs(w.D.Mean) : null, null, null))
-              .Append(Card("Sigma", u(w.Sigma), r.Pessimistic ? "95 % upper bound" : "sample", null, null))
+              .Append(Card("Mean", u(w.Mean), (pctFs ? "= " + abs(w.Mean) + "; " : "") + (w.Modelled ? "from the fit" : ""), null, null))
+              .Append(Card("Sigma", u(w.Sigma), (r.Pessimistic ? "95 % upper bound" : "sample") + (w.Modelled ? ", from the fit" : ""), null, null))
               .Append(Card($"Mean ± {k} σ", $"{u(w.Lo)} .. {u(w.Hi)}", pctFs ? $"= {abs(w.Lo)} .. {abs(w.Hi)}" : null, null, null))
               .Append(Card("Low side", Side(w.SigmasLo, w.MarginLo), SideSub(w.MarginLo), SideColor(w.MarginLo), null))
               .Append(Card("High side", Side(w.SigmasHi, w.MarginHi), SideSub(w.MarginHi), SideColor(w.MarginHi), null))
-              .Append(Card("Bell-shaped", w.Normal ? "yes" : w.TailsOk ? "shorter tails" : "no", "p = " + MeasStats.P(w.AdP), w.Normal ? "#007a00" : w.TailsOk ? "#6b6b00" : "#8a0000", null))
-              .Append(Card("Seen", $"{u(w.D.Min)} .. {u(w.D.Max)}", $"{r.Outside} of {r.N} units outside", r.Outside > 0 ? "#c00000" : null, null))
-              .Append(Card("Runs", r.N.ToString(Inv), r.Slices.Count > 1 ? $"worst: {w.Label} ({w.D.N})" : null, null, null))
-              .Append("</div>");
+              .Append(Card("Bell-shaped", w.Normal ? "yes" : w.TailsOk ? "shorter tails" : "no", "p = " + MeasStats.P(w.AdP) + (w.Modelled ? ", residuals over the local sigma" : ""), null, null))
+              .Append(Card("Seen", $"{u(r.E.Min())} .. {u(r.E.Max())}", $"all runs; {r.Outside} of {r.N} outside the boundaries", r.Outside > 0 ? "#a00000" : null, null))
+              .Append(Card("Runs", r.N.ToString(Inv), null, null, null))
+              .Append("</table>");
             sb.Append($"<p class=\"verdict\" style=\"color:{vc}\">{H((r.Verdict == "-" ? "" : r.Verdict + ": ") + r.VerdictText())}</p>");
 
             // figures
             BuildBudgetChart(cb, r, 0);
-            sb.Append(Fig(cb, $"Error of {it.Name}" + (r.Slices.Count > 1 ? $" in the worst condition, {w.Label} ({w.D.N} runs)" : $" ({w.D.N} runs)") +
+            sb.Append(Fig(cb, $"Distribution of the error {it.Name}" + (r.Slices.Count > 1 ? $" at the worst point, {w.Label} ({w.D.N} runs{(w.Modelled ? " nearest to it" : "")})" : $" ({w.D.N} runs)") +
                               $", with the normal fit, mean ± {k} σ and the boundaries.", 760, 300));
-            if (r.InputVaries) { BuildBudgetChart(cb, r, 1); sb.Append(Fig(cb, $"Error across the input range ({it.X}), with mean ± {k} σ per input band.", 760, 260)); }
+            if (r.InputVaries)
+            {
+                BuildBudgetChart(cb, r, 1);
+                sb.Append(Fig(cb, $"The error {it.Name} across the input {it.X}" + (w.Corner >= 0 ? $" at {ResultSet.TempLabel(rs.Corners[w.Corner])}" : "") +
+                                  $": every run, the mean and mean ± {k} σ" + (r.Envelopes.Any(e => !e.Levels) ? " (fitted)" : " (per level)") + ", the worst point and the boundaries.", 760, 300));
+            }
             if (BuildBudgetTempChart(cb, r))
-                sb.Append(Fig(cb, rs.Mode == TempMode.Corners ? $"Error at each temperature corner: mean, mean ± {k} σ and the extremes seen." : "Error against the random temperature of each run.", 760, 260));
+                sb.Append(Fig(cb, rs.Mode == TempMode.Corners ? $"The error {it.Name} at each temperature corner: mean, the widest mean ± {k} σ across the input, and the extremes seen." : $"The error {it.Name} against the random temperature of each run.", 760, 260));
             int bars = BuildBudgetSens(cs, r, w, 10);
             if (bars > 0)
-                sb.Append(Fig(cs, $"What drives the error{(r.Slices.Count > 1 ? " in the worst condition" : "")}: " +
+                sb.Append(Fig(cs, $"What drives the error {it.Name}{(r.Slices.Count > 1 ? " at the worst point" : "")}: " +
                                   (r.Sens != null && r.Sens.Conditioned
                                       ? $"the input {string.Join(", ", r.Sens.InputNames)} explains {SensitivityReport.ShareText(r.Sens.InputShare)} of its variance" +
                                         (r.Sens.InputShare > 0.5 ? " (the ideal TF does not match the circuit: a systematic error)" : "") +
                                         "; the bars share the rest among the tolerances."
                                       : "share of its variance explained by each tolerance" +
                                         (r.Sens != null && r.Sens.Error == null ? $" (linear model, R² = {(100 * r.Sens.R2).ToString("0.0", Inv)} %)." : ".")), 760, 70 + 24 * bars));
-
-            // every condition
-            if (r.Slices.Count > 1)
-            {
-                sb.Append("<h3>Every condition</h3><div class=\"wide\"><table><tr>");
-                foreach (var h in new[] { "Condition", "n", "Mean", "Sigma", $"Mean ± {k}σ", "Low side", "High side", "Margin", "Bell-shaped", "Verdict" })
-                    sb.Append($"<th>{H(h)}</th>");
-                sb.Append("</tr>");
-                foreach (var s in r.Slices)
-                {
-                    var cells = new[]
-                    {
-                        s.Label, s.D.N.ToString(Inv), u(s.D.Mean), u(s.Sigma), $"{u(s.Lo)} .. {u(s.Hi)}", Side(s.SigmasLo, s.MarginLo), Side(s.SigmasHi, s.MarginHi),
-                        r.HasBudget ? r.SlicePct(s).ToString("0", Inv) + " %" : "", s.Normal ? "yes" : s.TailsOk ? "shorter tails" : "no", s.Verdict,
-                    };
-                    sb.Append(s == w ? "<tr style=\"background:#fff8d8\">" : "<tr>")
-                      .Append(string.Concat(cells.Select((c, i) => i == 9 ? $"<td style=\"color:{HtmlVerdict(c)};font-weight:600\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
-                }
-                sb.Append("</table></div><p class=\"note\">Highlighted: the condition the figures above refer to. Low / high side: how many σ the boundary is from the mean.</p>");
-            }
 
             var notes = r.Notes();
             if (notes.Count > 0) sb.Append("<ul class=\"notes\">").Append(string.Concat(notes.Select(n => $"<li>{H(n)}</li>"))).Append("</ul>");

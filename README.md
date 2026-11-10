@@ -89,10 +89,16 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
   a `.meas` that already is the error, or an output compared run by run with a reference
   (error = output - (gain x reference + offset), or any ideal expression of x and T), optionally
   referred to the input. Boundaries symmetric (+/-) or lower/upper (either side may be open), in
-  absolute units, % of reading or % of full scale. Judged per temperature and input band: mean +/-
-  k sigma (default 6) must stay inside both boundaries and the error must be bell-shaped
-  (Anderson-Darling); PASS / FAIL / CHECK, figures in boxes (mean, sigma, room on each side in
-  sigma), a table of every condition, the histogram or error vs input, and the tolerances that drive it.
+  absolute units, % of reading or % of full scale. A `.meas` error may name its input too.
+  Judged per temperature and across the input: an input swept in levels is judged level by level;
+  an input that varies continuously gets an envelope (mean error fitted up to a cubic in the input,
+  its variance as a quadratic, exact for offset and gain tolerances), so mean +/- k sigma widens
+  where the error spreads more and is judged at 11 points across the range. Mean +/- k sigma
+  (default 6) must stay inside both boundaries and the error must be bell-shaped (Anderson-Darling,
+  one test per temperature on the residuals over their local sigma); PASS / FAIL / CHECK, figures
+  in boxes (mean, sigma, room on each side in sigma), one row per temperature with its tightest
+  point, the error vs input with the envelope and the worst point (or the histogram), and the
+  tolerances that drive it.
 - **Table**: every run, out-of-spec values in red, filter and sort.
 - **Statistics**: n, mean, sigma, min/max, median, 0.135/99.865 % percentiles, skewness, kurtosis,
   Anderson-Darling normality, spec limits, observed yield with exact (Clopper-Pearson) 95 % CI, Cpk,
@@ -134,24 +140,25 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
 - **Report**: one self-contained HTML file. *Results > Report...* asks what goes in:
   - *Error budget only*: one page per error ticked, for checking a requirement: the requirement as
     entered (definition, boundaries, % of full scale also in absolute terms, the k-sigma criterion),
-    the verdict and the calculated numbers in boxes (mean, sigma, mean ± k sigma, room on each side,
-    bell-shaped), the histogram, the error across the input and against temperature, what drives
-    it, and every condition;
+    the verdict and the calculated numbers at the worst point (mean, sigma, mean ± k sigma, room on
+    each side, bell-shaped), the histogram, the error across the input with its envelope and against
+    temperature, and what drives it;
   - *Full analysis*: the error budget, summary tables and one section per measurement, with the
     measurements and the sections (histogram, sensitivity, temperature, convergence, transfer
     function) chosen by checkboxes.
 
   The dialog also takes a *Title* (the report's heading; empty = the campaign folder's name; the
-  schematic is listed under it) and free *Notes* shown in a box at the top. All of it is saved with
+  schematic is listed under it) and free *Notes* shown at the top. All of it is saved with
   the setup and the campaign folder. The file is named after the title (else the schematic),
   `<title>_report.html` or `<title>_error_budget.html`, in the campaign folder;
   if that name is taken, a timestamp is added. Setup > *Write the report when it ends* saves it
-  automatically when the campaign ends. Charts are vector (SVG), sharp when zoomed or printed;
+  automatically when the campaign ends. It is laid out like a datasheet: numbered sections, grid tables,
+  numbered figures with their caption underneath, the SPICA icon at the top right and a footer that
+  says when it was generated. Charts are vector (SVG), sharp when zoomed or printed;
   printing starts each measurement (and each error of the short report) on a new page.
   The report ends with *Traceability*: when the campaign ran (start, end, simulating time), on
   which computer (name, user, Windows build, CPU, cores, RAM), with which SPICA, LTspice and
-  LTspice model library, the seed, and every file simulated with its SHA-256. The header warns
-  when the schematic was edited after the simulation.
+  LTspice model library, the seed, and every file simulated with its SHA-256.
 
 ## Source bundle (reproducing a campaign)
 

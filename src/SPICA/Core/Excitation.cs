@@ -268,7 +268,7 @@ namespace Spica.Core
         }
 
         /// <summary>Coefficients of y on centered columns (normal equations), or null when singular.</summary>
-        static double[] LeastSquares(List<double[]> cols, double[] y, int n)
+        internal static double[] LeastSquares(List<double[]> cols, double[] y, int n)
         {
             int k = cols.Count;
             if (k == 0) return new double[0];

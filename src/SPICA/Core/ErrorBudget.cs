@@ -119,17 +119,22 @@ namespace Spica.Core
     }
 
     /// <summary>
-    /// The error of the units in one condition: one temperature and one band of the input range. Units in the
-    /// same condition differ only by their tolerances, so this is the distribution the k-sigma rule applies to.
+    /// The error of the units in one condition: one temperature and one input value. Units in the same condition
+    /// differ only by their tolerances, so this is the distribution the k-sigma rule applies to. With an input swept
+    /// in levels, each level is a condition of its own; with an input that varies continuously, the condition is a
+    /// point of the fitted envelope (Modelled: mean and sigma from the fit, Rows = the runs nearest to it).
     /// </summary>
     public sealed class ErrorSlice
     {
         public string Label = "all runs";
         public int Corner = -1;
-        public double XLo = double.NaN, XHi = double.NaN;
+        public double X = double.NaN;                                 // the input value of the condition (NaN = input fixed)
+        public bool Modelled;
         public double[] E = new double[0];
         public List<ResultSet.Row> Rows = new List<ResultSet.Row>();
-        public Descriptive D;
+        public Descriptive D;                                         // the runs of the condition (seen min / max)
+        public double Mean = double.NaN, Std = double.NaN;            // the estimate the k-sigma rule uses
+        public Descriptive Shape;                                     // what the shape test saw (standardized residuals when modelled)
         public double AdP = double.NaN;
         public bool Normal, TailsOk;
         public double SigmaUp = double.NaN, Sigma = double.NaN;
@@ -141,6 +146,14 @@ namespace Spica.Core
         public string Verdict = "-";
     }
 
+    /// <summary>Mean and mean +/- k sigma across the input at one temperature: a curve that widens where the error spreads more.</summary>
+    public sealed class ErrorEnvelope
+    {
+        public int Corner = -1;
+        public bool Levels;                                           // through the levels swept, not a fit
+        public double[] X = new double[0], Mean = new double[0], Lo = new double[0], Hi = new double[0];
+    }
+
     /// <summary>The verdict of one error item against its boundaries at k sigma: the worst of its slices.</summary>
     public sealed class ErrorResult
     {
@@ -149,8 +162,11 @@ namespace Spica.Core
         public double K;
         public bool Pessimistic;
         public double[] E = new double[0], X = new double[0];        // every run (charts)
+        public ResultSet.Row[] Rows = new ResultSet.Row[0];
         public readonly List<ErrorSlice> Slices = new List<ErrorSlice>();
-        public ErrorSlice Worst;
+        public readonly List<ErrorEnvelope> Envelopes = new List<ErrorEnvelope>();
+        public ErrorSlice Worst;                                      // the point with the least margin: what the figures show
+        public ErrorSlice Deciding;                                   // the point that sets the verdict (a CHECK may be elsewhere)
         public double FitOffset = double.NaN, FitSlope = double.NaN, ResidualStd = double.NaN;   // e = a + b x
         public SensitivityReport Sens;
 
@@ -164,18 +180,19 @@ namespace Spica.Core
         public double Margin => Worst?.Margin ?? double.NaN;
         public string Verdict = "-";
         public int N;
+        public int Outside;                                           // simulated units outside the boundaries
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         string F(double v) => ErrorBudget.Fmt(v, Item);
         string K0 => K.ToString("0.#", Inv);
         static string Eng(double v) => ErrorBudget.Eng(v);
+        static double Nz(double v) => double.IsNaN(v) ? double.PositiveInfinity : v;
 
         public bool HasBudget => Item.HasBounds;
         /// <summary>Margin as a share of half the allowed range.</summary>
         public double MarginPct => HasBudget && Item.Span > 0 ? Margin / Item.Span * 100 : double.NaN;
         public double SlicePct(ErrorSlice s) => HasBudget && Item.Span > 0 ? s.Margin / Item.Span * 100 : double.NaN;
         public bool InputVaries => X.Length > 2 && X.Where(v => !double.IsNaN(v)).DefaultIfEmpty().Max() > X.Where(v => !double.IsNaN(v)).DefaultIfEmpty().Min();
-        public int Outside => Slices.Sum(s => s.Outside);
 
         /// <summary>Runs with no error outside the budget needed to show a coverage by samples alone (95 % confidence).</summary>
         public static double RunsToShow(double coverage) => Math.Log(0.05) / Math.Log(coverage);
@@ -185,9 +202,12 @@ namespace Spica.Core
         {
             if (Error != null) return Error;
             var w = Worst;
-            return Verdict == "PASS" ? $"mean ± {K0} sigma is inside the boundaries" + (Slices.Count > 1 ? " in every condition" : "") + (w.Normal ? "." : " (the tails are shorter than normal: safe).")
+            return Verdict == "PASS" ? $"mean ± {K0} sigma is inside the boundaries" + (Slices.Count > 1 ? " everywhere" : "") + (w.Normal ? "." : " (the tails are shorter than normal: safe).")
                  : Verdict == "FAIL" ? (Outside > 0 ? $"{Outside} of {N} simulated units are already outside the boundaries." : $"mean ± {K0} sigma crosses the {(w.MarginLo < w.MarginHi || double.IsNaN(w.MarginHi) ? "lower" : "upper")} boundary at {w.Label}.")
-                 : Verdict == "CHECK" ? $"the error is not bell-shaped at {w.Label}, so the {K0}-sigma figure cannot decide."
+                 : Verdict == "CHECK" ? (Deciding != null && Deciding != w
+                     ? $"mean ± {K0} sigma is inside the boundaries everywhere, but at {Deciding.Label} the error is not bell-shaped, so the {K0}-sigma figure cannot decide there " +
+                       $"(boundary {Math.Min(Nz(Deciding.SigmasLo), Nz(Deciding.SigmasHi)).ToString("0.0", Inv)} sigma from its mean)."
+                     : $"the error is not bell-shaped at {w.Label}, so the {K0}-sigma figure cannot decide.")
                  : "no boundaries set: enter them to get a verdict.";
         }
 
@@ -196,7 +216,7 @@ namespace Spica.Core
         {
             var n = new List<string>();
             if (Error != null || Worst == null) return n;
-            var w = Worst;
+            var w = Deciding ?? Worst;
             if (!w.Normal)
             {
                 if (w.TailsOk)
@@ -204,7 +224,7 @@ namespace Spica.Core
                           (Verdict == "CHECK" ? " Over the boundary on paper only: run a worst case (Setup > Analysis) for the hard bound." : ""));
                 else
                 {
-                    var d = w.D;
+                    var d = w.Shape ?? w.D;
                     string shape = d.ExKurt > 0.5 ? "heavy-tailed (longer tails than sigma says)" : Math.Abs(d.Skew) > 0.3 ? "lopsided (one side reaches further)" : "tails longer than a normal's";
                     n.Add($"Not bell-shaped (p = {MeasStats.P(w.AdP)}): {shape}. Use a worst case, or more runs: with no unit outside, {RunsToShow(0.9973):N0} runs show 3 sigma, {RunsToShow(0.99994):N0} show 4 sigma.");
                 }
@@ -212,11 +232,14 @@ namespace Spica.Core
             if (!double.IsNaN(FitOffset) && InputVaries)
                 n.Add($"The mean error follows e = {Eng(FitOffset)} {(FitSlope < 0 ? "-" : "+")} {Eng(Math.Abs(FitSlope))}·x (offset and gain error): a TF corrected for it leaves ±{K0} sigma = ±{F(K * ResidualStd)}" +
                       (HasBudget ? (Item.Inside(-K * ResidualStd) && Item.Inside(K * ResidualStd) ? ", inside the boundaries." : ", still outside the boundaries.") : "."));
-            else if (!double.IsNaN(FitOffset) && Math.Abs(w.D.Mean) > 0.5 * w.Sigma)
+            else if (!double.IsNaN(FitOffset) && Math.Abs(w.Mean) > 0.5 * w.Sigma)
                 n.Add($"Removing the mean (a calibration) leaves ±{K0} sigma = ±{F(K * w.Sigma)}" +
                       (HasBudget ? (Item.Inside(-K * w.Sigma) && Item.Inside(K * w.Sigma) ? ", inside the boundaries." : ", still outside the boundaries.") : "."));
             if (Sens != null && Sens.Conditioned && Sens.InputShare > 0.5)
                 n.Add($"The input ({string.Join(", ", Sens.InputNames)}) explains {(100 * Sens.InputShare).ToString("0", Inv)} % of the error's spread: the ideal TF does not match the circuit (a systematic gain or offset error, or a nonlinearity), not a tolerance.");
+            if (!InputVaries && string.IsNullOrWhiteSpace(Item.X) && Sens != null && Sens.Conditioned && Sens.InputShare > 0.2)
+                n.Add($"The input ({string.Join(", ", Sens.InputNames)}) explains {(100 * Sens.InputShare).ToString("0", Inv)} % of this error, but the error has no input set: units at every input are pooled, " +
+                      "which widens sigma and can make the shape look not bell-shaped. Set the input in the error's definition to judge it across the input.");
             if (Sens != null && Sens.Error == null && Sens.Items.Count > 0 && Sens.R2 < 0.9)
                 n.Add($"{(100 * (1 - Sens.R2)).ToString("0", Inv)} % of the spread is not explained by the tolerances: nonlinear effects, or random values SPICA does not draw (LTspice's mc() without paired samples, encrypted models).");
             return n;
@@ -232,9 +255,9 @@ namespace Spica.Core
             sb.AppendLine($"  error = {Item.Definition()}, in {Item.UnitText()}");
             if (HasBudget) sb.AppendLine($"  boundaries {Item.BoundsText()}");
             sb.AppendLine();
-            sb.AppendLine("Worst condition" + (Slices.Count > 1 ? $": {w.Label} ({w.D.N} units)" : ""));
-            sb.AppendLine($"  mean          {F(w.D.Mean)}");
-            sb.AppendLine($"  sigma         {F(w.D.Std)}   (95 % upper bound {F(w.SigmaUp)}{(Pessimistic ? ": used" : "")})");
+            sb.AppendLine("Worst point" + (Slices.Count > 1 ? $": {w.Label} ({w.D.N} units)" : ""));
+            sb.AppendLine($"  mean          {F(w.Mean)}");
+            sb.AppendLine($"  sigma         {F(w.Std)}   (95 % upper bound {F(w.SigmaUp)}{(Pessimistic ? ": used" : "")})");
             sb.AppendLine($"  mean ± {K0}s    {F(w.Lo)} .. {F(w.Hi)}");
             sb.AppendLine($"  seen          {F(w.D.Min)} .. {F(w.D.Max)}");
             sb.AppendLine($"  bell-shaped   {(w.Normal ? "yes" : w.TailsOk ? "no, shorter tails (safe)" : "no")}  (p = {MeasStats.P(w.AdP)})");
@@ -250,7 +273,7 @@ namespace Spica.Core
                 int lw = Math.Max(10, Slices.Max(s => s.Label.Length));
                 sb.AppendLine($"  {"condition".PadRight(lw)} {"n",5} {"mean",10} {"sigma",10} {"mean ±" + K0 + "s",22} {"margin",7}  verdict");
                 foreach (var s in Slices)
-                    sb.AppendLine($"  {s.Label.PadRight(lw)} {s.D.N,5} {F(s.D.Mean),10} {F(s.Sigma),10} {F(s.Lo) + " .. " + F(s.Hi),22} " +
+                    sb.AppendLine($"  {s.Label.PadRight(lw)} {s.D.N,5} {F(s.Mean),10} {F(s.Sigma),10} {F(s.Lo) + " .. " + F(s.Hi),22} " +
                                   $"{(HasBudget ? SlicePct(s).ToString("0", Inv) + " %" : ""),7}  {s.Verdict}");
             }
             var notes = Notes();
@@ -353,6 +376,8 @@ namespace Spica.Core
             if (needX && !TryConstant(rs, it.X, out _) && rs.Col(it.X) < 0 && !rs.IsParam(it.X))
                 return it.UsesTf ? "Choose the reference: a measurement (e.g. vin) or a fixed number (e.g. 1)."
                                  : "For a % of reading boundary, choose the reading: the measurement the % is taken of.";
+            if (!needX && !string.IsNullOrWhiteSpace(it.X) && !TryConstant(rs, it.X, out _) && rs.Col(it.X) < 0 && !rs.IsParam(it.X))
+                return $"Input: '{it.X}' is not a measurement or parameter of this campaign.";
             if (it.Unit == BudgetUnit.PctFs && !(it.FullScale > 0)) return "Enter the full scale for a % of full scale boundary.";
             if (!double.IsNaN(it.Lower) && !double.IsNaN(it.Upper) && it.Lower >= it.Upper) return "The lower boundary must be below the upper one.";
             return null;
@@ -403,10 +428,11 @@ namespace Spica.Core
                 if (double.IsNaN(e) || double.IsInfinity(e)) continue;
                 rows.Add(r); es.Add(e); xs.Add(x);
             }
-            res.E = es.ToArray(); res.X = xs.ToArray(); res.N = es.Count;
+            res.E = es.ToArray(); res.X = xs.ToArray(); res.Rows = rows.ToArray(); res.N = es.Count;
             if (es.Count < 3) { res.Error = "fewer than 3 runs with data."; return res; }
 
-            // conditions: each temperature corner on its own (when looking at all of them), then input bands
+            // conditions: each temperature corner on its own (when looking at all of them); across the input, each level
+            // swept, or points of an envelope fitted to the runs when the input varies continuously
             var corners = rs.Mode == TempMode.Corners && group == 0 ? Enumerable.Range(0, rs.Corners.Count).ToList() : new List<int> { -1 };
             bool varies = res.InputVaries && xs.All(v => !double.IsNaN(v));
             foreach (int c in corners)
@@ -414,28 +440,55 @@ namespace Spica.Core
                 var idx = Enumerable.Range(0, rows.Count).Where(i => c < 0 || rows[i].Corner == c).ToList();
                 if (idx.Count < 3) continue;
                 string tl = c >= 0 ? ResultSet.TempLabel(rs.Corners[c]) : (rs.Mode == TempMode.Corners && group > 0 ? rs.GroupNames()[group] : "");
-                int bands = varies ? Math.Max(1, Math.Min(5, idx.Count / 250)) : 1;
-                var ord = idx.OrderBy(i => xs[i]).ToList();
-                for (int b = 0; b < bands; b++)
+                string Label(double xv) => string.Join(", ", new[] { tl, double.IsNaN(xv) ? "" : $"{it.X} = {Eng(xv)}" }.Where(t => t.Length > 0).DefaultIfEmpty("all runs"));
+                ErrorSlice Of(List<int> part, double xv) =>
+                    new ErrorSlice { Corner = c, X = xv, E = part.Select(i => es[i]).ToArray(), Rows = part.Select(i => rows[i]).ToList(), Label = Label(xv) };
+
+                var levels = varies ? Levels(idx, xs) : null;
+                if (!varies || levels == null && idx.Count < 40)
                 {
-                    var part = ord.Skip(b * ord.Count / bands).Take((b + 1) * ord.Count / bands - b * ord.Count / bands).ToList();
-                    if (part.Count < 3) continue;
-                    var s = new ErrorSlice { Corner = c, E = part.Select(i => es[i]).ToArray(), Rows = part.Select(i => rows[i]).ToList() };
-                    if (bands > 1) { s.XLo = xs[part[0]]; s.XHi = xs[part[part.Count - 1]]; }
-                    string xl = bands > 1 ? $"{it.X} {Eng(s.XLo)}..{Eng(s.XHi)}" : "";
-                    s.Label = tl.Length > 0 && xl.Length > 0 ? tl + ", " + xl : tl.Length > 0 ? tl : xl.Length > 0 ? xl : "all runs";
+                    var s = Of(idx, double.NaN);
                     Judge(s, it, k, pessimistic);
                     res.Slices.Add(s);
                 }
+                else if (levels != null)
+                {
+                    var env = new ErrorEnvelope { Corner = c, Levels = true };
+                    // one shape test per temperature on the runs of every level, each centred and scaled by its own
+                    // mean and sigma: a test per level would flag some level by chance alone (5 % each)
+                    var made = levels.Select(lv => Of(lv, lv.Average(i => xs[i]))).ToList();
+                    var zs = new List<double>();
+                    foreach (var s in made)
+                    {
+                        var d = Descriptive.Of(s.E);
+                        if (d.Std > 0) zs.AddRange(s.E.Select(e => (e - d.Mean) / d.Std));
+                    }
+                    var zd = Descriptive.Of(zs);
+                    Stats.AndersonDarling(zd, out _, out double adp);
+                    bool normal = !double.IsNaN(adp) && adp >= MeasStats.NormalAlpha;
+                    foreach (var s in made)
+                    {
+                        s.Shape = zd; s.AdP = adp; s.Normal = normal; s.TailsOk = normal || TailsNoLongerThanNormal(zd);
+                        Judge(s, it, k, pessimistic);
+                        res.Slices.Add(s);
+                    }
+                    var mine = res.Slices.Where(x => x.Corner == c && !double.IsNaN(x.X)).OrderBy(x => x.X).ToList();
+                    env.X = mine.Select(x => x.X).ToArray(); env.Mean = mine.Select(x => x.Mean).ToArray();
+                    env.Lo = mine.Select(x => x.Lo).ToArray(); env.Hi = mine.Select(x => x.Hi).ToArray();
+                    res.Envelopes.Add(env);
+                }
+                else Envelope(res, it, c, idx, xs, es, rows, k, pessimistic, Of);
             }
+            res.Outside = it.HasBounds ? es.Count(e => !it.Inside(e)) : 0;
             if (res.Slices.Count == 0) { res.Error = "not enough runs in any condition."; return res; }
 
             // the worst slice: the smallest margin (or the widest bound without a budget); verdict: FAIL > CHECK > PASS
             res.Worst = res.Slices.OrderBy(s => res.HasBudget ? s.Margin : -Math.Max(Math.Abs(s.Lo), Math.Abs(s.Hi))).First();
             if (res.HasBudget)
                 res.Verdict = res.Slices.Any(s => s.Verdict == "FAIL") ? "FAIL" : res.Slices.Any(s => s.Verdict == "CHECK") ? "CHECK" : "PASS";
-            if (res.HasBudget && res.Worst.Verdict != res.Verdict)
-                res.Worst = res.Slices.Where(s => s.Verdict == res.Verdict).OrderBy(s => s.Margin).First();
+            // the figures stay on the tightest point; the point behind the verdict is kept apart (a CHECK elsewhere)
+            res.Deciding = res.HasBudget && res.Worst.Verdict != res.Verdict
+                ? res.Slices.Where(s => s.Verdict == res.Verdict).OrderBy(s => s.Margin).First() : res.Worst;
 
             // the systematic part a corrected TF can remove: e = a + b x (or the mean for a fixed input)
             if (varies)
@@ -443,7 +496,7 @@ namespace Spica.Core
                 var fit = Stats.Fit(xs, es);
                 res.FitOffset = fit.Intercept; res.FitSlope = fit.Slope; res.ResidualStd = fit.ResidualStd;
             }
-            else { res.FitOffset = res.Worst.D.Mean; res.FitSlope = 0; res.ResidualStd = res.Worst.D.Std; }
+            else { res.FitOffset = res.Worst.Mean; res.FitSlope = 0; res.ResidualStd = res.Worst.Std; }
 
             if (rs.Params.Count > 0 || rs.Mode == TempMode.Random)
             {
@@ -453,27 +506,111 @@ namespace Spica.Core
             return res;
         }
 
-        static void Judge(ErrorSlice s, ErrorItem it, double k, bool pessimistic)
+        /// <summary>
+        /// The levels of an input swept in steps: up to 30 distinct values with at least 8 runs each (values closer than
+        /// a millionth of the range are the same level). Null when the input varies continuously.
+        /// </summary>
+        static List<List<int>> Levels(List<int> idx, List<double> xs)
+        {
+            var ord = idx.OrderBy(i => xs[i]).ToList();
+            double tol = 1e-6 * Math.Max(Math.Abs(xs[ord[ord.Count - 1]] - xs[ord[0]]), 1e-300);
+            var levels = new List<List<int>>();
+            foreach (int i in ord)
+            {
+                if (levels.Count == 0 || xs[i] - xs[levels[levels.Count - 1][0]] > tol) levels.Add(new List<int>());
+                levels[levels.Count - 1].Add(i);
+                if (levels.Count > 30) return null;
+            }
+            return levels.Count >= 2 && levels.All(l => l.Count >= 8) ? levels : null;
+        }
+
+        /// <summary>
+        /// An input that varies continuously: the mean error as a polynomial of the input (up to cubic) and its variance
+        /// as a quadratic (exact when the tolerances act as offsets and gains: var = a + b x + c x^2), so mean +/- k sigma
+        /// is a smooth envelope that widens where the error spreads more. The shape test uses the residuals divided by
+        /// the local sigma. Conditions: 11 points across the range, each judged on the envelope.
+        /// </summary>
+        static void Envelope(ErrorResult res, ErrorItem it, int c, List<int> idx, List<double> xs, List<double> es, List<ResultSet.Row> rows,
+                             double k, bool pessimistic, Func<List<int>, double, ErrorSlice> of)
+        {
+            int n = idx.Count;
+            double x0 = idx.Min(i => xs[i]), x1 = idx.Max(i => xs[i]), xm = (x0 + x1) / 2, xh = (x1 - x0) / 2;
+            var t = idx.Select(i => (xs[i] - xm) / xh).ToArray();
+            var y = idx.Select(i => es[i]).ToArray();
+            int dm = n >= 80 ? 3 : n >= 30 ? 2 : 1, dv = n >= 60 ? 2 : n >= 20 ? 1 : 0;
+            double[] Poly(double[] tt, double[] yy, int deg)
+            {
+                var cols = Enumerable.Range(0, deg + 1).Select(p => tt.Select(v => Math.Pow(v, p)).ToArray()).ToList();
+                return SensitivityReport.LeastSquares(cols, yy, tt.Length) ?? new[] { yy.Average() }.Concat(Enumerable.Repeat(0.0, deg)).ToArray();
+            }
+            double Val(double[] b, double tv) { double v = 0, p = 1; foreach (var q in b) { v += q * p; p *= tv; } return v; }
+            var bm = Poly(t, y, dm);
+            var r = y.Select((v, i) => v - Val(bm, t[i])).ToArray();
+            var bv = Poly(t, r.Select(v => v * v).ToArray(), dv);
+            double vAvg = r.Average(v => v * v);
+            var grid = Enumerable.Range(0, 81).Select(j => -1 + 2.0 * j / 80).ToArray();
+            double vTop = Math.Max(grid.Max(tv => Val(bv, tv)), vAvg);
+            double Var(double tv) => Math.Max(Val(bv, tv), 1e-4 * vTop);   // a fitted variance never goes to zero or below
+            // scaled so the residuals over their local sigma have unit spread
+            var z = r.Select((v, i) => v / Math.Sqrt(Var(t[i]))).ToArray();
+            var zd = Descriptive.Of(z);
+            double scale = zd.Std > 0 ? zd.Std : 1;
+            zd = Descriptive.Of(z.Select(v => v / scale));
+            Stats.AndersonDarling(zd, out _, out double adp);
+            bool normal = !double.IsNaN(adp) && adp >= MeasStats.NormalAlpha, tailsOk = normal || TailsNoLongerThanNormal(zd);
+            double Sig(double tv) => scale * Math.Sqrt(Var(tv));
+            int nEff = Math.Max(3, n - (dm + 1));
+
+            var env = new ErrorEnvelope { Corner = c, X = grid.Select(tv => xm + xh * tv).ToArray(), Mean = grid.Select(tv => Val(bm, tv)).ToArray() };
+            double SigK(double tv) { double sd = Sig(tv), up = SigmaUpper(sd, nEff); return k * (pessimistic && !double.IsNaN(up) ? up : sd); }
+            env.Lo = grid.Select((tv, j) => env.Mean[j] - SigK(tv)).ToArray();
+            env.Hi = grid.Select((tv, j) => env.Mean[j] + SigK(tv)).ToArray();
+            res.Envelopes.Add(env);
+
+            int win = Math.Max(20, n / 11);
+            for (int j = 0; j <= 10; j++)
+            {
+                double tv = -1 + 0.2 * j, xv = xm + xh * tv;
+                var near = Enumerable.Range(0, n).OrderBy(i => Math.Abs(t[i] - tv)).Take(win).Select(i => idx[i]).ToList();
+                var s = of(near, xv);
+                s.Modelled = true;
+                s.Mean = Val(bm, tv); s.Std = Sig(tv);
+                s.Shape = zd; s.AdP = adp; s.Normal = normal; s.TailsOk = tailsOk;
+                Judge(s, it, k, pessimistic, nEff);
+                res.Slices.Add(s);
+            }
+        }
+
+        static void Judge(ErrorSlice s, ErrorItem it, double k, bool pessimistic, int nEff = 0)
         {
             s.D = Descriptive.Of(s.E);
-            Stats.AndersonDarling(s.D, out _, out s.AdP);
-            s.Normal = !double.IsNaN(s.AdP) && s.AdP >= MeasStats.NormalAlpha;
-            s.TailsOk = s.Normal || TailsNoLongerThanNormal(s.D);
-            s.SigmaUp = SigmaUpper(s.D.Std, s.D.N);
-            s.Sigma = pessimistic && !double.IsNaN(s.SigmaUp) ? s.SigmaUp : s.D.Std;
-            s.Lo = s.D.Mean - k * s.Sigma;
-            s.Hi = s.D.Mean + k * s.Sigma;
+            if (!s.Modelled)
+            {
+                if (s.Shape == null)
+                {
+                    Stats.AndersonDarling(s.D, out _, out s.AdP);
+                    s.Normal = !double.IsNaN(s.AdP) && s.AdP >= MeasStats.NormalAlpha;
+                    s.TailsOk = s.Normal || TailsNoLongerThanNormal(s.D);
+                    s.Shape = s.D;
+                }
+                s.Mean = s.D.Mean; s.Std = s.D.Std;
+                nEff = s.D.N;
+            }
+            s.SigmaUp = SigmaUpper(s.Std, nEff);
+            s.Sigma = pessimistic && !double.IsNaN(s.SigmaUp) ? s.SigmaUp : s.Std;
+            s.Lo = s.Mean - k * s.Sigma;
+            s.Hi = s.Mean + k * s.Sigma;
             if (!it.HasBounds) return;
             // each side on its own: room left at k sigma, and how many sigma the boundary is from the mean
             if (!double.IsNaN(it.Lower))
             {
                 s.MarginLo = s.Lo - it.Lower;
-                s.SigmasLo = s.Sigma > 0 ? (s.D.Mean - it.Lower) / s.Sigma : double.NaN;
+                s.SigmasLo = s.Sigma > 0 ? (s.Mean - it.Lower) / s.Sigma : double.NaN;
             }
             if (!double.IsNaN(it.Upper))
             {
                 s.MarginHi = it.Upper - s.Hi;
-                s.SigmasHi = s.Sigma > 0 ? (it.Upper - s.D.Mean) / s.Sigma : double.NaN;
+                s.SigmasHi = s.Sigma > 0 ? (it.Upper - s.Mean) / s.Sigma : double.NaN;
             }
             s.Margin = double.IsNaN(s.MarginLo) ? s.MarginHi : double.IsNaN(s.MarginHi) ? s.MarginLo : Math.Min(s.MarginLo, s.MarginHi);
             s.Outside = s.E.Count(e => !it.Inside(e));
