@@ -9,7 +9,7 @@
     <RootNamespace>Spica</RootNamespace>
     <ApplicationIcon>Resources\spica.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <Product>SPICA - Spice Parallel Instancer Circuit Analysis</Product>
     <AssemblyTitle>SPICA - Spice Parallel Instancer Circuit Analysis</AssemblyTitle>
     <Description>Runs LTspice Monte Carlo campaigns as parallel batch instances and analyses the results.</Description>
