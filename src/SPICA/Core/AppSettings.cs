@@ -85,6 +85,12 @@ namespace Spica.Core
         public int ManualInstances { get => GetInt("ManualInstances", 0); set => Set("ManualInstances", value); }
         public int ManualThreads { get => GetInt("ManualThreads", 1); set => Set("ManualThreads", value); }
 
+        // the listener: campaigns dropped in a shared folder are queued and run here
+        public string ListenerInput { get => Get("ListenerInput"); set => Set("ListenerInput", value); }
+        public string ListenerOutput { get => Get("ListenerOutput"); set => Set("ListenerOutput", value); }
+        public bool ListenerEnabled { get => GetBool("ListenerEnabled", false); set => Set("ListenerEnabled", value); }
+        public string SendFolder { get => Get("SendFolder"); set => Set("SendFolder", value); }
+
         public List<string> RecentFiles
         {
             get

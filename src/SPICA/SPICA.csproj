@@ -9,9 +9,14 @@
     <RootNamespace>Spica</RootNamespace>
     <ApplicationIcon>Resources\spica.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.5.1</Version>
+    <Version>0.6.0</Version>
     <Product>SPICA - Spice Parallel Instancer Circuit Analysis</Product>
-    <Copyright>SPICA project</Copyright>
+    <AssemblyTitle>SPICA - Spice Parallel Instancer Circuit Analysis</AssemblyTitle>
+    <Description>Runs LTspice Monte Carlo campaigns as parallel batch instances and analyses the results.</Description>
+    <Company>10k10</Company>
+    <Authors>10k10</Authors>
+    <Copyright>Copyright © 2026 10k10. Apache-2.0 with Commons Clause: free to use, not for sale.</Copyright>
+    <NeutralLanguage>en</NeutralLanguage>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <DebugType>none</DebugType>
     <PlatformTarget>AnyCPU</PlatformTarget>

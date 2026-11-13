@@ -15,7 +15,8 @@ scheduler profiles (`SPICA.profiles`) are written next to it.
    stays small. Signals used by `.meas` are always saved (locked), because `.meas` reads the `.raw`.
 3. Type the **number of runs**. Any `.step` in the schematic is replaced by SPICA's own
    `.step param run a b 1` per chunk (a single-run chunk uses `.param run=N`, because LTspice refuses a one-point `.step`).
-4. **Start**. Each chunk is launched as `LTspice.exe -b chunk.net -ini <private ini>`:
+4. **Add to Queue** (F5). The campaign starts at once, or waits its turn behind the ones already there
+   (see *Queue*). Each chunk is launched as `LTspice.exe -b chunk.net -ini <private ini>`:
    - The private ini copies the user's LTspice settings and forces `UseClocktoReseedMC=true`
      plus the keys that stop start-up dialogs (analytics / web sync) from blocking batch mode.
      The user's own `LTspice.ini` is never modified.
@@ -183,16 +184,53 @@ clock only the statistics repeat. A resumed campaign keeps its first bundle.
 The statistics were checked against SciPy (Anderson-Darling, skewness, kurtosis, quantiles,
 Clopper-Pearson, normal tail ppm, regression standard errors).
 
-## Monitor
+## Queue
 
-Progress, timing, the scheduler's plan and per-instance status, a throughput graph and a resource
-meter (CPU and RAM of the whole machine, space used on the output drive) in the style of Windows 98.
+**Add to Queue** takes the campaign as the Setup tab shows it at that moment (schematic netlist, runs,
+temperatures, signals, seed) and puts it in line. One campaign runs at a time, with all the instances
+the scheduler gives it; the next one starts by itself when it ends. The Setup tab is free again as
+soon as a campaign is added: change a value, open another schematic, add the next one.
+
+- The **Queue** tab lists every campaign: its analysis, status, progress, when it starts or ends and
+  how long it takes (from the scheduler's profile of that circuit, once it has run before), who added
+  it (this PC or the listener) and how it ended.
+- A waiting campaign can be moved up or down or removed. **Hold the queue** finishes the running
+  campaign and starts nothing new. **Stop** acts on the running one (Analyze now, Finish running,
+  Discard); the next campaign then starts unless the queue is on hold.
+- Double-click (or **Open Results**) shows a campaign in the Results tab: a finished one from its
+  folder, the running one live.
+- One message tells how the campaigns added here ended, when the last of them has ended, so that a
+  night of campaigns leaves one message and not one per campaign.
+- Under the list, the campaign that runs: progress, timing, the scheduler's plan and per-instance
+  status, a throughput graph and a resource meter (CPU and RAM of the whole machine, space used on the output drive) in the style of Windows 98.
 The CPU figure is Windows' *% Processor Utility*, the same as Task Manager (it counts turbo clocks,
 so it reads higher than the share of busy time). The remaining time plays the runs left out on the
 instances round by round, so the last, partly filled round counts whole.
 
 Each run takes longer in a campaign than alone in LTspice (all cores busy: lower clocks, shared
 cache and memory bandwidth); the campaign still finishes far sooner than the runs one by one.
+
+## Listener
+
+**Listener** (toolbar, Ctrl+L) makes this SPICA run whatever campaign appears in a folder, e.g. a share
+of a workstation that several people use. It takes two folders: the one to **watch** and the one for
+the **results** (suggested from the first: `<watched>_results` beside it; any other folder will do,
+except the watched one itself).
+
+- A campaign is a setup (`.spica`) with its schematic beside it, or a bundle (`.zip`). From another PC,
+  **File > Send to a Listener Folder** writes the campaign of the Setup tab as such a bundle: schematic,
+  setup, netlist and the model files it uses.
+- The folder is looked at every 4 seconds. A file is taken when it has stopped changing between two
+  looks (it may still be copying), goes to the queue as any other campaign, and its results are written
+  to `<results>\<file name>\<timestamp>\`.
+- Which campaigns ran and which did not: the listener window lists every file with its status (waiting,
+  queued with its place in line, running with progress and the time it ends, done, stopped, failed and
+  why) and the results folder. The same is written as text to `SPICA_listener.txt` in the watched
+  folder (refreshed at every change and at least every 30 s), so that whoever dropped the file can
+  follow it without access to the workstation's screen.
+- Each file runs once. A file that changes is a new campaign; **Run Again** repeats one as it is.
+  What ran is kept in `SPICA_listener_jobs.tsv` in the results folder, so closing SPICA loses nothing:
+  the listener starts again with SPICA, and campaigns that were waiting or running are taken again.
 
 ## Scheduler (Automatic mode)
 
@@ -268,4 +306,10 @@ dotnet build src/SPICA/SPICA.csproj -c Release
 `--resume <file.asc> <runs> <corners>` stops a paired campaign part-way, resumes it and compares it with an
 uninterrupted one (it must match exactly). It also tests the finish-running stop.
 
+## License
+
+Copyright © 2026 10k10. Free to use, copy, modify and share, at home or at work, for any
+purpose; it may not be sold. Terms: Apache License 2.0 with the Commons Clause condition, see [LICENSE](LICENSE).
+
 Icons: [alexh/vintage-icons](https://github.com/alexh/vintage-icons) (MIT).
+LTspice is a trademark of Analog Devices, Inc.; SPICA is not affiliated with Analog Devices.

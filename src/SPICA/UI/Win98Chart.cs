@@ -92,6 +92,7 @@ namespace Spica.UI
 
             ComputeRange();
             int top = bounds.Top + (Title.Length > 0 ? 22 : 8);
+            top += LayoutLegend(bounds, top - 2);
             int left = bounds.Left + (YCategories != null ? Math.Min(bounds.Width / 3, YCategories.Select(c => TextRenderer.MeasureText(c ?? "", Font).Width).DefaultIfEmpty(0).Max() + 14) : 62);
             int right = bounds.Right - 14, bottom = bounds.Bottom - (XLabel.Length > 0 ? 40 : 26);
             plot = Rectangle.FromLTRB(left, top, Math.Max(left + 10, right), Math.Max(top + 10, bottom));
@@ -286,19 +287,40 @@ namespace Spica.UI
             }
         }
 
+        // The legend is a strip between the title and the plot, so that it never covers the data.
+        readonly List<KeyValuePair<Rectangle, ChartSeries>> legendCells = new List<KeyValuePair<Rectangle, ChartSeries>>();
+
+        /// <summary>Places the legend entries in centred rows starting at y; returns the height they take.</summary>
+        int LayoutLegend(Rectangle bounds, int y)
+        {
+            legendCells.Clear();
+            var items = Series.Where(s => s.InLegend && !string.IsNullOrEmpty(s.Label)).ToList();
+            if (items.Count == 0) return 0;
+            var widths = items.Select(s => TextRenderer.MeasureText(s.Label, Font, Size.Empty, TextFormatFlags.NoPrefix).Width + 30).ToList();
+            int max = Math.Max(60, bounds.Width - 16), i = 0, rows = 0;
+            while (i < items.Count)
+            {
+                int j = i, w = 0;
+                while (j < items.Count && (j == i || w + widths[j] <= max)) w += widths[j++];
+                int x = bounds.Left + Math.Max(8, (bounds.Width - w) / 2);
+                for (; i < j; i++)
+                {
+                    legendCells.Add(new KeyValuePair<Rectangle, ChartSeries>(new Rectangle(x, y + rows * 15, widths[i], 15), items[i]));
+                    x += widths[i];
+                }
+                rows++;
+            }
+            return rows * 15 + 4;
+        }
+
         void DrawLegend(Graphics g, bool interactive)
         {
             legendHits.Clear();
-            var items = Series.Where(s => s.InLegend && !string.IsNullOrEmpty(s.Label)).ToList();
-            if (items.Count == 0) return;
-            int w = items.Max(s => TextRenderer.MeasureText(s.Label, Font).Width) + 30, h = items.Count * 15 + 6;
-            var r = new Rectangle(plot.Right - w - 6, plot.Top + 6, w, h);
-            using (var b = new SolidBrush(Color.White)) g.FillRectangle(b, r);
-            using (var p = new Pen(Color.Black)) g.DrawRectangle(p, r);
-            int y = r.Top + 4;
-            foreach (var s in items)
+            foreach (var cell in legendCells)
             {
-                var sw = new Rectangle(r.Left + 5, y + 2, 16, 9);
+                var s = cell.Value;
+                var r = cell.Key;
+                var sw = new Rectangle(r.Left + 4, r.Top + 3, 16, 9);
                 using (var b = new SolidBrush(s.Color))
                 using (var p = new Pen(s.Color) { DashStyle = s.Dashed ? DashStyle.Dash : DashStyle.Solid })
                 {
@@ -308,9 +330,8 @@ namespace Spica.UI
                 }
                 bool off = hiddenLabels.Contains(s.Label);
                 if (off) using (var b = new SolidBrush(Color.White)) g.FillRectangle(b, sw.Left - 1, sw.Top - 1, sw.Width + 3, sw.Height + 3);
-                TextRenderer.DrawText(g, s.Label, Font, new Point(r.Left + 25, y), off ? Win98.Shadow : Color.Black);
-                if (interactive) legendHits.Add(new KeyValuePair<Rectangle, string>(new Rectangle(r.Left + 1, y, r.Width - 2, 15), s.Label));
-                y += 15;
+                TextRenderer.DrawText(g, s.Label, Font, new Point(r.Left + 23, r.Top), off ? Win98.Shadow : Color.Black, TextFormatFlags.NoPrefix);
+                if (interactive) legendHits.Add(new KeyValuePair<Rectangle, string>(r, s.Label));
             }
         }
 

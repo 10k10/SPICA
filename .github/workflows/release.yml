@@ -47,6 +47,9 @@ jobs:
             Settings (`SPICA.ini`) and profiles (`SPICA.profiles`) are written next to the exe.
 
             Requires Windows with .NET Framework 4.8 (built into Windows 10/11) and LTspice installed.
+
+            Free to use, copy, modify and share, at home or at work; it may not be sold
+            (Apache 2.0 with the Commons Clause, see LICENSE).
           files: dist/SPICA-*.exe
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

@@ -14,6 +14,10 @@ static class Program
         if (args.Length > 0 && args[0] == "--ui") return UiCapture(args);
         // SPICA.Smoke --setup <file.asc|.spica> <png> : render the main window's Setup tab after loading a file
         if (args.Length > 0 && args[0] == "--setup") return SetupCapture(args);
+        // SPICA.Smoke --queue <file.spica> <png> : two campaigns in the queue plus two through the listener (a bundle, a setup)
+        if (args.Length > 0 && args[0] == "--queue") return QueueTest(args);
+        // SPICA.Smoke --queueops <file.spica> <png> : hold, move, remove, discard and stop in a queue of three
+        if (args.Length > 0 && args[0] == "--queueops") return QueueOps(args);
         // SPICA.Smoke --resume <schematic.asc> <runs> <corners> : kill mid-run, resume, compare with an uninterrupted campaign
         if (args.Length > 0 && args[0] == "--resume") return ResumeTest(args);
         // SPICA.Smoke --dialog <png> : render the four-button Stop dialog
@@ -436,6 +440,207 @@ static class Program
         return diff == 0 ? 0 : 1;
     }
 
+    static int QueueTest(string[] args)
+    {
+        var t = new Thread(() =>
+        {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var mf = typeof(Spica.UI.MainForm);
+            string setup = Path.GetFullPath(args[1]), png = Path.GetFullPath(args[2]);
+            string watch = Path.Combine(Path.GetDirectoryName(png), "watch"), results = Path.Combine(Path.GetDirectoryName(png), "watch_results");
+            if (Directory.Exists(watch)) Directory.Delete(watch, true);
+            if (Directory.Exists(results)) Directory.Delete(results, true);
+            Directory.CreateDirectory(watch);
+            var form = new Spica.UI.MainForm { StartupFile = setup };
+            object Get(string field) => mf.GetField(field, flags).GetValue(form);
+            void Snap(System.Windows.Forms.Form f, string name)
+            {
+                for (int k = 0; k < 10; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                using (var bmp = new System.Drawing.Bitmap(f.Width, f.Height))
+                {
+                    f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f.Width, f.Height));
+                    bmp.Save(png.Replace(".png", "_" + name + ".png"));
+                }
+            }
+            var timer = new System.Windows.Forms.Timer { Interval = 250 };
+            int ticks = 0, stage = 0, boxes = 0;
+            bool busy = false;
+            Spica.UI.ListenerForm lf = null;
+            timer.Tick += (s, e) =>
+            {
+                if (busy) return;
+                busy = true;
+                try { Step(); } catch (Exception ex) { Console.WriteLine("FAILED: " + ex); timer.Stop(); form.Close(); } finally { busy = false; }
+            };
+            void Step()
+            {
+                var queue = (CampaignQueue)Get("queue");
+                var listener = (Listener)Get("listener");
+                var tabs = (Spica.UI.Win98TabControl)Get("tabs");
+                if (stage == 0)
+                {
+                    if (Get("netlist") == null && ++ticks < 150) return;
+                    var add = mf.GetMethod("AddToQueue", flags, null, Type.EmptyTypes, null);
+                    add.Invoke(form, null);
+                    add.Invoke(form, null);
+                    // through the listener: a bundle as File > Send to a Listener Folder writes it, and a setup beside its schematic
+                    var a = new object[] { null, null, null, null, 0.0 };
+                    if (!(bool)mf.GetMethod("PrepareRequest", flags).Invoke(form, a)) throw new Exception("PrepareRequest refused");
+                    var warnings = new System.Collections.Generic.List<string>();
+                    Console.WriteLine("bundle: " + SourceBundle.Write(Path.Combine(watch, "bundle_job.zip"), (CampaignOptions)a[1], (HardwareInfo)Get("hw"), DateTime.Now, warnings).Replace("\n", " | "));
+                    foreach (var w in warnings) Console.WriteLine("  warning: " + w);
+                    string asc = (string)Get("ascPath");
+                    File.Copy(asc, Path.Combine(watch, Path.GetFileName(asc)));
+                    File.Copy(setup, Path.Combine(watch, "setup_job.spica"));
+                    listener.Start(watch, results);
+                    lf = new Spica.UI.ListenerForm(listener, (AppSettings)Get("settings"), en => { });
+                    lf.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+                    lf.Location = new System.Drawing.Point(form.Left + 60, form.Top + 60);
+                    lf.Show(form);
+                    tabs.SelectedIndex = 1;
+                    stage = 1; ticks = 0;
+                    return;
+                }
+                ticks++;
+                if (stage == 1 && ticks == 28) { Snap(form, "queue_running"); Snap(lf, "listener_running"); }
+                // every finish box is answered No (stay on the Queue tab)
+                foreach (var f in System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().Where(f => f != form && f != lf).ToList())
+                {
+                    Snap(f, "box" + boxes++);
+                    Console.WriteLine("box: " + f.Text);
+                    f.DialogResult = System.Windows.Forms.DialogResult.No;
+                }
+                bool idle = queue.Running == null && queue.QueuedCount == 0 && listener.PendingCount == 0;
+                if (ticks > 28 && queue.Jobs.Count >= 4 && idle) stage++; else if (stage > 1) stage = 1;
+                if (stage < 6 && ticks < 2400) return;     // idle for a second, so that the last box had its turn
+                timer.Stop();
+                Snap(form, "queue_done"); Snap(lf, "listener_done");
+                foreach (var j in queue.Jobs) Console.WriteLine($"job {j.Id}: {j.Name} | {j.Source} | {j.Status} | {j.Done}/{j.Total} ok {j.Ok} | {(int)j.Elapsed.TotalSeconds} s | {j.OutputDir} | {j.Message}");
+                foreach (var en in listener.Entries) Console.WriteLine($"entry: {en.File} | {en.Status} | {listener.Describe(en)} | {en.Results} | {en.Message}");
+                listener.Stop();
+                Thread.Sleep(500);
+                string st = Path.Combine(watch, Listener.StatusFile);
+                Console.WriteLine("--- " + Listener.StatusFile + (File.Exists(st) ? "\n" + File.ReadAllText(st) : ": missing"));
+                Console.WriteLine("--- watch: " + string.Join(", ", Directory.GetFileSystemEntries(watch).Select(Path.GetFileName)));
+                Console.WriteLine("--- results: " + string.Join(", ", Directory.GetFileSystemEntries(results).Select(Path.GetFileName)));
+                lf.Close();
+                form.Close();
+            }
+            form.Shown += (s, e) => timer.Start();
+            System.Windows.Forms.Application.Run(form);
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        return 0;
+    }
+
+    static int QueueOps(string[] args)
+    {
+        int bad = 0;
+        var t = new Thread(() =>
+        {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var mf = typeof(Spica.UI.MainForm);
+            string png = Path.GetFullPath(args[2]);
+            var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]) };
+            object Get(string field) => mf.GetField(field, flags).GetValue(form);
+            void Check(bool ok, string what) { Console.WriteLine((ok ? "ok    " : "WRONG ") + what); if (!ok) bad++; }
+            void Snap(System.Windows.Forms.Form f, string name)
+            {
+                for (int k = 0; k < 10; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                using (var bmp = new System.Drawing.Bitmap(f.Width, f.Height))
+                {
+                    f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f.Width, f.Height));
+                    bmp.Save(png.Replace(".png", "_" + name + ".png"));
+                }
+            }
+            string Order(CampaignQueue q) => string.Join(",", q.Jobs.Select(j => j.Id + ":" + j.Status));
+            var timer = new System.Windows.Forms.Timer { Interval = 250 };
+            int ticks = 0, stage = 0, boxes = 0;
+            bool busy = false;
+            QueueJob discarded = null, stopped = null;
+            string discardedDir = null;
+            timer.Tick += (s, e) =>
+            {
+                if (busy) return;
+                busy = true;
+                try { Step(); } catch (Exception ex) { Console.WriteLine("FAILED: " + ex); bad++; timer.Stop(); form.Close(); } finally { busy = false; }
+            };
+            void Step()
+            {
+                var queue = (CampaignQueue)Get("queue");
+                var tabs = (Spica.UI.Win98TabControl)Get("tabs");
+                ticks++;
+                foreach (var f in System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().Where(f => f != form).ToList())
+                {
+                    Snap(f, "ops_box" + boxes++);
+                    f.DialogResult = System.Windows.Forms.DialogResult.No;
+                }
+                switch (stage)
+                {
+                    case 0:
+                        if (Get("netlist") == null && ticks < 150) return;
+                        queue.Hold = true;
+                        var add = mf.GetMethod("AddToQueue", flags, null, Type.EmptyTypes, null);
+                        for (int i = 0; i < 3; i++) add.Invoke(form, null);
+                        Check(queue.Jobs.Count == 3 && queue.Running == null && queue.QueuedCount == 3, "held: three wait, none runs  [" + Order(queue) + "]");
+                        Check(queue.Move(queue.Jobs[2], -1) && queue.Jobs[1].Id == 3, "move up: 3 before 2  [" + Order(queue) + "]");
+                        Check(!queue.Move(queue.Jobs[0], -1), "the first cannot move up");
+                        Check(queue.Remove(queue.Jobs[0]) && queue.Jobs.Count == 2 && queue.Jobs[0].Id == 3, "remove 1  [" + Order(queue) + "]");
+                        tabs.SelectedIndex = 1;
+                        Snap(form, "ops_held");
+                        queue.Hold = false;
+                        Check(queue.Running != null && queue.Running.Id == 3, "released: 3 runs first  [" + Order(queue) + "]");
+                        Check(!queue.Remove(queue.Running), "the running one cannot be removed");
+                        stage = 1; ticks = 0;
+                        return;
+                    case 1:     // discard the running campaign
+                        if (ticks < 24) return;
+                        discarded = queue.Running;
+                        discardedDir = discarded.Engine.Options.OutputDir;
+                        Check(Directory.Exists(discardedDir), "the campaign folder exists while it runs");
+                        discarded.DiscardOnFinish = true;
+                        discarded.Engine.Cancel();
+                        stage = 2; ticks = 0;
+                        return;
+                    case 2:     // the next one starts by itself; stop it and keep what it has
+                        if (queue.Running == null || queue.Running == discarded) { if (ticks > 240) throw new Exception("the next campaign did not start"); return; }
+                        if (queue.Running.Engine == null || queue.Running.Engine.Snapshot().Done < 60) return;
+                        Check(queue.Running.Id == 2, "after the discard, 2 runs  [" + Order(queue) + "]");
+                        Check(!Directory.Exists(discardedDir), "the discarded folder is gone");
+                        Check(!queue.Jobs.Contains(discarded), "the discarded campaign left the list");
+                        stopped = queue.Running;
+                        stopped.AnalyzeOnFinish = true;
+                        stopped.Engine.Cancel();
+                        stage = 3; ticks = 0;
+                        return;
+                    case 3:
+                        if (queue.Running != null || queue.QueuedCount > 0) { if (ticks > 240) throw new Exception("the stopped campaign did not end"); return; }
+                        if (ticks < 8) return;
+                        Check(stopped.Status == JobStatus.Stopped && stopped.Done > 0 && stopped.Done < stopped.Total, $"stopped with {stopped.Done} of {stopped.Total} runs  [" + Order(queue) + "]");
+                        var view = (Spica.UI.ResultsView)Get("resultsView");
+                        Check(tabs.SelectedIndex == 2 && view.Data != null, "its results are open (" + (view.Data?.Rows.Count ?? 0) + " rows)");
+                        tabs.SelectedIndex = 1;
+                        Snap(form, "ops_done");
+                        queue.ClearEnded();
+                        Check(queue.Jobs.Count == 0, "clear ended empties the list");
+                        Snap(form, "ops_empty");
+                        timer.Stop();
+                        form.Close();
+                        return;
+                }
+            }
+            form.Shown += (s, e) => timer.Start();
+            System.Windows.Forms.Application.Run(form);
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        Console.WriteLine(bad == 0 ? "QUEUE OPS: all ok" : $"QUEUE OPS: {bad} wrong");
+        return bad;
+    }
+
     static int SetupCapture(string[] args)
     {
         var t = new Thread(() =>
@@ -469,7 +674,7 @@ static class Program
                     if (nlField.GetValue(form) == null && ++ticks < 150) return;
                     Snap(args[2]);
                     if (!run) { timer.Stop(); form.Close(); return; }
-                    typeof(Spica.UI.MainForm).GetMethod("StartCampaign", flags).Invoke(form, new object[] { null, null, 0.0, false });
+                    typeof(Spica.UI.MainForm).GetMethod("AddToQueue", flags, null, Type.EmptyTypes, null).Invoke(form, null);
                     stage = 1; ticks = 0;
                     return;
                 }
@@ -490,6 +695,33 @@ static class Program
                 tabs.SelectedIndex = 2;
                 var view = (Spica.UI.ResultsView)typeof(Spica.UI.MainForm).GetField("resultsView", flags).GetValue(form);
                 for (int i = 0; i < view.PageCount; i++) { view.SelectPage(i); Snap(args[2].Replace(".png", $"_res{i}.png")); }
+                // the dialogs, shown modeless so that they can be drawn and closed from here
+                void Dialog(string name, Func<System.Windows.Forms.Form> make)
+                {
+                    try
+                    {
+                        using (var f = make())
+                        {
+                            f.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+                            f.Location = new System.Drawing.Point(form.Left + 40, form.Top + 40);
+                            f.Show(form);
+                            for (int k = 0; k < 10; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                            using (var bmp = new System.Drawing.Bitmap(f.Width, f.Height))
+                            {
+                                f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f.Width, f.Height));
+                                bmp.Save(args[2].Replace(".png", $"_dlg_{name}.png"));
+                            }
+                            f.Close();
+                        }
+                    }
+                    catch (Exception ex) { Console.WriteLine($"dialog {name}: {ex.GetType().Name}: {ex.Message}"); }
+                }
+                object Get(string field) => typeof(Spica.UI.MainForm).GetField(field, flags).GetValue(form);
+                Dialog("options", () => new Spica.UI.OptionsForm((AppSettings)Get("settings"), (HardwareInfo)Get("hw")));
+                Dialog("listener", () => new Spica.UI.ListenerForm((Listener)Get("listener"), (AppSettings)Get("settings"), en => { }));
+                Dialog("report", () => new Spica.UI.ReportForm(view.Data));
+                Dialog("inputs", () => new Spica.UI.InputsForm(view.Data));
+                Dialog("opamps", () => new Spica.UI.OpAmpForm(Path.GetDirectoryName(Path.GetFullPath(args[1]))));
                 Console.WriteLine("output: " + engine.Options.OutputDir);
                 form.Close();
             }

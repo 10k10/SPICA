@@ -687,7 +687,8 @@ namespace Spica.UI
             var g = e.Graphics;
             g.Clear(Win98.Face);
             if (Bars.Count == 0) return;
-            const int segH = 6, gap = 2, wellW = 24, header = 16, footer = IconSize + 3;
+            const int segH = 6, gap = 2, wellW = 24, header = 16;
+            int footer = Bars.Exists(x => x.Icon != null) ? IconSize + 3 : 17;     // icons, or just the names
             for (int i = 0; i < Bars.Count; i++)
             {
                 var b = Bars[i];
@@ -714,6 +715,10 @@ namespace Spica.UI
                         if (k < lit) g.FillRectangle(on, inner.Left, y, inner.Width, segH);
                         y -= gap;
                     }
+
+                if (b.Icon == null)
+                    TextRenderer.DrawText(g, b.Label ?? "", Font, new Rectangle(x0, Height - 15, ColumnWidth, 15), Color.Black,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
 
                 // icon centred under the bar, a little wider than it (the name is in the tooltip)
                 if (b.Icon != null)

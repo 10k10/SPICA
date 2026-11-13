@@ -268,7 +268,7 @@ namespace Spica.UI
         static TextBox Memo() => new TextBox
         {
             Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Win98.Window,
-            ScrollBars = ScrollBars.Both, Font = Win98.MonoFont, WordWrap = false,
+            ScrollBars = ScrollBars.Vertical, Font = Win98.MonoFont, WordWrap = true,
         };
 
         static Panel Bar(int h) => new Panel { Dock = DockStyle.Top, Height = h, BackColor = Win98.Face };
@@ -278,6 +278,36 @@ namespace Spica.UI
 
         /// <summary>Charts on the pages: their zoom is reset when the selection changes.</summary>
         Win98Chart Track(Win98Chart c) { charts.Add(c); return c; }
+
+        /// <summary>
+        /// Columns follow the width of the list: the last one takes what is left, and all shrink together when they do
+        /// not fit, so that a list of a few columns never needs a horizontal scroll bar.
+        /// </summary>
+        static void AutoFit(Win98ListView lv)
+        {
+            var design = lv.Columns.Cast<ColumnHeader>().Select(c => c.Width).ToArray();
+            bool busy = false;
+            void Fit()
+            {
+                int n = design.Length, avail = lv.ClientSize.Width - 1, total = design.Sum();
+                if (busy || lv.Columns.Count != n || avail < 60) return;
+                busy = true;
+                double k = total <= avail ? 1 : (double)avail / total;
+                int x = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    int w = i == n - 1 ? Math.Max(20, avail - x) : (int)(design[i] * k);
+                    if (lv.Columns[i].Width != w) lv.Columns[i].Width = w;
+                    x += w;
+                }
+                busy = false;
+            }
+            lv.Resize += (s, e) => Fit();
+            Fit();
+        }
+
+        /// <summary>Height of a list that shows this many rows without scrolling (header and frame included).</summary>
+        static int ListHeight(int rows, int min, int max) => 4 + 17 + 14 * Math.Max(min, Math.Min(max, rows)) + 4;
 
         /// <summary>Grey hint text on a toolbar row.</summary>
         static Label Hint(string text, int x, int y) => new Label { Text = text, Location = new Point(x, y + 3), AutoSize = true, BackColor = Win98.Face, ForeColor = Win98.Shadow };
@@ -425,7 +455,13 @@ namespace Spica.UI
         ComboBox cbBudGroup, cbBudChart, cbBudY, cbBudX, cbBudUnit;
         Win98CheckBox chkBudPess, chkBudRefer, chkBudSym;
         Win98RadioButton rbBudMeas, rbBudCmp, rbBudLin, rbBudExpr;
-        Label lblBudY, lblBudX, lblBudFormula, lblBudVerdict, lblBudNotes;
+        Label lblBudY, lblBudX, lblBudFormula, lblBudVerdict, lblBudNotes, lblBudEmpty;
+        Win98Button btnBudDefine;
+        Win98GroupBox grpBudDefine;
+        Panel gapBudDefine, budBody;
+        Win98Well budListWell, budCondWell;
+        bool budDefineOpen = true, budEmptyShown;
+        string budDefineFor;        // the campaign the definition panel was last opened or closed for
         Panel pnlBudIdeal;
         Win98Chart chBud, chBudSens;
         Win98Tile[] budTiles;
@@ -442,17 +478,19 @@ namespace Spica.UI
         {
             var p = new Win98TabPage("Error Budget", Win98.Icon("results16"));
             var bar = Bar(30);
-            txtBudSigma = Field(84, 2, 36);
+            // the definition is needed now and then, the verdict all the time: the panel opens and closes
+            btnBudDefine = new Win98Button { Text = "&Define Errors", Location = new Point(0, 1), Size = new Size(112, 23) };
+            btnBudDefine.Click += (s, e) => ShowBudDefinition(!budDefineOpen);
+            txtBudSigma = Field(208, 2, 36);
             txtBudSigma.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyBudgetSigma(); e.SuppressKeyPress = true; } };
             txtBudSigma.Leave += (s, e) => ApplyBudgetSigma();
-            chkBudPess = new Win98CheckBox { Text = "Pessimistic sigma (95 % upper bound)", Location = new Point(132, 4), Width = 230 };
+            chkBudPess = new Win98CheckBox { Text = "Pessimistic sigma (95 % upper bound)", Location = new Point(256, 4), Width = 230 };
             chkBudPess.CheckedChanged += (s, e) => { if (filling || rs == null) return; rs.Setup.PessimisticSigma = chkBudPess.Checked; rs.Setup.Dirty = true; NotifySetup(); RefreshBudget(); };
-            cbBudGroup = Combo(414, 2, 140);
-            bar.Controls.AddRange(new Control[] { Lbl("Design sigma:", 0, 2), txtBudSigma, chkBudPess, Lbl("Group:", 370, 2), cbBudGroup,
-                Hint("PASS: mean +/- k sigma inside the boundaries everywhere (every temperature and input), and the error bell-shaped.", 566, 2) });
+            cbBudGroup = Combo(540, 2, 150);
+            bar.Controls.AddRange(new Control[] { btnBudDefine, Lbl("Design sigma:", 126, 2), txtBudSigma, chkBudPess, Lbl("Group:", 496, 2), cbBudGroup });
 
             // ---------------------------------------------------------------- left: the definition
-            var grp = new Win98GroupBox { Text = "Error definition", Dock = DockStyle.Left, Width = 292 };
+            var grp = grpBudDefine = new Win98GroupBox { Text = "Error definition", Dock = DockStyle.Left, Width = 292 };
             const int L = 10, FX = 84, FW = 196;
             txtBudName = Field(FX, 20, FW);
 
@@ -515,6 +553,7 @@ namespace Spica.UI
             foreach (var t in new[] { txtBudGain, txtBudOff, txtBudTf }) t.TextChanged += form;
 
             var tip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
+            tip.SetToolTip(btnBudDefine, "Opens or closes the panel where the errors are defined: what is judged, against which boundaries.");
             tip.SetToolTip(txtBudSigma, "The error must stay inside the boundaries at mean +/- this many sigma (6 = very conservative, 3 = 99.73 %).");
             tip.SetToolTip(chkBudPess, "Sigma from n runs is itself uncertain. Ticked: use its 95 % upper bound (about +12 % at 200 runs, +4 % at 2000).");
             tip.SetToolTip(cbBudX, "Output vs reference: the measurement the ideal output is computed from (e.g. vin), or a fixed number.\n" +
@@ -567,26 +606,25 @@ namespace Spica.UI
                 ("Is the error a normal (bell) curve? Anderson-Darling test. Only then is mean ± k sigma a valid extrapolation\n(or when the tails are shorter than a normal's, as with flat tolerances adding up: then it is a safe over-estimate).", 6) })
                 tip.SetToolTip(budTiles[i], t);
 
-            lblBudVerdict = new Label { Dock = DockStyle.Top, Height = 22, BackColor = Win98.Face, TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, AutoEllipsis = true };
-
-            chBud = Track(new Win98Chart());
-            chBudSens = Track(new Win98Chart());
-            cbBudChart = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(0, 0), Width = 150, Font = Win98.Font };
+            // the verdict in words, and what the chart under it shows
+            lblBudVerdict = new Label { Dock = DockStyle.Fill, BackColor = Win98.Face, TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, AutoEllipsis = true };
+            cbBudChart = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Right, Width = 130, Font = Win98.Font };
             cbBudChart.Items.AddRange(new object[] { "Histogram", "Error vs input" });
             cbBudChart.SelectedIndex = 0;
             cbBudChart.SelectedIndexChanged += (s, e) => ShowBudgetSlice();
+            var verdictRow = new Panel { Dock = DockStyle.Top, Height = 29, BackColor = Win98.Face, Padding = new Padding(0, 4, 0, 4) };
+            verdictRow.Controls.Add(lblBudVerdict);
+            verdictRow.Controls.Add(new Label { Text = "Chart:", Dock = DockStyle.Right, Width = 40, TextAlign = ContentAlignment.MiddleLeft, BackColor = Win98.Face });
+            verdictRow.Controls.Add(cbBudChart);
 
-            var chartPanel = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
-            var chartBar = Bar(26);
-            chartBar.Controls.Add(cbBudChart);
-            chartPanel.Controls.Add(ChartWell(chBud));
-            chartPanel.Controls.Add(chartBar);
+            chBud = new Win98Chart();
+            chBudSens = Track(new Win98Chart());
             var sensWell = new Win98Well(chBudSens, Color.White) { Dock = DockStyle.Right, Width = 330 };
             var middle = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
-            middle.Controls.Add(chartPanel);
+            middle.Controls.Add(ChartWell(chBud));
             middle.Controls.Add(Gap(DockStyle.Right));
             middle.Controls.Add(sensWell);
-            middle.Resize += (s, e) => sensWell.Width = Math.Max(240, Math.Min(380, middle.Width / 3));
+            middle.Resize += (s, e) => sensWell.Width = Math.Max(220, Math.Min(360, middle.Width / 3));
 
             lvBudCond = new Win98ListView();
             foreach (var (t, w) in new[] { ("Temperature", 100), ("Tightest at", 110), ("Mean", 80), ("Sigma", 80), ("Mean ± k sigma", 150), ("Low side", 76), ("High side", 76),
@@ -612,28 +650,68 @@ namespace Spica.UI
                 int i = lvBudCond.SelectedIndices[0];
                 if (i < budCond.Count && budCond[i] != budSlice) { budSlice = budCond[i]; ShowBudgetSlice(); }
             };
-            var condWell = new Win98Well(lvBudCond) { Dock = DockStyle.Bottom, Height = 96 };
-            lblBudNotes = new Label { Dock = DockStyle.Bottom, Height = 40, BackColor = Win98.Face, ForeColor = Win98.Shadow, UseMnemonic = false };
+            budCondWell = new Win98Well(lvBudCond) { Dock = DockStyle.Bottom, Height = ListHeight(3, 1, 6) };
+            lblBudNotes = new Label { Dock = DockStyle.Bottom, Height = 4, BackColor = Win98.Face, ForeColor = Win98.Shadow, UseMnemonic = false, Padding = new Padding(0, 4, 0, 0) };
+            budListWell = new Win98Well(lvBud) { Dock = DockStyle.Top, Height = ListHeight(2, 2, 6) };
+            AutoFit(lvBud);
+            AutoFit(lvBudCond);
 
+            // top to bottom: the errors, the figures of the one selected, the verdict in words, the charts, notes, the temperatures
+            budBody = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            budBody.Controls.Add(middle);
+            budBody.Controls.Add(lblBudNotes);
+            budBody.Controls.Add(budCondWell);
+            budBody.Controls.Add(verdictRow);
+            budBody.Controls.Add(tiles);
+            budBody.Controls.Add(Gap(DockStyle.Top));
+            budBody.Controls.Add(budListWell);
+            budBody.Resize += (s, e) => LayoutBudget();
+
+            lblBudEmpty = new Label { Dock = DockStyle.Fill, BackColor = Win98.Face, ForeColor = Win98.Shadow, TextAlign = ContentAlignment.MiddleCenter, UseMnemonic = false, Visible = false };
             var right = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
-            var listWell = new Win98Well(lvBud) { Dock = DockStyle.Top, Height = 104 };
-            right.Controls.Add(middle);
-            right.Controls.Add(Gap(DockStyle.Top));
-            right.Controls.Add(lblBudVerdict);
-            right.Controls.Add(tiles);
-            right.Controls.Add(Gap(DockStyle.Top));
-            right.Controls.Add(listWell);
-            right.Controls.Add(lblBudNotes);
-            right.Controls.Add(condWell);
-            middle.BringToFront();
+            right.Controls.Add(budBody);
+            right.Controls.Add(lblBudEmpty);
 
             p.Controls.Add(right);
-            p.Controls.Add(Gap(DockStyle.Left));
+            p.Controls.Add(gapBudDefine = Gap(DockStyle.Left));
             p.Controls.Add(grp);
             p.Controls.Add(Gap(DockStyle.Top));
             p.Controls.Add(bar);
             UpdateBudForm();
             return p;
+        }
+
+        void ShowBudDefinition(bool show)
+        {
+            budDefineOpen = show;
+            grpBudDefine.Visible = gapBudDefine.Visible = show;
+            btnBudDefine.Text = show ? "&Hide Definition" : "&Define Errors";
+        }
+
+        /// <summary>Sizes the parts of the page to what they hold: lists as tall as their rows, notes as tall as their text.</summary>
+        void LayoutBudget()
+        {
+            if (budBody == null) return;
+            bool none = rs == null || rs.Setup.Errors.Count == 0;
+            if (none)
+            {
+                lblBudEmpty.Text = rs == null ? "No results yet."
+                    : "No error is defined for this campaign yet.\n\n" +
+                      "An error is what this page judges: a .meas that already is the error, or an output compared with its ideal value.\n" +
+                      "Define it on the left - what it is and its boundaries - and press Add.\n\n" +
+                      "Every error then gets a verdict at mean ± k sigma, at each temperature and across the input.";
+                if (rs != null && !budDefineOpen) ShowBudDefinition(true);
+            }
+            if (budEmptyShown != none) { budEmptyShown = none; lblBudEmpty.Visible = none; budBody.Visible = !none; }
+            if (none) return;
+            int h = ListHeight(lvBud.Items.Count, 2, 6);
+            if (budListWell.Height != h) budListWell.Height = h;
+            h = ListHeight(lvBudCond.Items.Count, 1, 6);
+            if (budCondWell.Height != h) budCondWell.Height = h;
+            string t = lblBudNotes.Text;
+            h = t.Length == 0 ? 6 : Math.Min(62, TextRenderer.MeasureText(t, lblBudNotes.Font, new Size(Math.Max(100, budBody.Width), 0),
+                    TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl).Height + 10);
+            if (lblBudNotes.Height != h) lblBudNotes.Height = h;
         }
 
         static Color? VerdictColor(string v) => v == "PASS" ? Win98Chart.Green : v == "FAIL" ? Win98Chart.Red : v == "CHECK" ? Win98Chart.Olive : (Color?)null;
@@ -899,6 +977,8 @@ namespace Spica.UI
         void RefreshBudget()
         {
             if (rs == null) { lvBud.Items.Clear(); budRows.Clear(); budShown = null; ShowBudgetDetail(); return; }
+            string shownFor = rs.Folder ?? rs.Title ?? "";
+            if (shownFor != budDefineFor) { budDefineFor = shownFor; ShowBudDefinition(rs.Setup.Errors.Count == 0); }
             filling = true;
             var st = rs.Setup;
             txtBudSigma.Text = st.DesignSigma.ToString("0.##", Inv);
@@ -985,16 +1065,15 @@ namespace Spica.UI
                 chBud.EmptyText = r?.Error ?? "";
                 lblBudNotes.Text = "";
                 lblBudVerdict.ForeColor = Color.Black;
-                lblBudVerdict.Text = rs == null ? "" : r != null ? "  " + r.Item.Name + ": " + r.Error
-                    : rs.Setup.Errors.Count > 0 ? "  Select an error."
-                    : "  No error defined yet: define one on the left (a .meas that is the error, or an output against a reference) and press Add.";
+                lblBudVerdict.Text = rs == null ? "" : r != null ? r.Item.Name + ": " + r.Error : rs.Setup.Errors.Count > 0 ? "Select an error." : "";
+                LayoutBudget();
                 return;
             }
             var s = budSlice;
             string k = r.K.ToString("0.#", Inv);
             string u(double v) => ErrorBudget.Fmt(v, r.Item);
             var vc = VerdictColor(r.Verdict);
-            budTiles[0].Set(r.Verdict == "-" ? "no boundaries" : r.Verdict, r.Verdict == "-" ? "" : $"at {k} sigma" + (r.Slices.Count > 1 ? ", all conditions" : ""),
+            budTiles[0].Set(r.Verdict == "-" ? "no boundaries" : r.Verdict, r.Verdict == "-" ? "" : $"at {k} sigma",
                 vc, r.Verdict == "PASS" ? PassBack : r.Verdict == "FAIL" ? FailBack : r.Verdict == "CHECK" ? CheckBack : (Color?)null);
             budTiles[1].Set(u(s.Mean), s.Modelled ? "fitted, at this input" : "same in every unit");
             budTiles[2].Set(u(s.Sigma), r.Pessimistic ? "95 % upper bound" : "sample");
@@ -1011,13 +1090,14 @@ namespace Spica.UI
                 s.Normal ? Win98Chart.Green : s.TailsOk ? Win98Chart.Olive : Win98Chart.Maroon);
 
             lblBudVerdict.ForeColor = vc ?? Color.Black;
-            lblBudVerdict.Text = $"  {(s == r.Worst ? (r.Slices.Count > 1 ? "Worst point" : "All runs") : "Condition")}: {s.Label}.   {(r.Verdict == "-" ? "" : r.Verdict + ": ")}{r.VerdictText()}";
+            lblBudVerdict.Text = $"{(s == r.Worst ? (r.Slices.Count > 1 ? "Worst point" : "All runs") : "Condition")}: {s.Label}.   {(r.Verdict == "-" ? "" : r.Verdict + ": ")}{r.VerdictText()}";
             lblBudNotes.Text = string.Join("\n", r.Notes());
             BuildBudgetChart(chBud, r, cbBudChart.SelectedIndex, s);
 
             // what drives the spread in this condition
             BuildBudgetSens(chBudSens, r, s, 8);
             chBudSens.Invalidate();
+            LayoutBudget();
         }
 
         /// <summary>Share of the spread of the error in one condition explained by each tolerance; the number of bars drawn.</summary>
@@ -1029,17 +1109,14 @@ namespace Spica.UI
             var set = new HashSet<ResultSet.Row>(s.Rows);
             var rep = s == r.Worst && r.Sens != null ? r.Sens : SensitivityReport.Parameters(rs, ErrorBudget.Column(r.Item), 0, row => set.Contains(row));
             var items = rep.Items.Where(x => !x.IsInput && !double.IsNaN(x.Share)).Take(top).ToList();
-            if (rep.Conditioned)
-            {
-                // the error is already referred to the ideal TF: an input that still explains much of it is a systematic error
-                string pct = SensitivityReport.ShareText(rep.InputShare);
-                ch.Title = rep.InputShare > 0.5
-                    ? $"What drives it  -  input {string.Join(", ", rep.InputNames)}: {pct} (the ideal TF does not match: systematic gain/offset)"
-                    : $"What drives it  -  input {string.Join(", ", rep.InputNames)}: {pct}, left out";
-            }
+            // the input is set apart: what it explains of an error already referred to the ideal TF is systematic, and the
+            // notes under the charts say so; the title stays short enough to be read whole in a narrow chart
+            if (rep.Conditioned) ch.Title = "What drives it, beyond the input";
             if (items.Count == 0) { ch.EmptyText = rep.Error ?? "Nothing to show."; return 0; }
             ch.YCategories = items.Select(x => Short(x.Name)).ToArray();
-            ch.XLabel = rep.Conditioned ? "share of the spread the input leaves (%)" : "share of the spread (%)";
+            ch.XLabel = rep.Conditioned
+                ? $"% of the spread left by {string.Join(", ", rep.InputNames)} (which takes {SensitivityReport.ShareText(rep.InputShare)})"
+                : "share of the spread (%)";
             ch.Add(new ChartSeries { Kind = SeriesKind.HBars, X = items.Select(x => 100 * x.Bar).ToArray(), Color = Win98Chart.Navy, InLegend = false });
             return items.Count;
         }
@@ -1171,16 +1248,31 @@ namespace Spica.UI
             };
             lvWc.HeaderTip = c => WcTips[c];
             lvWc.SelectedIndexChanged += (s, e) => ShowWcDetail();
+            AutoFit(lvWc);
             txtWc = Memo();
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 280, BackColor = Win98.Face };
-            bottom.Controls.Add(new Win98Well(txtWc) { Dock = DockStyle.Fill });
-            p.Controls.Add(new Win98Well(lvWc) { Dock = DockStyle.Fill });
-            p.Controls.Add(Gap(DockStyle.Top));
-            p.Controls.Add(bar);
-            p.Controls.Add(Gap(DockStyle.Bottom));
-            p.Controls.Add(bottom);
-            bottom.SendToBack();
+            // the table is as tall as its rows; the causes of the selected row take the rest
+            wcTop = new Panel { Dock = DockStyle.Top, Height = 160, BackColor = Win98.Face };
+            wcTop.Controls.Add(new Win98Well(lvWc) { Dock = DockStyle.Fill });
+            wcTop.Controls.Add(Gap(DockStyle.Bottom));
+            wcTop.Controls.Add(Gap(DockStyle.Top));
+            wcTop.Controls.Add(bar);
+            p.Controls.Add(new Win98Well(txtWc) { Dock = DockStyle.Fill });
+            p.Controls.Add(wcTop);
+            p.Resize += (s, e) => LayoutWc();
             return p;
+        }
+
+        Panel wcTop;
+        bool wcTopShown = true;
+
+        void LayoutWc()
+        {
+            if (wcTop == null || wcTop.Parent == null) return;
+            // a Monte Carlo campaign has no worst-case table: the page explains instead
+            bool has = wcRep != null;
+            if (wcTopShown != has) { wcTopShown = has; wcTop.Visible = has; }
+            int h = 24 + 6 + 6 + Math.Min(ListHeight(wcRep?.Items.Count ?? 0, 3, 40), Math.Max(80, wcTop.Parent.Height * 45 / 100));
+            if (wcTop.Height != h) wcTop.Height = h;
         }
 
         static readonly string[] WcTips =
@@ -1221,6 +1313,7 @@ namespace Spica.UI
                     lvWc.Items.Add(it);
                 }
             lvWc.EndUpdate();
+            LayoutWc();
             if (lvWc.Items.Count > 0) lvWc.Items[Math.Min(keep, lvWc.Items.Count - 1)].Selected = true;
             ShowWcDetail();
         }
@@ -1232,9 +1325,10 @@ namespace Spica.UI
             if (rs == null) { txtWc.Text = ""; return; }
             if (wcRep == null)
             {
-                txtWc.Text = ("This campaign is a Monte Carlo (random units), not a worst case.\n\n" +
-                              "Worst case sets every tolerance to an edge of its range and reports the guaranteed limits.\n" +
-                              "To run one: Setup > Analysis > Worst case, then Start.").Replace("\n", "\r\n");
+                txtWc.Text = ("This campaign is a Monte Carlo (random units), not a worst case: there is nothing to show on this page.\n\n" +
+                              "A worst case sets every tolerance to an edge of its range and reports the guaranteed limits of each\n" +
+                              "measurement, with the tolerances that cause them.\n\n" +
+                              "To run one: on the Setup tab choose Analysis > Worst case, then press Add to Queue.").Replace("\n", "\r\n");
                 return;
             }
             if (lvWc.SelectedIndices.Count == 0 || lvWc.SelectedIndices[0] >= wcRep.Items.Count) { txtWc.Text = "Select a measurement."; return; }
@@ -1270,10 +1364,10 @@ namespace Spica.UI
             lvStats.SelectedIndexChanged += (s, e) => ShowStatDetail();
             lvStats.HeaderTip = c => Glossary.Column(lvStats.Columns[c].Text);
             lvStats.CellTip = (i, c) => i < statRows.Count ? Glossary.StatCell(statRows[i], c) : null;
-            var listWell = new Win98Well(lvStats) { Dock = DockStyle.Fill };
+            statListWell = new Win98Well(lvStats) { Dock = DockStyle.Top, Height = 130 };
 
-            // bottom: spec editor + narrative
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 236, BackColor = Win98.Face };
+            // under it: the spec editor and the analysis of the selected measurement, which take the rest
+            var bottom = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
             var grpSpec = new Win98GroupBox { Text = "Spec limits", Dock = DockStyle.Left, Width = 236 };
             cbSpecMeas = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(92, 22), Width = 132, Font = Win98.Font };
             cbSpecMeas.SelectedIndexChanged += (s, e) => LoadSpecFields();
@@ -1293,13 +1387,23 @@ namespace Spica.UI
             bottom.Controls.Add(Gap(DockStyle.Left));
             bottom.Controls.Add(grpSpec);
 
-            p.Controls.Add(listWell);
+            p.Controls.Add(bottom);
+            p.Controls.Add(Gap(DockStyle.Top));
+            p.Controls.Add(statListWell);
             p.Controls.Add(Gap(DockStyle.Top));
             p.Controls.Add(bar);
-            p.Controls.Add(Gap(DockStyle.Bottom));
-            p.Controls.Add(bottom);
-            bottom.SendToBack();
+            p.Resize += (s, e) => LayoutStats();
             return p;
+        }
+
+        Win98Well statListWell;
+
+        void LayoutStats()
+        {
+            if (statListWell == null || statListWell.Parent == null) return;
+            // room for the horizontal scroll bar: this table has more columns than fit
+            int h = Math.Min(ListHeight(statRows.Count, 3, 60) + 17, Math.Max(90, statListWell.Parent.Height * 45 / 100));
+            if (statListWell.Height != h) statListWell.Height = h;
         }
 
         void RefreshStats()
@@ -1499,8 +1603,7 @@ namespace Spica.UI
             txtTheory.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyTf(); e.SuppressKeyPress = true; } };
             bar.Controls.AddRange(new Control[] { Lbl("X:", 0, 2), cbTfX, Lbl("Y:", 158, 2), cbTfY, Lbl("Group:", 316, 2), cbTfGroup,
                 Hint("X and Y can be measurements, TEMP, a random parameter or the run number.", 512, 2),
-                Lbl("Ideal  y =", 0, 32), txtTheory, btn, btnIdeal, btnFit,
-                Hint("Find the TF here; boundaries and the verdict are on Error Budget.", 722, 32) });
+                Lbl("Ideal  y =", 0, 32), txtTheory, btn, btnIdeal, btnFit });
             var tfTip = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
             tfTip.SetToolTip(txtTheory, "The ideal output as an expression of x (and T, temperature in °C), e.g. 2*x, or 2*x + 10m. Optional.");
             tfTip.SetToolTip(btnIdeal, "Adds an error to the Error Budget tab: Y compared with this ideal, run by run, referred to the input.");
@@ -1673,25 +1776,25 @@ namespace Spica.UI
         {
             var p = new Win98TabPage("Sensitivity", Win98.Icon("chart16"));
             var bar = Bar(30);
-            cbSensMeas = Combo(82, 2, 150);
-            cbSensGroup = Combo(290, 2, 150);
-            cbSensInputs = Combo(500, 2, 150);
+            cbSensMeas = Combo(82, 2, 120);
+            cbSensGroup = Combo(250, 2, 120);
+            cbSensInputs = Combo(420, 2, 130);
             cbSensInputs.Items.AddRange(new object[] { "Random parameters", "Other measurements" });
             cbSensInputs.SelectedIndex = 0;
-            cbSensShow = Combo(704, 2, 150);
+            var tips = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
+            var btnInputs = new Win98Button { Text = "&Choose...", Location = new Point(554, 1), Size = new Size(72, 23) };
+            btnInputs.Click += (s, e) => ChooseInputs();
+            cbSensShow = Combo(672, 2, 120);
             cbSensShow.Items.AddRange(new object[] { "Share of variance", "Signed effect" });
             cbSensShow.SelectedIndex = 0;
-            cbSensRange = Combo(916, 2, 170);
+            cbSensRange = Combo(842, 2, 124);
             cbSensRange.Items.Add("Whole input range");
             cbSensRange.SelectedIndex = 0;
-            var tips = new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 };
-            var btnInputs = new Win98Button { Text = "&Inputs...", Location = new Point(1094, 1), Size = new Size(76, 24) };
-            btnInputs.Click += (s, e) => ChooseInputs();
             tips.SetToolTip(btnInputs, "Which random parameters are the circuit's input (the excitation sweeping its range), not tolerances.\n" +
                                        "The input is set apart and the bars share what it leaves among the tolerances.");
             tips.SetToolTip(cbSensRange, "Only the runs with the input in one band of its range (equal numbers of runs per band).");
-            bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbSensMeas, Lbl("Group:", 246, 2), cbSensGroup,
-                Lbl("Inputs:", 454, 2), cbSensInputs, Lbl("Show:", 664, 2), cbSensShow, Lbl("Range:", 870, 2), cbSensRange, btnInputs });
+            bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbSensMeas, Lbl("Group:", 212, 2), cbSensGroup,
+                Lbl("Inputs:", 380, 2), cbSensInputs, btnInputs, Lbl("Show:", 638, 2), cbSensShow, Lbl("Range:", 802, 2), cbSensRange });
 
             chSens = new Win98Chart();
             txtSens = Memo();
@@ -1699,6 +1802,7 @@ namespace Spica.UI
             lvSens.HeaderTip = c => Glossary.Column(lvSens.Columns[c].Text);
             foreach (var (t, w) in new[] { ("#", 34), ("Input", 220), ("Share of variance", 110), ("Signed effect (SRC)", 116), ("Correlation r", 90), ("Slope (per unit)", 100), ("Shift at limit", 100), ("Limit", 150) })
                 lvSens.Columns.Add(t, w, t == "Input" || t == "Limit" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
+            AutoFit(lvSens);
             lvSens.DoubleClick += (s, e) =>
             {
                 if (sensRep == null || lvSens.SelectedIndices.Count == 0 || lvSens.SelectedIndices[0] >= sensRep.Items.Count) return;
@@ -1831,7 +1935,7 @@ namespace Spica.UI
             txtTemp = Memo();
             lvTemp = new Win98ListView();
             lvTemp.HeaderTip = c => Glossary.Column(lvTemp.Columns[c].Text);
-            var right = new Win98Well(txtTemp) { Dock = DockStyle.Right, Width = 420 };
+            var right = new Win98Well(txtTemp) { Dock = DockStyle.Right, Width = 480 };
             var listWell = new Win98Well(lvTemp) { Dock = DockStyle.Bottom, Height = 150 };
             var body = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
             body.Controls.Add(ChartWell(chTemp));
@@ -1864,6 +1968,8 @@ namespace Spica.UI
             if (!(cbTempMeas.SelectedItem is string m)) return;
             var text = rs.Mode == TempMode.Corners ? BuildTempCorners(chTemp, lvTemp, m) : BuildTempRandom(chTemp, lvTemp, m);
             txtTemp.Text = text.Replace("\n", "\r\n").Replace("\r\r\n", "\r\n");
+            int h = ListHeight(lvTemp.Items.Count, 3, 8) + 17;
+            if (lvTemp.Parent.Height != h) lvTemp.Parent.Height = h;
         }
 
         double SelectedRef() => rs.Corners.Count == 0 ? double.NaN :
