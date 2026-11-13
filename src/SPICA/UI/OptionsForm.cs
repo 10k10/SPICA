@@ -12,9 +12,9 @@ namespace Spica.UI
     {
         readonly AppSettings settings;
         readonly HardwareInfo hw;
-        readonly Win98TextField txtLtspice, txtInstances, txtThreads;
+        readonly Win98TextField txtLtspice, txtInstances, txtThreads, txtRemote;
         readonly Win98RadioButton rbAuto, rbManual;
-        readonly Label lblVersion;
+        readonly Label lblVersion, lblRemote;
 
         public OptionsForm(AppSettings settings, HardwareInfo hw)
         {
@@ -27,7 +27,7 @@ namespace Spica.UI
             StartPosition = FormStartPosition.CenterParent;
             CaptionIcon = Win98.Icon("options16");
             const int W = 540;
-            ClientSize = new Size(W + 20 + Padding.Horizontal, 270 + Padding.Vertical);
+            ClientSize = new Size(W + 20 + Padding.Horizontal, 358 + Padding.Vertical);
             int x = Padding.Left + 10, y = Padding.Top + 10;
 
             var grpLt = new Win98GroupBox { Text = "LTspice", Location = new Point(x, y), Size = new Size(W, 74) };
@@ -59,11 +59,19 @@ namespace Spica.UI
             };
             grpPar.Controls.AddRange(new Control[] { rbAuto, rbManual, txtInstances, Lbl("instances  x", 130, 44), txtThreads, Lbl("threads each", 250, 44), lblHw, lblWhen });
 
+            var grpRemote = new Win98GroupBox { Text = "Remote PC (Run Remote)", Location = new Point(x, y + 222), Size = new Size(W, 80) };
+            txtRemote = new Win98TextField { Location = new Point(70, 20), Width = W - 70 - 10 - 81 };
+            var btnRemote = new Win98Button { Text = "B&rowse...", Location = new Point(W - 10 - 75, 18) };
+            btnRemote.Click += (s, e) => BrowseRemote();
+            lblRemote = new Label { Location = new Point(70, 46), Size = new Size(W - 80, 28), ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false };
+            grpRemote.Controls.AddRange(new Control[] { Lbl("Folder:", 10, 20), txtRemote, btnRemote, lblRemote });
+            txtRemote.Box.TextChanged += (s, e) => ShowRemote();
+
             int by = ClientSize.Height - Padding.Bottom - 33;
             var btnOk = new Win98Button { Text = "OK", Location = new Point(ClientSize.Width - Padding.Right - 10 - 75 - 6 - 75, by) };
             btnOk.Click += (s, e) => Accept();
             var btnCancel = new Win98Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(ClientSize.Width - Padding.Right - 10 - 75, by) };
-            Controls.AddRange(new Control[] { grpLt, grpPar, btnOk, btnCancel });
+            Controls.AddRange(new Control[] { grpLt, grpPar, grpRemote, btnOk, btnCancel });
             AcceptButton = btnOk;
             CancelButton = btnCancel;
 
@@ -73,7 +81,31 @@ namespace Spica.UI
             txtInstances.Text = (settings.ManualInstances > 0 ? settings.ManualInstances : hw.PhysicalCores).ToString(CultureInfo.InvariantCulture);
             txtThreads.Text = Math.Max(1, settings.ManualThreads).ToString(CultureInfo.InvariantCulture);
             txtInstances.Enabled = txtThreads.Enabled = rbManual.Checked;
+            txtRemote.Text = settings.SendFolder;
             ShowVersion();
+            ShowRemote();
+        }
+
+        /// <summary>What the remote folder holds: a listener's status says which PC watches it.</summary>
+        void ShowRemote()
+        {
+            string dir = txtRemote.Text.Trim();
+            string text;
+            if (dir.Length == 0) text = "The shared folder a SPICA listener watches on the other PC (Tools > Listener there). It runs with the cores and options of that PC.";
+            else if (!Directory.Exists(dir)) text = "This folder cannot be reached now.";
+            else
+            {
+                var st = RemoteState.Read(dir);
+                text = st == null ? "No SPICA listener has written its status here yet."
+                     : $"Watched by SPICA {st.Spica} on {st.Machine}: " + (st.Alive ? "listening now." : "not listening (last sign of life " + st.Beat.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + ").");
+            }
+            lblRemote.Text = text;
+        }
+
+        void BrowseRemote()
+        {
+            using (var d = new FolderBrowserDialog { Description = "Shared folder a SPICA listener watches on the other PC:", SelectedPath = Directory.Exists(txtRemote.Text.Trim()) ? txtRemote.Text.Trim() : "", ShowNewFolderButton = false })
+                if (d.ShowDialog(this) == DialogResult.OK) txtRemote.Text = d.SelectedPath;
         }
 
         static Label Lbl(string text, int x, int y) => new Label { Text = text, Location = new Point(x, y + 3), AutoSize = true, BackColor = Win98.Face };
@@ -113,6 +145,7 @@ namespace Spica.UI
                 return;
             }
             settings.LtspicePath = lt;
+            settings.SendFolder = txtRemote.Text.Trim();
             settings.AutoParallel = rbAuto.Checked;
             if (rbManual.Checked) { settings.ManualInstances = inst; settings.ManualThreads = thr; }
             settings.Save();

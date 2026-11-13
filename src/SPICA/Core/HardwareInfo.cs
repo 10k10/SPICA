@@ -106,6 +106,36 @@ namespace Spica.Core
             catch { pdhFailed = true; return double.NaN; }
         }
 
+        static IntPtr diskQuery, diskIdle, diskWrite;
+        static bool diskFailed;
+
+        /// <summary>
+        /// How busy the disks are since the previous call, 0..100 % (100 - "% Idle Time" of all physical disks, as
+        /// Task Manager's "Active time"), and how much is written per second. NaN on the first call or without counters.
+        /// </summary>
+        public static double DiskBusyPercent(out double writeBytesPerSecond)
+        {
+            writeBytesPerSecond = double.NaN;
+            if (diskFailed) return double.NaN;
+            try
+            {
+                if (diskQuery == IntPtr.Zero)
+                {
+                    if (PdhOpenQueryW(null, IntPtr.Zero, out diskQuery) != 0 ||
+                        PdhAddEnglishCounterW(diskQuery, @"\PhysicalDisk(_Total)\% Idle Time", IntPtr.Zero, out diskIdle) != 0 ||
+                        PdhAddEnglishCounterW(diskQuery, @"\PhysicalDisk(_Total)\Disk Write Bytes/sec", IntPtr.Zero, out diskWrite) != 0 ||
+                        PdhCollectQueryData(diskQuery) != 0)
+                        diskFailed = true;
+                    return double.NaN;
+                }
+                if (PdhCollectQueryData(diskQuery) != 0) { diskFailed = true; return double.NaN; }
+                if (PdhGetFormattedCounterValue(diskWrite, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, out _, out var w) == 0 && w.CStatus <= 1) writeBytesPerSecond = w.Value;
+                if (PdhGetFormattedCounterValue(diskIdle, PDH_FMT_DOUBLE, out _, out var v) != 0 || v.CStatus > 1) return double.NaN;
+                return Math.Max(0, Math.Min(100, 100 - v.Value));
+            }
+            catch { diskFailed = true; return double.NaN; }
+        }
+
         static double BusyTimePercent()
         {
             if (!GetSystemTimes(out long idle, out long kernel, out long user)) return double.NaN;

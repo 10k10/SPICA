@@ -25,6 +25,7 @@ namespace Spica.UI
         readonly HardwareInfo hw = HardwareInfo.Detect();
         readonly CampaignQueue queue;
         readonly Listener listener;
+        readonly RemoteTracker remote;
 
         Netlist netlist;
         string ascPath;
@@ -45,8 +46,8 @@ namespace Spica.UI
         Win98StatusBar status;
         Win98TabControl tabs;
         Win98TabPage pageSetup, pageQueue, pageResults;
-        ToolStripButton tbAdd, tbStop, tbFolder, tbReport, tbListener, tbSave;
-        ToolStripMenuItem miAdd, miStop, miSend, miRecent, miExport, miReport, miFolder, miSave, miSaveAs;
+        ToolStripButton tbOpen, tbAdd, tbRemote, tbStop, tbFolder, tbReport, tbListener, tbSave;
+        ToolStripMenuItem miOpen, miAdd, miRemote, miStop, miRecent, miExport, miReport, miFolder, miSave, miSaveAs;
         ListenerForm listenerForm;
 
         // results page
@@ -72,6 +73,9 @@ namespace Spica.UI
             queue.Finished += OnJobFinished;
             queue.Discarded += OnJobDiscarded;
             queue.Changed += () => { UpdateQueueList(); UpdateCommandState(); UpdatePlan(); };
+            remote = new RemoteTracker(Post);
+            remote.Changed += () => { UpdateQueueList(); UpdateQueueButtons(); };
+            remote.Ended += OnRemoteEnded;
 
             BuildChrome();
             BuildSetupPage();
@@ -90,7 +94,7 @@ namespace Spica.UI
             DragDrop += (s, e) =>
             {
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-                if (files != null && files.Length > 0) BeginInvoke((Action)(() => OpenDropped(files[0])));
+                if (files != null && files.Length > 0 && !Slave) BeginInvoke((Action)(() => OpenDropped(files[0])));
             };
 
             uiTimer.Tick += (s, e) => UpdateUi();
@@ -149,21 +153,21 @@ namespace Spica.UI
             Win98Renderer.Apply(menu);
 
             var mFile = new ToolStripMenuItem("&File");
-            var miOpen = new ToolStripMenuItem("&Open Schematic or Setup...", Win98.Icon("open16"), (s, e) => BrowseSchematic()) { ShortcutKeys = Keys.Control | Keys.O };
+            miOpen = new ToolStripMenuItem("&Open Schematic or Setup...", Win98.Icon("open16"), (s, e) => BrowseSchematic()) { ShortcutKeys = Keys.Control | Keys.O };
             miSave = new ToolStripMenuItem("&Save Setup", Win98.Icon("save16"), (s, e) => SaveSetup(false)) { ShortcutKeys = Keys.Control | Keys.S };
             miSaveAs = new ToolStripMenuItem("Save Setup &As...", null, (s, e) => SaveSetup(true));
-            miSend = new ToolStripMenuItem("Send to a &Listener Folder...", Win98.Icon("listener16"), (s, e) => SendToListener());
             miRecent = new ToolStripMenuItem("Recent &Files");
             var miExit = new ToolStripMenuItem("E&xit", null, (s, e) => Close());
-            mFile.DropDownItems.AddRange(new ToolStripItem[] { miOpen, miSave, miSaveAs, new ToolStripSeparator(), miSend, new ToolStripSeparator(), miRecent, new ToolStripSeparator(), miExit });
+            mFile.DropDownItems.AddRange(new ToolStripItem[] { miOpen, miSave, miSaveAs, new ToolStripSeparator(), miRecent, new ToolStripSeparator(), miExit });
             mFile.DropDownOpening += (s, e) => FillRecent();
             miRecent.DropDownItems.Add("(empty)");
 
             var mCampaign = new ToolStripMenuItem("&Campaign");
-            miAdd = new ToolStripMenuItem("Add to &Queue", Win98.Icon("run16"), (s, e) => AddToQueue()) { ShortcutKeys = Keys.F5 };
+            miAdd = new ToolStripMenuItem("Run on &This PC", Win98.Icon("run16"), (s, e) => AddToQueue()) { ShortcutKeys = Keys.F5 };
+            miRemote = new ToolStripMenuItem("Run on the &Remote PC", Win98.Icon("remote16"), (s, e) => RunRemote()) { ShortcutKeys = Keys.F6 };
             miStop = new ToolStripMenuItem("S&top the Running Campaign...", Win98.Icon("stop16"), (s, e) => StopCampaign()) { ShortcutKeys = Keys.Shift | Keys.F5 };
             var miQueue = new ToolStripMenuItem("Show the Q&ueue", Win98.Icon("queue16"), (s, e) => tabs.SelectedIndex = TabQueue) { ShortcutKeys = Keys.Control | Keys.Q };
-            mCampaign.DropDownItems.AddRange(new ToolStripItem[] { miAdd, miStop, new ToolStripSeparator(), miQueue });
+            mCampaign.DropDownItems.AddRange(new ToolStripItem[] { miAdd, miRemote, miStop, new ToolStripSeparator(), miQueue });
 
             // everything that acts on the results shown in the Results tab (enabled whenever it can be used)
             var mResults = new ToolStripMenuItem("&Results");
@@ -213,10 +217,11 @@ namespace Spica.UI
                 toolbar.Items.Add(b);
                 return b;
             }
-            Btn("Open", "open32", (s, e) => BrowseSchematic(), "Open an LTspice schematic (.asc) or a SPICA setup (.spica)  (Ctrl+O)");
+            tbOpen = Btn("Open", "open32", (s, e) => BrowseSchematic(), "Open an LTspice schematic (.asc) or a SPICA setup (.spica)  (Ctrl+O)");
             tbSave = Btn("Save", "save32", (s, e) => SaveSetup(false), "Save the setup (.spica): runs, temperatures, signals, spec limits, TF, error budget, report  (Ctrl+S)");
             toolbar.Items.Add(new ToolStripSeparator());
-            tbAdd = Btn("Add to Queue", "run32", (s, e) => AddToQueue(), "Put the campaign of the Setup tab in the queue: it starts at once when nothing is running  (F5)", 86);
+            tbAdd = Btn("Run Here", "run32", (s, e) => AddToQueue(), "Run the campaign of the Setup tab on this PC: it joins the queue and starts at once when nothing is running  (F5)", 70);
+            tbRemote = Btn("Run Remote", "remote32", (s, e) => RunRemote(), "Send the campaign of the Setup tab to the remote PC (the shared folder in Tools > Options):\nits listener runs it there, and the Queue tab follows it here  (F6)", 76);
             tbStop = Btn("Stop", "stop32", (s, e) => StopCampaign(), "Stop the running campaign; finished runs are kept  (Shift+F5)");
             toolbar.Items.Add(new ToolStripSeparator());
             tbListener = Btn("Listener", "listener32", (s, e) => ShowListener(), "Watch a folder and run every campaign put there  (Ctrl+L)");
@@ -819,15 +824,18 @@ namespace Spica.UI
 
         bool Running => queue.Running != null;
 
+        /// <summary>The listener is on: this PC runs the campaigns put in its folder, and takes no others.</summary>
+        bool Slave => listener.Active;
+
         void UpdateCommandState()
         {
-            if (tbAdd == null || resultsView == null || btnAdd == null) return;
-            bool has = netlist != null;
-            tbAdd.Enabled = miAdd.Enabled = miSend.Enabled = has;
+            if (tbAdd == null || resultsView == null || btnReload == null) return;
+            bool has = netlist != null, slave = Slave;
+            // a PC that listens runs what others send: nothing is opened or started by hand there
+            tbAdd.Enabled = miAdd.Enabled = tbRemote.Enabled = miRemote.Enabled = has && !slave;
+            tbOpen.Enabled = miOpen.Enabled = miRecent.Enabled = !slave;
             tbSave.Enabled = miSave.Enabled = miSaveAs.Enabled = has;
-            btnAdd.Text = has ? "Add to &Queue" : "&Open Schematic...";
-            btnAdd.Image = Win98.Icon(has ? "run16" : "open16");
-            btnReload.Enabled = has;
+            btnReload.Enabled = has && !slave;
             tbStop.Enabled = miStop.Enabled = Running;
             // Export / Report: the results shown, or the campaign on the monitor once it has finished runs
             bool can = resultsView.CanExport || (engine != null && engine.Snapshot().Done > 0);

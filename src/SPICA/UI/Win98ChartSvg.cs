@@ -50,7 +50,7 @@ namespace Spica.UI
 
             // grid, ticks and tick labels
             sb.Append($"<g stroke=\"{GridColor}\" stroke-width=\"1\">");
-            var xt = Ticks(x0, x1, Math.Max(2, plot.Width / 90)).ToList();
+            var xt = XTicks != null ? XTicks.Where(t => t >= x0 && t <= x1).ToList() : Ticks(x0, x1, Math.Max(2, plot.Width / 90)).ToList();
             var yt = YCategories != null ? new List<double>() : Ticks(y0, y1, Math.Max(2, plot.Height / 45)).ToList();
             foreach (var v in xt) { var x = N(MapX(v)); sb.Append($"<line x1=\"{x}\" y1=\"{plot.Top}\" x2=\"{x}\" y2=\"{plot.Bottom}\"/>"); }
             foreach (var v in yt) { var y = N(MapY(v)); sb.Append($"<line x1=\"{plot.Left}\" y1=\"{y}\" x2=\"{plot.Right}\" y2=\"{y}\"/>"); }

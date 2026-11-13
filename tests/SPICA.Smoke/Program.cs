@@ -18,6 +18,8 @@ static class Program
         if (args.Length > 0 && args[0] == "--queue") return QueueTest(args);
         // SPICA.Smoke --queueops <file.spica> <png> : hold, move, remove, discard and stop in a queue of three
         if (args.Length > 0 && args[0] == "--queueops") return QueueOps(args);
+        // SPICA.Smoke --remote <file.spica> <png> : Run Remote to a listener (a second queue in this process) while a campaign runs here, then the listener lock
+        if (args.Length > 0 && args[0] == "--remote") return RemoteTest(args);
         // SPICA.Smoke --resume <schematic.asc> <runs> <corners> : kill mid-run, resume, compare with an uninterrupted campaign
         if (args.Length > 0 && args[0] == "--resume") return ResumeTest(args);
         // SPICA.Smoke --dialog <png> : render the four-button Stop dialog
@@ -523,8 +525,122 @@ static class Program
                 Console.WriteLine("--- " + Listener.StatusFile + (File.Exists(st) ? "\n" + File.ReadAllText(st) : ": missing"));
                 Console.WriteLine("--- watch: " + string.Join(", ", Directory.GetFileSystemEntries(watch).Select(Path.GetFileName)));
                 Console.WriteLine("--- results: " + string.Join(", ", Directory.GetFileSystemEntries(results).Select(Path.GetFileName)));
+                string sf = Path.Combine(watch, Listener.StateFile);
+                Console.WriteLine("--- " + Listener.StateFile + (File.Exists(sf) ? "\n" + File.ReadAllText(sf) : ": missing"));
+                foreach (var d in Directory.Exists(Path.Combine(results, "_received")) ? Directory.GetDirectories(Path.Combine(results, "_received")) : new string[0])
+                    foreach (var asc in Directory.GetFiles(d, "*.asc"))
+                        Console.WriteLine("shipped netlist for " + Path.GetFileName(d) + ": " + (SourceBundle.ShippedNetlist(asc) != null ? "used" : "NOT usable"));
                 lf.Close();
                 form.Close();
+            }
+            form.Shown += (s, e) => timer.Start();
+            System.Windows.Forms.Application.Run(form);
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        return 0;
+    }
+
+    static int RemoteTest(string[] args)
+    {
+        var t = new Thread(() =>
+        {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var mf = typeof(Spica.UI.MainForm);
+            string setup = Path.GetFullPath(args[1]), png = Path.GetFullPath(args[2]);
+            string share = Path.Combine(Path.GetDirectoryName(png), "share");
+            if (Directory.Exists(share)) Directory.Delete(share, true);
+            Directory.CreateDirectory(share);
+            string remoteFile = KeyValueFile.Resolve("SPICA.remote.tsv");
+            if (File.Exists(remoteFile)) File.Delete(remoteFile);
+            var form = new Spica.UI.MainForm { StartupFile = setup };
+            object Get(string field) => mf.GetField(field, flags).GetValue(form);
+            void Snap(System.Windows.Forms.Form f, string name)
+            {
+                for (int k = 0; k < 10; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                using (var bmp = new System.Drawing.Bitmap(f.Width, f.Height))
+                {
+                    f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f.Width, f.Height));
+                    bmp.Save(png.Replace(".png", "_" + name + ".png"));
+                }
+            }
+            // the "workstation": its own queue and listener, watching the share, results inside it
+            Action<Action> post = a => { try { form.BeginInvoke(a); } catch { } };
+            var wsQueue = new CampaignQueue((HardwareInfo)Get("hw"), new ProfileStore(), post);
+            var ws = new Listener(wsQueue, post) { LtspiceExe = () => ((AppSettings)Get("settings")).LtspicePath };
+            var timer = new System.Windows.Forms.Timer { Interval = 250 };
+            int ticks = 0, stage = 0;
+            bool busy = false;
+            timer.Tick += (s, e) =>
+            {
+                if (busy) return;
+                busy = true;
+                try { Step(); } catch (Exception ex) { Console.WriteLine("FAILED: " + ex); timer.Stop(); form.Close(); } finally { busy = false; }
+            };
+            void Step()
+            {
+                ws.Tick();
+                var queue = (CampaignQueue)Get("queue");
+                var remote = (RemoteTracker)Get("remote");
+                var tabs = (Spica.UI.Win98TabControl)Get("tabs");
+                foreach (var f in System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().Where(f => f != form).ToList())
+                {
+                    Snap(f, "box" + ticks);
+                    Console.WriteLine("box: " + f.Text);
+                    f.DialogResult = System.Windows.Forms.DialogResult.No;
+                }
+                ticks++;
+                if (stage == 0)
+                {
+                    if (Get("netlist") == null && ticks < 150) return;
+                    ws.Start(share, Listener.SuggestOutput(share));
+                    stage = 1; ticks = 0;
+                    return;
+                }
+                if (stage == 1)
+                {
+                    if (ticks < 8) return;          // the listener has written its state
+                    ((AppSettings)Get("settings")).SendFolder = share;
+                    mf.GetMethod("RunRemote", flags).Invoke(form, null);
+                    mf.GetMethod("AddToQueue", flags, null, Type.EmptyTypes, null).Invoke(form, null);
+                    tabs.SelectedIndex = 1;
+                    stage = 2; ticks = 0;
+                    return;
+                }
+                if (stage == 2)
+                {
+                    var r = remote.Jobs.FirstOrDefault();
+                    if (r != null && r.Status == RemoteStatus.Running && r.Done > 0 && queue.Running != null && !File.Exists(png.Replace(".png", "_both.png")))
+                    {
+                        Snap(form, "both");
+                        Console.WriteLine($"while both run: remote {r.Status} {r.Done}/{r.Total} on {r.Machine}, local {queue.Running.Done}/{queue.Running.Total}");
+                    }
+                    bool idle = queue.Running == null && queue.QueuedCount == 0 && r != null && !r.Pending;
+                    if (!idle && ticks < 2400) return;
+                    Snap(form, "done");
+                    foreach (var j in queue.Jobs) Console.WriteLine($"local {j.Name} | {j.Status} | {j.Done}/{j.Total}");
+                    foreach (var x in remote.Jobs) Console.WriteLine($"remote {x.Name} | {x.Status} | {x.Done}/{x.Total} ok {x.Ok} | {x.Machine} | here: {x.ResultsHere} | csv: {File.Exists(Path.Combine(x.ResultsHere ?? "", "results.csv"))} | {x.Message} {x.Note}");
+                    // the listener lock: this PC starts listening, Open and Run go off
+                    ws.Stop();
+                    var listener = (Listener)Get("listener");
+                    listener.Start(share, Listener.SuggestOutput(share));
+                    stage = 3; ticks = 0;
+                    return;
+                }
+                if (stage == 3 && ticks > 8)
+                {
+                    tabs.SelectedIndex = 0;
+                    Snap(form, "slave");
+                    foreach (var n in new[] { "tbOpen", "tbAdd", "tbRemote", "miAdd", "miRemote" })
+                    {
+                        var item = (System.Windows.Forms.ToolStripItem)Get(n);
+                        Console.WriteLine($"slave: {n} enabled={item.Enabled}");
+                    }
+                    ((Listener)Get("listener")).Stop();
+                    timer.Stop();
+                    form.Close();
+                }
             }
             form.Shown += (s, e) => timer.Start();
             System.Windows.Forms.Application.Run(form);
@@ -695,6 +811,13 @@ static class Program
                 tabs.SelectedIndex = 2;
                 var view = (Spica.UI.ResultsView)typeof(Spica.UI.MainForm).GetField("resultsView", flags).GetValue(form);
                 for (int i = 0; i < view.PageCount; i++) { view.SelectPage(i); Snap(args[2].Replace(".png", $"_res{i}.png")); }
+                // the Temperature page showing the drift from the reference
+                var show = (System.Windows.Forms.ComboBox)typeof(Spica.UI.ResultsView).GetField("cbTempShow", flags).GetValue(view);
+                for (int i = 0; i < view.PageCount; i++)
+                {
+                    view.SelectPage(i);
+                    if (show.Parent != null && show.Parent.Visible && show.Enabled) { show.SelectedIndex = 1; Snap(args[2].Replace(".png", "_drift.png")); show.SelectedIndex = 0; break; }
+                }
                 // the dialogs, shown modeless so that they can be drawn and closed from here
                 void Dialog(string name, Func<System.Windows.Forms.Form> make)
                 {

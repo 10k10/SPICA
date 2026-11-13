@@ -55,12 +55,12 @@ namespace Spica.UI
                 x += width + gap;
                 return b;
             }
-            btnQOpen = B("Open &Results", "results16", 112, () => ShowJobResults(SelectedJob()), "Show the selected campaign on the Results tab: live while it runs (double-click does the same)");
+            btnQOpen = B("Open &Results", "results16", 112, () => { if (SelectedRemote() != null) ShowRemoteResults(SelectedRemote()); else ShowJobResults(SelectedJob()); }, "Show the selected campaign on the Results tab: live while it runs (double-click does the same)");
             btnQStop = B("S&top...", "stop16", 80, StopCampaign, "Stop the running campaign: analyse what is done, finish the running simulations, or discard it (Shift+F5)", 16);
             btnQUp = B("Move &Up", null, 75, () => MoveSelected(-1), "The selected waiting campaign runs earlier");
             btnQDown = B("Move &Down", null, 80, () => MoveSelected(+1), "The selected waiting campaign runs later");
             btnQRemove = B("Re&move", null, 75, RemoveSelected, "Take the selected campaign out of the list (Del). The results of an ended campaign stay on disk.", 16);
-            btnQClear = B("&Clear Ended", null, 92, () => queue.ClearEnded(), "Take the campaigns that ended out of the list; their results stay on disk", 16);
+            btnQClear = B("&Clear Ended", null, 92, () => { queue.ClearEnded(); remote.ClearEnded(); }, "Take the campaigns that ended out of the list; their results stay on disk", 16);
             chkHold = new Win98CheckBox { Text = "&Hold the queue: finish the running campaign, start nothing new", Location = new Point(x, 3) };
             chkHold.CheckedChanged += (s, e) => { if (queue.Hold != chkHold.Checked) queue.Hold = chkHold.Checked; };
             bar.Controls.Add(chkHold);
@@ -71,7 +71,12 @@ namespace Spica.UI
                 lvQueue.Columns.Add(t, w);
             lvQueue.CellColor = (row, col) =>
             {
-                if (col != 3 || row < 0 || row >= lvQueue.Items.Count || !(lvQueue.Items[row].Tag is QueueJob j)) return null;
+                if (col != 3 || row < 0 || row >= lvQueue.Items.Count) return null;
+                var tag = lvQueue.Items[row].Tag;
+                if (tag is RemoteJob r)
+                    return r.Status == RemoteStatus.Running ? Win98.Navy : r.Status == RemoteStatus.Done ? GoodColor
+                         : r.Status == RemoteStatus.Failed || r.Status == RemoteStatus.Lost ? BadColor : (Color?)null;
+                if (!(tag is QueueJob j)) return null;
                 switch (j.Status)
                 {
                     case JobStatus.Running: return Win98.Navy;
@@ -82,12 +87,20 @@ namespace Spica.UI
             };
             lvQueue.CellTip = (row, col) =>
             {
-                if (row < 0 || row >= lvQueue.Items.Count || !(lvQueue.Items[row].Tag is QueueJob j)) return null;
+                if (row < 0 || row >= lvQueue.Items.Count) return null;
+                var tag = lvQueue.Items[row].Tag;
+                if (tag is RemoteJob r)
+                {
+                    if (col == 6) return "Sent to " + (r.Machine.Length > 0 ? r.Machine : "the remote PC") + " through " + r.Folder + "\n(file " + r.File + ")";
+                    if (col == 7) return string.Join("\n", new[] { r.ResultsHere ?? (r.Results.Length > 0 ? r.Results + " (on " + r.Machine + ")" : ""), r.Message, r.Note }.Where(x => !string.IsNullOrEmpty(x)));
+                    return col == 2 || col == 5 ? lvQueue.Items[row].SubItems[col].Text : null;
+                }
+                if (!(tag is QueueJob j)) return null;
                 if (col == 7) return ((j.OutputDir ?? "") + (j.Message.Length > 0 ? "\n" + j.Message : "")).Trim();
                 return col == 2 || col == 5 ? lvQueue.Items[row].SubItems[col].Text : null;
             };
             lvQueue.SelectedIndexChanged += (s, e) => UpdateQueueButtons();
-            lvQueue.DoubleClick += (s, e) => { if (SelectedJob() != null) ShowJobResults(SelectedJob()); };
+            lvQueue.DoubleClick += (s, e) => { if (SelectedJob() != null) ShowJobResults(SelectedJob()); else if (SelectedRemote() != null) ShowRemoteResults(SelectedRemote()); };
             lvQueue.KeyDown += (s, e) => { if (e.KeyCode == Keys.Delete && btnQRemove.Enabled) RemoveSelected(); };
             bool sizing = false;
             lvQueue.Resize += (s, e) =>
@@ -101,7 +114,7 @@ namespace Spica.UI
             };
             lblQueueEmpty = new Label
             {
-                Text = "The queue is empty. Set up a campaign on the Setup tab and press Add to Queue (F5): it starts at once, and the next ones wait here for their turn.",
+                Text = "The queue is empty. Set up a campaign on the Setup tab and press Run Here (F5) or Run Remote (F6): the campaigns of this PC and the ones sent to the remote PC are followed here.",
                 AutoSize = true, Location = new Point(8, 30), ForeColor = Win98.Shadow, BackColor = Win98.Window, UseMnemonic = false,
             };
             lvQueue.Controls.Add(lblQueueEmpty);
@@ -136,12 +149,12 @@ namespace Spica.UI
             };
 
             // throughput, the machine, and how the engine is running it
-            var graphRow = new Panel { Dock = DockStyle.Top, Height = 126, BackColor = Win98.Face };
+            var graphRow = new Panel { Dock = DockStyle.Top, Height = 138, BackColor = Win98.Face };
             graph = new Win98Graph { Dock = DockStyle.Fill, Caption = "Throughput (runs/min)" };
             meter = new Win98ResourceMeter();
-            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = Win98Chart.Navy });
-            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "RAM", Color = Win98Chart.Teal });
-            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "Disk", Color = Win98Chart.Purple });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = Win98Chart.Navy, Icon = Win98.Icon("cpu32") });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "RAM", Color = Win98Chart.Teal, Icon = Win98.Icon("ram32") });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "Disk activity", Color = Win98Chart.Purple, Icon = Win98.Icon("drive32") });
             meter.Dock = DockStyle.Fill;
             var grpMeter = new Win98GroupBox { Text = "This PC", Dock = DockStyle.Right, Width = meter.PreferredWidth + 16, Padding = new Padding(8, 16, 8, 6) };
             grpMeter.Controls.Add(meter);
@@ -157,7 +170,7 @@ namespace Spica.UI
             }
             tip.SetToolTip(stat["Instances"], "LTspice processes running at the same time x threads of each (Tools > Options)");
             tip.SetToolTip(stat["Launch cost"], "Time an LTspice process takes to start and load the circuit, paid once per chunk of runs");
-            tip.SetToolTip(stat[".raw forecast"], "Disk space the waveform files will take at the end of the campaign");
+            tip.SetToolTip(stat[".raw forecast"], "Disk space the waveform files will take at the end of the campaign (red: more than the output drive has free)");
             graphRow.Controls.Add(new Win98Well(graph, Color.Black) { Dock = DockStyle.Fill });
             graphRow.Controls.Add(Gap(DockStyle.Right));
             graphRow.Controls.Add(grpMeter);
@@ -193,6 +206,7 @@ namespace Spica.UI
         // =====================================================================================
 
         QueueJob SelectedJob() => lvQueue != null && lvQueue.SelectedItems.Count > 0 ? lvQueue.SelectedItems[0].Tag as QueueJob : null;
+        RemoteJob SelectedRemote() => lvQueue != null && lvQueue.SelectedItems.Count > 0 ? lvQueue.SelectedItems[0].Tag as RemoteJob : null;
 
         void MoveSelected(int delta)
         {
@@ -202,6 +216,14 @@ namespace Spica.UI
 
         void RemoveSelected()
         {
+            var r = SelectedRemote();
+            if (r != null)
+            {
+                if (r.Pending && Win98MessageBox.Show(this, $"Stop following {r.Name} here?\nIt still runs on {(r.Machine.Length > 0 ? r.Machine : "the remote PC")}; its results stay there.",
+                        "Queue", MessageBoxButtons.YesNo, Win98Icon.Question) != DialogResult.Yes) return;
+                remote.Remove(r);
+                return;
+            }
             var j = SelectedJob();
             if (j == null || j.Status == JobStatus.Running) return;
             if (j.Status == JobStatus.Queued &&
@@ -259,36 +281,78 @@ namespace Spica.UI
             return new[] { j.Id.ToString(CultureInfo.InvariantCulture), j.Name, j.Analysis, state, prog, time, j.Source, result };
         }
 
+        string[] RemoteRow(RemoteJob r)
+        {
+            string state, prog, time, result;
+            int total = Math.Max(1, r.Total);
+            switch (r.Status)
+            {
+                case RemoteStatus.Running:
+                    state = "Running";
+                    prog = $"{r.Done:N0} / {r.Total:N0}  ({100.0 * r.Done / total:0} %)";
+                    time = double.IsNaN(r.Eta) ? "measuring the run time..." : $"ends about {Clock(DateTime.Now.AddSeconds(r.Eta))}  ({Duration(r.Eta)} left)";
+                    result = r.Note;
+                    break;
+                case RemoteStatus.Queued:
+                    state = "Waiting";
+                    prog = $"{r.Total:N0} to run";
+                    time = !double.IsNaN(r.Wait) ? $"starts about {Clock(DateTime.Now.AddSeconds(r.Wait))} there" : r.Ahead == 0 ? "next there" : $"{r.Ahead} before it there";
+                    result = r.Note;
+                    break;
+                case RemoteStatus.Sent:
+                case RemoteStatus.Waiting:
+                    state = "Sent";
+                    prog = r.Total > 0 ? $"{r.Total:N0} to run" : "";
+                    time = "sent " + Clock(r.Sent);
+                    result = r.Status == RemoteStatus.Waiting && r.Message.Length > 0 ? r.Message : r.Note;
+                    break;
+                default:
+                    state = r.Status == RemoteStatus.Done ? "Finished" : r.Status == RemoteStatus.Stopped ? "Stopped" : r.Status == RemoteStatus.Lost ? "Lost" : "Failed";
+                    prog = r.Total > 0 && r.Status != RemoteStatus.Lost ? $"{r.Done:N0} / {r.Total:N0}" : "";
+                    time = r.Started != null && r.Ended != null ? $"took {Hms(r.Ended.Value - r.Started.Value)}, ended {Clock(r.Ended.Value)}" : r.Ended != null ? "ended " + Clock(r.Ended.Value) : "";
+                    result = r.Status == RemoteStatus.Done || r.Status == RemoteStatus.Stopped
+                        ? $"{r.Ok:N0} with data" + (r.NoData > 0 ? $", {r.NoData:N0} without" : "") + (r.Failed > 0 ? $", {r.Failed:N0} failed" : "") + (r.ResultsHere == null ? "  (results on " + r.Machine + ")" : "")
+                        : r.Message;
+                    break;
+            }
+            string to = "-> " + (r.Machine.Length > 0 ? r.Machine : "remote");
+            return new[] { "R", r.Name, r.Analysis, state, prog, time, to, result };
+        }
+
+        object[] QueueItems() => queue.Jobs.Cast<object>().Concat(remote.Jobs).ToArray();
+
+        string[] Row(object o) => o is QueueJob j ? QueueRow(j) : RemoteRow((RemoteJob)o);
+
         /// <summary>Brings the list in line with the queue; texts are touched only when they change (no flicker).</summary>
         void UpdateQueueList()
         {
             if (lvQueue == null) return;
-            var jobs = queue.Jobs;
-            bool same = lvQueue.Items.Count == jobs.Count;
-            for (int i = 0; same && i < jobs.Count; i++) same = ReferenceEquals(lvQueue.Items[i].Tag, jobs[i]);
+            var jobs = QueueItems();
+            bool same = lvQueue.Items.Count == jobs.Length;
+            for (int i = 0; same && i < jobs.Length; i++) same = ReferenceEquals(lvQueue.Items[i].Tag, jobs[i]);
             if (!same)
             {
-                var sel = SelectedJob();
+                var sel = lvQueue.SelectedItems.Count > 0 ? lvQueue.SelectedItems[0].Tag : null;
                 lvQueue.BeginUpdate();
                 lvQueue.Items.Clear();
-                foreach (var j in jobs) lvQueue.Items.Add(new ListViewItem(QueueRow(j)) { Tag = j, Selected = j == sel });
+                foreach (var j in jobs) lvQueue.Items.Add(new ListViewItem(Row(j)) { Tag = j, Selected = j == sel });
                 lvQueue.EndUpdate();
-                lblQueueEmpty.Visible = jobs.Count == 0;
+                lblQueueEmpty.Visible = jobs.Length == 0;
                 UpdateQueueButtons();
             }
             else
             {
-                for (int i = 0; i < jobs.Count; i++)
+                for (int i = 0; i < jobs.Length; i++)
                 {
                     var it = lvQueue.Items[i];
-                    var cols = QueueRow(jobs[i]);
+                    var cols = Row(jobs[i]);
                     bool status = it.SubItems[3].Text != cols[3];
                     for (int c = 0; c < cols.Length; c++)
                         if (it.SubItems[c].Text != cols[c]) it.SubItems[c].Text = cols[c];
                     if (status) UpdateQueueButtons();
                 }
             }
-            int pending = jobs.Count(j => j.Pending);
+            int pending = queue.Jobs.Count(j => j.Pending) + remote.Jobs.Count(r => r.Pending);
             string title = pending > 0 ? $"Queue ({pending})" : "Queue";
             if (pageQueue.Text != title) { pageQueue.Text = title; tabs.Invalidate(); }
         }
@@ -297,15 +361,16 @@ namespace Spica.UI
         {
             if (btnQOpen == null) return;
             var j = SelectedJob();
+            var r = SelectedRemote();
             var jobs = queue.Jobs;
             int i = j == null ? -1 : jobs.ToList().IndexOf(j);
             bool waiting = j != null && j.Status == JobStatus.Queued;
-            btnQOpen.Enabled = j != null && j.Status != JobStatus.Queued;
+            btnQOpen.Enabled = (j != null && j.Status != JobStatus.Queued) || (r != null && r.Results.Length > 0);
             btnQStop.Enabled = Running;
             btnQUp.Enabled = waiting && i > 0 && jobs[i - 1].Status == JobStatus.Queued;
             btnQDown.Enabled = waiting && i >= 0 && i + 1 < jobs.Count && jobs[i + 1].Status == JobStatus.Queued;
-            btnQRemove.Enabled = j != null && j.Status != JobStatus.Running;
-            btnQClear.Enabled = jobs.Any(q => !q.Pending);
+            btnQRemove.Enabled = (j != null && j.Status != JobStatus.Running) || r != null;
+            btnQClear.Enabled = jobs.Any(q => !q.Pending) || remote.Jobs.Any(q => !q.Pending);
             if (chkHold.Checked != queue.Hold) chkHold.Checked = queue.Hold;
         }
 
@@ -453,6 +518,31 @@ namespace Spica.UI
             }
         }
 
+        /// <summary>The results of a campaign that ran on the remote PC: opened from the shared folder when they are there.</summary>
+        void ShowRemoteResults(RemoteJob r)
+        {
+            string dir = r.ResultsHere;
+            if (dir != null && File.Exists(Path.Combine(dir, "results.csv")))
+            {
+                if (r.Pending)
+                    Win98MessageBox.Show(this, "This campaign still runs on " + r.Machine + ": the results open as they are now (reopen them later for the rest).", "SPICA", MessageBoxButtons.OK, Win98Icon.Information);
+                OpenResultsFolder(dir);
+                return;
+            }
+            string where = r.Results.Length > 0 ? $"Its results are on {r.Machine}, in\n{r.Results}" : "It has no results yet.";
+            Win98MessageBox.Show(this, where + (r.Results.Length > 0 && dir == null
+                    ? "\n\nThat folder is not inside the shared folder, so this PC cannot reach it. On " + r.Machine + ", set the listener's results folder inside the watched folder (Tools > Listener) to open the results from here."
+                    : ""), "SPICA", MessageBoxButtons.OK, Win98Icon.Information);
+        }
+
+        void OnRemoteEnded(RemoteJob r)
+        {
+            string how = r.Status == RemoteStatus.Done ? "finished" : r.Status == RemoteStatus.Stopped ? "stopped" : "failed";
+            SetStatus($"{r.Name} {how} on {(r.Machine.Length > 0 ? r.Machine : "the remote PC")}" + (r.Status == RemoteStatus.Done ? $": {r.Ok:N0} runs with data. Open it from the Queue tab." : r.Message.Length > 0 ? ": " + r.Message : "."));
+            if (!closing) System.Media.SystemSounds.Asterisk.Play();
+            UpdateQueueButtons();
+        }
+
         void OnJobDiscarded(QueueJob job, bool gone)
         {
             if (job == shownJob)
@@ -544,13 +634,19 @@ namespace Spica.UI
         {
             status.SetText(PaneClock, DateTime.Now.ToString("HH:mm"));
             listener.Tick();
+            remote.Tick();
             if (++meterTick % 4 == 0)
             {
                 UpdateMeter();
                 UpdatePlan();
                 string pane = !listener.Active ? "Listener: off" : listener.PendingCount > 0 ? $"Listener: {listener.PendingCount} to run" : "Listener: on";
                 status.SetText(PaneListener, pane);
-                if (tbListener.Checked != listener.Active) tbListener.Checked = listener.Active;
+                if (tbListener.Checked != listener.Active)
+                {
+                    tbListener.Checked = listener.Active;
+                    UpdateCommandState();
+                    UpdatePlan();
+                }
             }
             UpdateQueueList();
             UpdateMonitor(false);
@@ -657,7 +753,8 @@ namespace Spica.UI
             stat["Launch cost"].Text = double.IsNaN(s.OverheadSeconds) ? "-" : $"{s.OverheadSeconds.ToString("0.00", inv)} s per launch";
             stat["Peak memory"].Text = s.PeakMemory > 0 ? $"{s.PeakMemory / 1048576.0:0} MB per instance" : "-";
             stat[".raw kept"].Text = o.KeepRaw ? FormatBytes(s.RawBytes) : "none (deleted after each run)";
-            stat[".raw forecast"].Text = double.IsNaN(s.RawForecast) ? "-" : FormatBytes((long)s.RawForecast);
+            stat[".raw forecast"].Text = double.IsNaN(s.RawForecast) ? "-" : FormatBytes((long)s.RawForecast) + (rawShort > 0 ? $"  ({FormatBytes(rawFree)} free)" : "");
+            stat[".raw forecast"].ForeColor = rawShort > 0 ? BadColor : Color.Black;
 
             // once a second; eased so the cold start draws as a climb from zero, not a jump to the running rate
             if (++graphTick % 4 == 0 && !s.Finished)
@@ -697,22 +794,55 @@ namespace Spica.UI
             }
         }
 
-        /// <summary>Resource meter, once a second: CPU and RAM of the whole machine, space on the output drive.</summary>
+        long rawFree, rawShort;             // free space on the running campaign's drive, and what the kept .raw files lack of it
+        QueueJob rawWarned;
+
+        /// <summary>
+        /// Resource meter, once a second: CPU and RAM of the whole machine, how busy the disks are (a campaign that
+        /// keeps its .raw files can wait on the disk). Also checks that the .raw files still to come fit on the drive.
+        /// </summary>
         void UpdateMeter()
         {
             double cpu = HardwareInfo.CpuLoadPercent(), ram = HardwareInfo.MemoryLoadPercent();
             HardwareInfo.RefreshMemory(hw);
             meter.Set(0, cpu, $"CPU utility, whole machine ({hw.LogicalProcessors} threads), as in Task Manager");
             meter.Set(1, ram, $"RAM in use: {(hw.TotalMemory - hw.AvailableMemory) / (double)(1L << 30):0.0} of {hw.TotalMemory / (double)(1L << 30):0.0} GB");
+            double disk = HardwareInfo.DiskBusyPercent(out double write);
+            string free = "";
+            rawShort = 0;
             try
             {
                 string dir = queue.Running?.OutputDir ?? txtOut.Text.Trim();
                 if (dir.Length == 0) dir = Application.StartupPath;
                 var d = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(dir)));
-                double used = 100.0 * (d.TotalSize - d.AvailableFreeSpace) / d.TotalSize;
-                meter.Set(2, used, $"Drive {d.Name} (output folder): {FormatBytes(d.AvailableFreeSpace)} free of {FormatBytes(d.TotalSize)}");
+                rawFree = d.AvailableFreeSpace;
+                free = $"\nOutput drive {d.Name}: {FormatBytes(d.AvailableFreeSpace)} free of {FormatBytes(d.TotalSize)}";
+                var run = queue.Running?.Engine;
+                if (run != null && run.Options.KeepRaw)
+                {
+                    var s = run.Snapshot();
+                    if (!s.Finished && !double.IsNaN(s.RawForecast))
+                    {
+                        // a little room is kept for the results, the logs and everything else on the drive
+                        long need = (long)(s.RawForecast - s.RawBytes), margin = Math.Max(256L << 20, d.TotalSize / 50);
+                        if (need + margin > rawFree) rawShort = need + margin - rawFree;
+                    }
+                }
             }
-            catch { meter.Set(2, double.NaN, "Output drive unknown"); }
+            catch { }
+            meter.Set(2, disk, (double.IsNaN(disk) ? "Disk activity unknown" : $"Disks busy {disk:0} % of the time (Task Manager's active time)") +
+                               (double.IsNaN(write) ? "" : $", writing {FormatBytes((long)write)}/s") + free);
+
+            var job = queue.Running;
+            if (rawShort > 0 && job != null && rawWarned != job && !closing)
+            {
+                rawWarned = job;
+                string text = $"The .raw files of {job.Name} will not fit on the output drive: about {FormatBytes(rawShort)} more is needed " +
+                              $"({FormatBytes(rawFree)} free).\n\nStop it and run it again without \"Keep .raw waveform files\", save fewer signals, " +
+                              "or free some space. When the drive is full the remaining runs fail.";
+                SetStatus($"Warning: the .raw files of {job.Name} will not fit on the output drive ({FormatBytes(rawShort)} short).");
+                Post(() => Win98MessageBox.Show(this, text, "SPICA", MessageBoxButtons.OK, Win98Icon.Warning));
+            }
         }
 
         static string PhaseText(string phase)

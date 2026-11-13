@@ -12,19 +12,40 @@ namespace Spica.Core
         static readonly object Gate = new object();     // LTspice writes the .net beside the schematic: one conversion at a time
 
         /// <param name="redirected">library references taken from a source bundle unzipped beside the schematic</param>
-        public static Netlist Load(string ltspiceExe, string ascPath, out int redirected)
+        /// <param name="preferShipped">
+        /// use the netlist of the source bundle the schematic came in, without asking LTspice: a campaign sent by
+        /// another PC runs as it was netlisted there, whatever symbols and library paths this PC has
+        /// </param>
+        /// <param name="shipped">the netlist came from the bundle (asked for, or because LTspice could not convert the schematic here)</param>
+        public static Netlist Load(string ltspiceExe, string ascPath, out int redirected, bool preferShipped, out bool shipped)
         {
             lock (Gate)
             {
-                string tmp = Path.Combine(Path.GetTempPath(), "SPICA");
-                Directory.CreateDirectory(tmp);
-                string ini = Ltspice.WritePrivateIni(Path.Combine(tmp, "convert.ini"), true);
-                string text = Ltspice.ConvertSchematic(ltspiceExe, ascPath, ini, out var enc);
-                var parsed = Netlist.Parse(text, ascPath, enc);
+                var parsed = preferShipped ? SourceBundle.ShippedNetlist(ascPath) : null;
+                if (parsed == null)
+                {
+                    try
+                    {
+                        string tmp = Path.Combine(Path.GetTempPath(), "SPICA");
+                        Directory.CreateDirectory(tmp);
+                        string ini = Ltspice.WritePrivateIni(Path.Combine(tmp, "convert.ini"), true);
+                        string text = Ltspice.ConvertSchematic(ltspiceExe, ascPath, ini, out var enc);
+                        parsed = Netlist.Parse(text, ascPath, enc);
+                    }
+                    catch
+                    {
+                        parsed = preferShipped ? null : SourceBundle.ShippedNetlist(ascPath);
+                        if (parsed == null) throw;
+                    }
+                    shipped = false;
+                }
+                else shipped = true;
                 redirected = SourceBundle.Redirect(parsed);
                 return parsed;
             }
         }
+
+        public static Netlist Load(string ltspiceExe, string ascPath, out int redirected) => Load(ltspiceExe, ascPath, out redirected, false, out _);
     }
 
     /// <summary>Everything a campaign needs, frozen when it is put in the queue: later edits of the setup do not reach it.</summary>

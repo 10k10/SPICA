@@ -21,6 +21,7 @@ namespace Spica.Core
         public DateTime? Started, Ended;
         public string Results = "";         // the campaign folder
         public string Message = "";
+        public int Done, Total, Ok, NoData, Failed;     // how it ended (this session only: the ledger keeps the message)
         public QueueJob Job;                // while it is in this session's queue
     }
 
@@ -34,6 +35,7 @@ namespace Spica.Core
     {
         public const string StatusFile = "SPICA_listener.txt";
         public const string LedgerFile = "SPICA_listener_jobs.tsv";
+        public const string StateFile = "SPICA_listener_state.tsv";     // the status for programs: the SPICA that sent a campaign follows it there
         const double ScanSeconds = 4, HeartbeatSeconds = 30;
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -43,7 +45,7 @@ namespace Spica.Core
         readonly Dictionary<string, string> seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // worker thread only
         bool scanning;
         DateTime nextScan = DateTime.MinValue, lastStatusWrite = DateTime.MinValue;
-        string lastStatus = "";
+        string lastStatus = "", lastState = "";
         int session;                        // scans started before a Stop/Start are ignored when they return
 
         public Func<string> LtspiceExe = () => null;
@@ -60,6 +62,7 @@ namespace Spica.Core
                 e.Status = j.Status == JobStatus.Finished ? ListenerStatus.Done : j.Status == JobStatus.Stopped ? ListenerStatus.Stopped : ListenerStatus.Failed;
                 e.Ended = DateTime.Now;
                 e.Results = j.OutputDir ?? e.Results;
+                e.Done = j.Done; e.Total = j.Total; e.Ok = j.Ok; e.NoData = j.NoData; e.Failed = j.Failed;
                 e.Message = j.Message.Length > 0 ? j.Message : $"{j.Ok:N0} runs with data, {j.NoData:N0} without, {j.Failed:N0} failed";
                 e.Job = null;
                 Touch();
@@ -88,14 +91,14 @@ namespace Spica.Core
 
         bool Owns(ListenerEntry e) => entries.Contains(e);
 
-        /// <summary>A results folder to propose for a watched folder: beside it, so results are never taken for jobs.</summary>
+        /// <summary>
+        /// A results folder to propose for a watched folder: inside it (it is never searched for jobs), so the PCs that
+        /// send campaigns there can open their results too.
+        /// </summary>
         public static string SuggestOutput(string input)
         {
             input = (input ?? "").Trim().TrimEnd('\\', '/');
-            if (input.Length == 0) return "";
-            string parent = Path.GetDirectoryName(input);
-            // a share root (\\pc\share) or a drive has no place beside it: inside, then
-            return string.IsNullOrEmpty(parent) ? Path.Combine(input, "results") : input + "_results";
+            return input.Length == 0 ? "" : Path.Combine(input, "results");
         }
 
         /// <summary>Starts watching. Throws when a folder cannot be used.</summary>
@@ -131,9 +134,14 @@ namespace Spica.Core
             session++;
             // what waits in the queue stays there (it was accepted); only new files are no longer taken
             SaveLedger();
-            string text = StatusText();
-            string file = Path.Combine(Input, StatusFile);
-            Task.Run(() => { try { File.WriteAllText(file, text, Encoding.UTF8); } catch { } });
+            string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", Inv);
+            string text = StatusText(), state = StateText().Replace("{now}", now);
+            string file = Path.Combine(Input, StatusFile), stateFile = Path.Combine(Input, StateFile);
+            Task.Run(() =>
+            {
+                try { File.WriteAllText(file, text, Encoding.UTF8); } catch { }
+                try { File.WriteAllText(stateFile, state, Encoding.UTF8); } catch { }
+            });
             Changed?.Invoke();
         }
 
@@ -151,7 +159,7 @@ namespace Spica.Core
         void Touch()
         {
             SaveLedger();
-            lastStatus = "";            // the status file is rewritten at the next look
+            lastStatus = lastState = "";    // the status files are rewritten at the next look
             Changed?.Invoke();
         }
 
@@ -173,9 +181,15 @@ namespace Spica.Core
             string input = Input, output = Output, exe = LtspiceExe();
             var manual = Manual();
             var known = entries.Where(e => e.Status != ListenerStatus.Waiting).ToDictionary(e => e.File, e => e.Stamp, StringComparer.OrdinalIgnoreCase);
-            string status = StatusText();
-            bool writeStatus = status != lastStatus || (DateTime.UtcNow - lastStatusWrite).TotalSeconds >= HeartbeatSeconds;
-            if (writeStatus) { lastStatus = status; lastStatusWrite = DateTime.UtcNow; status = status.Replace("{now}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", Inv)); }
+            string status = StatusText(), state = StateText();
+            bool writeStatus = status != lastStatus || state != lastState || (DateTime.UtcNow - lastStatusWrite).TotalSeconds >= HeartbeatSeconds;
+            if (writeStatus)
+            {
+                lastStatus = status; lastState = state; lastStatusWrite = DateTime.UtcNow;
+                string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", Inv);
+                status = status.Replace("{now}", now);
+                state = state.Replace("{now}", now);
+            }
 
             Task.Run(() =>
             {
@@ -183,7 +197,11 @@ namespace Spica.Core
                 string problem = "";
                 try
                 {
-                    if (writeStatus) { try { File.WriteAllText(Path.Combine(input, StatusFile), status, Encoding.UTF8); } catch { } }
+                    if (writeStatus)
+                    {
+                        try { File.WriteAllText(Path.Combine(input, StatusFile), status, Encoding.UTF8); } catch { }
+                        try { File.WriteAllText(Path.Combine(input, StateFile), state, Encoding.UTF8); } catch { }
+                    }
                     found = Scan(input, output, exe, manual, known);
                 }
                 catch (Exception ex) { problem = ex.Message; }
@@ -308,7 +326,15 @@ namespace Spica.Core
                     return f;
                 }
 
-                var netlist = SchematicLoader.Load(exe, asc, out _);
+                // a bundle runs from the netlist it carries: this PC's LTspice need not know the sender's symbols and libraries
+                Netlist netlist;
+                try { netlist = SchematicLoader.Load(exe, asc, out _, true, out _); }
+                catch (Exception ex)
+                {
+                    f.Message = ex.Message.Replace("\r", "").Replace('\n', ' ') +
+                                " (LTspice on this PC could not convert the schematic: send the campaign as a SPICA bundle, which carries its netlist and libraries.)";
+                    return f;
+                }
                 f.Request = new CampaignRequest
                 {
                     LtspiceExe = exe,
@@ -406,6 +432,40 @@ namespace Spica.Core
             }
         }
 
+        /// <summary>
+        /// The same status for programs (tab separated): the SPICA that sent a campaign reads it to show, in its own
+        /// queue, how the campaign is doing here. {now} is filled in when it is written; "end" closes a complete file.
+        /// </summary>
+        string StateText()
+        {
+            string N(double v) => double.IsNaN(v) || double.IsInfinity(v) ? "" : Math.Round(v).ToString(Inv);
+            var sb = new StringBuilder("SPICA-listener\t1\r\n");
+            sb.Append("machine\t").Append(Clean(Environment.MachineName)).Append("\r\n");
+            sb.Append("spica\t").Append(SourceBundle.AppVersion).Append("\r\n");
+            sb.Append("state\t").Append(Active ? "listening" : "stopped").Append("\r\n");
+            sb.Append("beat\t{now}\r\n");
+            sb.Append("input\t").Append(Clean(Input)).Append("\r\n");
+            sb.Append("output\t").Append(Clean(Output)).Append("\r\n");
+            foreach (var e in entries)
+            {
+                int done = e.Done, total = e.Total, ok = e.Ok, noData = e.NoData, failed = e.Failed, ahead = 0;
+                double eta = double.NaN, wait = double.NaN;
+                var j = e.Job;
+                if (j != null)
+                {
+                    total = j.Total;
+                    var s = j.Engine?.Snapshot();
+                    if (s != null) { done = s.Done; total = Math.Max(total, s.Total); ok = s.Ok; noData = s.NoData; failed = s.Failed; eta = s.EtaSeconds; }
+                    if (e.Status == ListenerStatus.Queued) { ahead = queue.Ahead(j); wait = queue.WaitSeconds(j); }
+                }
+                sb.Append(string.Join("\t", "job", Clean(e.File), e.Status.ToString(), T(e.Received), T(e.Started), T(e.Ended),
+                    done.ToString(Inv), total.ToString(Inv), ok.ToString(Inv), noData.ToString(Inv), failed.ToString(Inv),
+                    N(eta), ahead.ToString(Inv), N(wait), Clean(e.Results), Clean(e.Message))).Append("\r\n");
+            }
+            sb.Append("end\r\n");
+            return sb.ToString();
+        }
+
         /// <summary>The status file's text; {now} is filled in when it is written.</summary>
         string StatusText()
         {
@@ -416,7 +476,7 @@ namespace Spica.Core
                              : "State:     NOT LISTENING since {now}\r\n".Replace("{now}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", Inv)));
             sb.Append($"Watching:  {Input}\r\n");
             sb.Append($"Results:   {Output}\r\n\r\n");
-            sb.Append("Put a SPICA setup (.spica) with its schematic, or a SPICA bundle (.zip, File > Send to a Listener Folder), in the watched folder.\r\n");
+            sb.Append("Send campaigns here from another SPICA with Run Remote, or put a SPICA bundle (.zip) in the watched folder.\r\n");
             sb.Append("Each file runs once; change it or use Run Again in the listener window to run it again.\r\n\r\n");
             if (entries.Count == 0) { sb.Append("No jobs yet.\r\n"); return sb.ToString(); }
             int wFile = Math.Max(4, entries.Max(e => e.File.Length)), wState = Math.Max(6, entries.Max(e => Describe(e).Length));

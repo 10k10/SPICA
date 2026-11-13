@@ -372,7 +372,7 @@ namespace Spica.UI
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Dock = DockStyle.Bottom;
-            Height = 22;
+            Height = 25;
             BackColor = Win98.Face;
             Font = Win98.Font;
         }

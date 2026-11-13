@@ -20,7 +20,7 @@ namespace Spica.UI
         CheckedListBox lstSignals;
         Label lblSignalCount, lblPcRuns, lblPcLtspice, lblPlan, lblPlan2;
         RichTextBox txtCircuit;
-        Win98Button btnAdd, btnReload;
+        Win98Button btnReload;
 
         // analysis: Monte Carlo (with optional early stop) or worst case
         Win98RadioButton rbMc, rbWc;
@@ -45,6 +45,23 @@ namespace Spica.UI
         bool fillingList;
 
         const int LeftWidth = 478;     // the column of campaign groups
+
+        /// <summary>
+        /// Lays out one row from its first control: each next one goes where it was designed, or right after the one
+        /// before it when that is wider than designed (labels grow with the font). Labels are measured.
+        /// </summary>
+        static void Flow(params Control[] row)
+        {
+            int Width(Control c) => c is Label || c is CheckBox || c is RadioButton || c is Win98CheckBox || c is Win98RadioButton ? c.PreferredSize.Width : c.Width;
+            int right = row[0].Left + Width(row[0]);
+            for (int i = 1; i < row.Length; i++)
+            {
+                var c = row[i];
+                int gap = row[i - 1] is Label || c is Label ? 3 : 6;
+                if (c.Left < right + gap) c.Left = right + gap;
+                right = c.Left + Width(c);
+            }
+        }
 
         void BuildSetupPage()
         {
@@ -89,12 +106,23 @@ namespace Spica.UI
             cbWc.SelectedIndex = 0;
             txtWcSigma = new Win98TextField { Location = new Point(410, 94), Width = 34 };
             lblAnalysisHint = new Label { AutoSize = false, Location = new Point(10, 120), Size = new Size(LeftWidth - 20, 28), ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false };
-            grpAn.Controls.AddRange(new Control[] { rbMc, Lbl("Runs:", 182, 18), txtRuns, Lbl("Seed:", 292, 18), txtSeed, Grey("(0 = new)", 400, 18), chkStop,
-                Lbl("Spread ±", 46, 66), txtSpread, Lbl("%  Yield ≥", 132, 66), txtYield, Lbl("%  Min", 238, 66), txtMinRuns, Lbl("Watch:", 328, 66), txtWatch,
-                rbWc, cbWc, Lbl("Gaussian at ±", 336, 94), txtWcSigma, Lbl("σ", 448, 94), lblAnalysisHint });
+            Label lRuns = Lbl("Runs:", 182, 18), lSeed = Lbl("Seed:", 292, 18), lNew = Grey("(0 = new)", 400, 18),
+                  lSpread = Lbl("Spread ±", 46, 66), lYield = Lbl("%  Yield ≥", 132, 66), lMin = Lbl("%  Min", 238, 66), lWatch = Lbl("Watch:", 328, 66),
+                  lGauss = Lbl("Gaussian at ±", 336, 94), lSigma = Lbl("σ", 448, 94);
+            grpAn.Controls.AddRange(new Control[] { rbMc, lRuns, txtRuns, lSeed, txtSeed, lNew, chkStop,
+                lSpread, txtSpread, lYield, txtYield, lMin, txtMinRuns, lWatch, txtWatch,
+                rbWc, cbWc, lGauss, txtWcSigma, lSigma, lblAnalysisHint });
+            // the rows follow the labels' real widths: with large fonts (Windows display scaling) nothing overlaps
+            grpAn.HandleCreated += (s, e) =>
+            {
+                Flow(rbMc, lRuns, txtRuns, lSeed, txtSeed, lNew);
+                Flow(lSpread, txtSpread, lYield, txtYield, lMin, txtMinRuns, lWatch, txtWatch);
+                txtWatch.Width = Math.Max(40, LeftWidth - 10 - txtWatch.Left);
+                Flow(rbWc, cbWc, lGauss, txtWcSigma, lSigma);
+            };
 
             var grpTemp = new Win98GroupBox { Text = "Temperature", Dock = DockStyle.Top, Height = 94 };
-            rbTempDefault = new Win98RadioButton { Text = "Schematic &default (no .temp)", Location = new Point(10, 18) };
+            rbTempDefault = new Win98RadioButton { Text = "As in the &schematic: its .temp, else 27 °C", Location = new Point(10, 18) };
             rbTempCorners = new Win98RadioButton { Text = "&Corners, °C:", Location = new Point(10, 42) };
             txtCorners = new Win98TextField { Location = new Point(118, 42), Width = 206 };
             rbTempRandom = new Win98RadioButton { Text = "&Random, flat:", Location = new Point(10, 66) };
@@ -102,8 +130,17 @@ namespace Spica.UI
             txtTempMax = new Win98TextField { Location = new Point(204, 66), Width = 56 };
             foreach (var rb in new[] { rbTempDefault, rbTempCorners, rbTempRandom })
                 rb.CheckedChanged += (s, e) => OnTempModeChanged((Win98RadioButton)s);
-            grpTemp.Controls.AddRange(new Control[] { rbTempDefault, rbTempCorners, txtCorners, Grey("every run at each of them", 332, 42),
-                rbTempRandom, txtTempMin, Lbl("to", 182, 66), txtTempMax, Lbl("°C", 266, 66), Grey("one temperature per run", 332, 66) });
+            Label lEach = Grey("every run at each of them", 332, 42), lTo = Lbl("to", 182, 66), lDeg = Lbl("°C", 266, 66), lPerRun = Grey("one temperature per run", 332, 66);
+            grpTemp.Controls.AddRange(new Control[] { rbTempDefault, rbTempCorners, txtCorners, lEach, rbTempRandom, txtTempMin, lTo, txtTempMax, lDeg, lPerRun });
+            grpTemp.HandleCreated += (s, e) =>
+            {
+                int boxes = Math.Max(Math.Max(118, rbTempCorners.Right + 6), rbTempRandom.Right + 6);
+                txtCorners.Left = txtTempMin.Left = boxes;
+                Flow(txtTempMin, lTo, txtTempMax, lDeg);
+                // the corners box ends where the range ends; the hints line up after both
+                txtCorners.Width = txtTempMax.Right - txtCorners.Left;
+                lEach.Left = lPerRun.Left = Math.Max(332, lDeg.Right + 12);
+            };
 
             var grpRnd = new Win98GroupBox { Text = "Random values", Dock = DockStyle.Top, Height = 64 };
             chkPaired = new Win98CheckBox { Text = "&Paired samples: same unit at every temperature (SPICA generator)", Location = new Point(10, 18) };
@@ -118,6 +155,13 @@ namespace Spica.UI
             chkKeepRaw = new Win98CheckBox { Text = "&Keep .raw waveform files", Location = new Point(10, 44) };
             chkAutoReport = new Win98CheckBox { Text = "Write the report when it &ends", Location = new Point(200, 44) };
             grpOut.Controls.AddRange(new Control[] { Lbl("Folder:", 10, 18), txtOut, btnOut, chkKeepRaw, chkAutoReport });
+            grpOut.HandleCreated += (s, e) =>
+            {
+                // the two options centred in the box
+                int gap = 40, total = chkKeepRaw.PreferredSize.Width + gap + chkAutoReport.PreferredSize.Width;
+                chkKeepRaw.Left = Math.Max(10, (LeftWidth - total) / 2);
+                chkAutoReport.Left = chkKeepRaw.Left + chkKeepRaw.PreferredSize.Width + gap;
+            };
 
             // what the options say (Tools > Options): shown where the campaign is set up, changed there
             var grpPc = new Win98GroupBox { Text = "This PC", Dock = DockStyle.Top, Height = 72 };
@@ -179,21 +223,23 @@ namespace Spica.UI
             mid.Controls.Add(Gap(DockStyle.Left));
             mid.Controls.Add(grpSave);
             mid.Controls.Add(left);
-            mid.Resize += (s, e) => grpSave.Width = Math.Max(236, (mid.Width - left.Width - 6) * 45 / 100);
+            mid.Resize += (s, e) =>
+            {
+                grpSave.Width = Math.Max(236, (mid.Width - left.Width - 6) * 45 / 100);
+                // the signals and the circuit end where the left column ends
+                int pad = mid.Height > withPc ? mid.Height - withPc : 0;
+                if (mid.Padding.Bottom != pad) mid.Padding = new Padding(0, 0, 0, pad);
+            };
 
-            // --- bottom: what will run, and the button that runs it ----------------------------
+            // --- bottom: what will run (Run Here / Run Remote on the toolbar start it) -------------
             var bar = new Panel { Dock = DockStyle.Bottom, Height = 52, BackColor = Win98.Face };
             bar.Paint += (s, e) => Win98.EtchedHLine(e.Graphics, 0, bar.Width, 5);
             lblPlan = new Label { Location = new Point(2, 14), Height = 15, Font = Win98.BoldFont, BackColor = Win98.Face, UseMnemonic = false, AutoEllipsis = true };
             lblPlan2 = new Label { Location = new Point(2, 32), Height = 15, BackColor = Win98.Face, UseMnemonic = false, AutoEllipsis = true };
-            btnAdd = new Win98Button { Text = "&Open Schematic...", Image = Win98.Icon("open16"), Size = new Size(150, 30) };
-            btnAdd.Click += (s, e) => AddToQueue();
-            tip.SetToolTip(btnAdd, "Put this campaign in the queue (F5). It starts at once when nothing is running;\nthe Setup tab stays free to prepare the next one.");
-            bar.Controls.AddRange(new Control[] { lblPlan, lblPlan2, btnAdd });
+            bar.Controls.AddRange(new Control[] { lblPlan, lblPlan2 });
             bar.Resize += (s, e) =>
             {
-                btnAdd.Location = new Point(bar.Width - btnAdd.Width, 15);
-                lblPlan.Width = lblPlan2.Width = Math.Max(50, btnAdd.Left - 12);
+                lblPlan.Width = lblPlan2.Width = Math.Max(50, bar.Width - 4);
                 bar.Invalidate();
             };
 
@@ -478,6 +524,13 @@ namespace Spica.UI
         void UpdatePlan()
         {
             if (lblPlan == null || loadingUi) return;
+            if (Slave)
+            {
+                lblPlan.Text = "This PC is listening: it runs the campaigns put in " + listener.Input;
+                lblPlan2.ForeColor = Color.Black;
+                lblPlan2.Text = "Opening and running campaigns by hand is off while it listens (Tools > Listener to stop). Their progress is on the Queue tab.";
+                return;
+            }
             if (netlist == null)
             {
                 lblPlan.Text = "Open a schematic to begin.";
@@ -505,7 +558,19 @@ namespace Spica.UI
                 double wait = queue.WaitSecondsForNew();
                 when = $"{ahead} campaign{(ahead == 1 ? "" : "s")} before it: " + (double.IsNaN(wait) ? "starts when " + (ahead == 1 ? "it finishes." : "they finish.") : $"starts in about {Duration(wait)}.");
             }
-            lblPlan2.Text = time + "  " + when;
+            lblPlan2.Text = "Run Here: " + time + "  " + when + RemotePlan();
+        }
+
+        /// <summary>The remote PC, as its listener last described itself (for the plan line).</summary>
+        string RemotePlan()
+        {
+            string dir = settings.SendFolder ?? "";
+            if (dir.Length == 0) return "";
+            remote.States.TryGetValue(dir, out var st);
+            if (st == null) return "";
+            int waiting = st.Jobs.Count(j => j.Status == "Queued" || j.Status == "Running");
+            return st.Alive ? $"   Run Remote: {st.Machine}, {(waiting == 0 ? "free" : waiting + " campaign" + (waiting == 1 ? "" : "s") + " there")}."
+                            : $"   Run Remote: the listener on {st.Machine} is not running.";
         }
 
         // =====================================================================================
@@ -613,48 +678,67 @@ namespace Spica.UI
         }
 
         /// <summary>
-        /// Writes the campaign of the Setup tab as a bundle (.zip: schematic, setup, models) into a folder another SPICA
-        /// is listening to, e.g. a share of the workstation: it runs there and its results appear in that listener's results folder.
+        /// Runs the campaign of the Setup tab on the remote PC: writes it as a bundle (.zip: schematic, setup, netlist,
+        /// the models and symbols that are not LTspice's own) into the shared folder its listener watches. The remote
+        /// PC runs it with its own options (instances, cores); the Queue tab follows it here.
         /// </summary>
-        void SendToListener()
+        void RunRemote()
         {
-            if (!PrepareRequest(out var request, out var options)) return;
-            string folder;
-            using (var d = new FolderBrowserDialog
+            string folder = settings.SendFolder ?? "";
+            if (folder.Length == 0 || !Directory.Exists(folder))
             {
-                Description = "Folder a SPICA listener is watching (e.g. a share of the workstation):",
-                SelectedPath = Directory.Exists(settings.SendFolder ?? "") ? settings.SendFolder : "",
-                ShowNewFolderButton = false,
-            })
-            {
-                if (d.ShowDialog(this) != DialogResult.OK) return;
-                folder = d.SelectedPath;
+                using (var d = new FolderBrowserDialog
+                {
+                    Description = folder.Length == 0 ? "Shared folder a SPICA listener watches on the remote PC (Tools > Listener there). Change it later in Tools > Options."
+                                                     : "The remote folder cannot be reached:\n" + folder + "\nChoose it again:",
+                    SelectedPath = Directory.Exists(folder) ? folder : "",
+                    ShowNewFolderButton = false,
+                })
+                {
+                    if (d.ShowDialog(this) != DialogResult.OK) return;
+                    folder = d.SelectedPath;
+                }
+                settings.SendFolder = folder;
             }
-            settings.SendFolder = folder;
+            if (!PrepareRequest(out var request, out var options)) return;
             SaveSettings();
 
+            var st = RemoteState.Read(folder);
             options.Seed = request.Project.Seed;        // 0 stays "a new seed", chosen where it runs
-            string zip = Path.Combine(folder, Path.GetFileNameWithoutExtension(ascPath) + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + ".zip");
+            string name = Path.GetFileNameWithoutExtension(ascPath);
+            string zip = Path.Combine(folder, name + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + ".zip");
             var warnings = new List<string>();
             UseWaitCursor = true;
             try
             {
-                string summary = SourceBundle.Write(zip, options, hw, DateTime.Now, warnings);
-                UseWaitCursor = false;
-                SetStatus("Sent: " + zip);
-                bool listening = File.Exists(Path.Combine(folder, Listener.StatusFile));
-                Win98MessageBox.Show(this,
-                    "The campaign was written to the folder:\n" + summary +
-                    (warnings.Count > 0 ? "\n\nCheck:\n  " + string.Join("\n  ", warnings.Take(8)) + (warnings.Count > 8 ? $"\n  ... and {warnings.Count - 8} more" : "") : "") +
-                    (listening ? "\n\nThe listener there takes it at its next look at the folder; " + Listener.StatusFile + " in that folder shows how it goes."
-                               : "\n\nNo listener has written its status in this folder yet: the campaign runs once a SPICA listens to it."),
-                    "Send to a Listener Folder", MessageBoxButtons.OK, warnings.Count > 0 ? Win98Icon.Warning : Win98Icon.Information);
+                SourceBundle.Write(zip, options, hw, DateTime.Now, warnings);
             }
             catch (Exception ex)
             {
                 UseWaitCursor = false;
-                Win98MessageBox.Show(this, "The campaign could not be written to that folder:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error);
+                Win98MessageBox.Show(this, "The campaign could not be written to the remote folder:\n" + folder + "\n\n" + ex.Message, "Run Remote", MessageBoxButtons.OK, Win98Icon.Error);
+                return;
             }
+            UseWaitCursor = false;
+            remote.Add(new RemoteJob
+            {
+                Folder = folder, File = Path.GetFileName(zip), Name = name, Analysis = CampaignBuilder.Describe(options),
+                Total = options.Jobs, Machine = st?.Machine ?? "",
+                Note = st == null ? "No SPICA listener has written its status in this folder yet." : st.Alive ? "" : "The listener on " + st.Machine + " is not running now.",
+            });
+            string where = st != null ? st.Machine : Path.GetFileName(folder.TrimEnd('\\'));
+            SetStatus($"Sent to {where}: {Path.GetFileName(zip)}. The Queue tab follows it.");
+            addedNote = $"Sent {name} to {where}: it is followed on the Queue tab.";
+            addedUntil = DateTime.UtcNow.AddSeconds(8);
+            UpdatePlan();
+
+            if (warnings.Count > 0 || st == null || !st.Alive)
+                Win98MessageBox.Show(this,
+                    "The campaign was written to " + folder + "." +
+                    (warnings.Count > 0 ? "\n\nNot in the bundle (the remote PC must have them):\n  " + string.Join("\n  ", warnings.Take(8)) + (warnings.Count > 8 ? $"\n  ... and {warnings.Count - 8} more" : "") : "") +
+                    (st == null ? "\n\nNo SPICA listener has written its status in this folder yet: the campaign runs once a SPICA listens to it (Tools > Listener on the remote PC)."
+                     : !st.Alive ? $"\n\nThe listener on {st.Machine} is not running now: the campaign runs when it starts again." : ""),
+                    "Run Remote", MessageBoxButtons.OK, Win98Icon.Warning);
         }
     }
 }

@@ -49,6 +49,8 @@ namespace Spica.UI
         public bool YFromZero;
         /// <summary>Category names for HBars: row i is labelled YCategories[i], top to bottom.</summary>
         public string[] YCategories;
+        /// <summary>Where the X ticks go (e.g. the simulated temperatures); null = round numbers.</summary>
+        public double[] XTicks;
 
         Rectangle plot;
         double x0, x1, y0, y1;
@@ -62,7 +64,7 @@ namespace Spica.UI
             Font = Win98.Font;
         }
 
-        public void Clear() { Series.Clear(); Title = XLabel = YLabel = ""; YFromZero = false; YCategories = null; EmptyText = "No data."; Invalidate(); }
+        public void Clear() { Series.Clear(); Title = XLabel = YLabel = ""; YFromZero = false; YCategories = null; XTicks = null; EmptyText = "No data."; Invalidate(); }
 
         public ChartSeries Add(ChartSeries s) { Series.Add(s); Invalidate(); return s; }
 
@@ -171,7 +173,7 @@ namespace Spica.UI
             using (var grid = new Pen(Silver) { DashStyle = DashStyle.Dot })
             using (var tick = new Pen(Color.Black))
             {
-                foreach (var v in Ticks(x0, x1, Math.Max(2, plot.Width / 80)))
+                foreach (var v in XTicks != null ? XTicks.Where(t => t >= x0 && t <= x1) : Ticks(x0, x1, Math.Max(2, plot.Width / 80)))
                 {
                     float x = MapX(v);
                     g.DrawLine(grid, x, plot.Top, x, plot.Bottom);

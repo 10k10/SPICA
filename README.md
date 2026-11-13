@@ -15,8 +15,9 @@ scheduler profiles (`SPICA.profiles`) are written next to it.
    stays small. Signals used by `.meas` are always saved (locked), because `.meas` reads the `.raw`.
 3. Type the **number of runs**. Any `.step` in the schematic is replaced by SPICA's own
    `.step param run a b 1` per chunk (a single-run chunk uses `.param run=N`, because LTspice refuses a one-point `.step`).
-4. **Add to Queue** (F5). The campaign starts at once, or waits its turn behind the ones already there
-   (see *Queue*). Each chunk is launched as `LTspice.exe -b chunk.net -ini <private ini>`:
+4. **Run Here** (F5) or **Run Remote** (F6). Run Here puts the campaign in this PC's queue: it starts at
+   once, or waits its turn behind the ones already there (see *Queue*). Run Remote sends it to another PC
+   (see *Run Remote*). Each chunk is launched as `LTspice.exe -b chunk.net -ini <private ini>`:
    - The private ini copies the user's LTspice settings and forces `UseClocktoReseedMC=true`
      plus the keys that stop start-up dialogs (analytics / web sync) from blocking batch mode.
      The user's own `LTspice.ini` is never modified.
@@ -61,7 +62,7 @@ campaign ran; it is used for the analysis only when the schematic is not found.
 
 ## Temperature and paired samples
 
-- **Default**: no `.temp`, the schematic decides.
+- **As in the schematic**: SPICA sets no temperature; the schematic's own `.temp` applies (27 °C without one).
 - **Corners** (e.g. -40, 25, 90): every run is simulated at each temperature (`.temp T` per chunk;
   nested `.step temp` cannot be used because LTspice then logs `.meas` for one slice only).
 - **Random flat**: each run gets its own temperature in [min, max] (`.temp {spica_temp}` from a table),
@@ -111,7 +112,9 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
   offset error. *Use as ideal in Error Budget* / *Use the fitted line* send it to the Error Budget,
   where the boundaries and the verdict live.
 - **Temperature**: corners give per-temperature statistics and, with paired samples, per-unit drift,
-  tempco (ppm/°C) and the yield of units passing every spec at all temperatures; a random range gives
+  tempco (ppm/°C) and the yield of units passing every spec at all temperatures. The chart shows each unit
+  as a faint line with a point at every corner, mean ± 3σ and the extremes per corner, either as values or
+  (**Show: Drift from the reference**) as each unit minus itself at the reference temperature. A random range gives
   the regression on temperature, tempco and the RSS split of the spread into temperature and tolerances.
 - **Sensitivity**: with paired samples SPICA knows every random draw, so it regresses each
   measurement on all random parameters (and on temperature in random-temperature campaigns):
@@ -186,14 +189,15 @@ Clopper-Pearson, normal tail ppm, regression standard errors).
 
 ## Queue
 
-**Add to Queue** takes the campaign as the Setup tab shows it at that moment (schematic netlist, runs,
+**Run Here** takes the campaign as the Setup tab shows it at that moment (schematic netlist, runs,
 temperatures, signals, seed) and puts it in line. One campaign runs at a time, with all the instances
 the scheduler gives it; the next one starts by itself when it ends. The Setup tab is free again as
 soon as a campaign is added: change a value, open another schematic, add the next one.
 
 - The **Queue** tab lists every campaign: its analysis, status, progress, when it starts or ends and
   how long it takes (from the scheduler's profile of that circuit, once it has run before), who added
-  it (this PC or the listener) and how it ended.
+  it (this PC or the listener) and how it ended. The campaigns sent with **Run Remote** are listed there
+  too (marked `R`, "-> <PC>"), with the status, progress and end time their listener reports.
 - A waiting campaign can be moved up or down or removed. **Hold the queue** finishes the running
   campaign and starts nothing new. **Stop** acts on the running one (Analyze now, Finish running,
   Discard); the next campaign then starts unless the queue is on hold.
@@ -202,7 +206,9 @@ soon as a campaign is added: change a value, open another schematic, add the nex
 - One message tells how the campaigns added here ended, when the last of them has ended, so that a
   night of campaigns leaves one message and not one per campaign.
 - Under the list, the campaign that runs: progress, timing, the scheduler's plan and per-instance
-  status, a throughput graph and a resource meter (CPU and RAM of the whole machine, space used on the output drive) in the style of Windows 98.
+  status, a throughput graph and a resource meter (CPU and RAM of the whole machine, disk activity) in the style of Windows 98.
+  When the kept `.raw` files are forecast to need more than the output drive has free, the `.raw forecast`
+  turns red and SPICA warns once, before the drive fills up.
 The CPU figure is Windows' *% Processor Utility*, the same as Task Manager (it counts turbo clocks,
 so it reads higher than the share of busy time). The remaining time plays the runs left out on the
 instances round by round, so the last, partly filled round counts whole.
@@ -214,12 +220,13 @@ cache and memory bandwidth); the campaign still finishes far sooner than the run
 
 **Listener** (toolbar, Ctrl+L) makes this SPICA run whatever campaign appears in a folder, e.g. a share
 of a workstation that several people use. It takes two folders: the one to **watch** and the one for
-the **results** (suggested from the first: `<watched>_results` beside it; any other folder will do,
-except the watched one itself).
+the **results** (suggested: `<watched>\results`, inside it, so the PCs that send campaigns can open
+their results; any other folder will do, except the watched one itself).
 
-- A campaign is a setup (`.spica`) with its schematic beside it, or a bundle (`.zip`). From another PC,
-  **File > Send to a Listener Folder** writes the campaign of the Setup tab as such a bundle: schematic,
-  setup, netlist and the model files it uses.
+- A campaign is a setup (`.spica`) with its schematic beside it, or a bundle (`.zip`, written by
+  **Run Remote** on another PC). A bundle runs from the netlist it carries, so the listening PC does not
+  need the sender's symbols or library search paths: only LTspice's own library.
+- While it listens, the PC is a runner: Open, Run Here and Run Remote are off, and the Setup tab says so.
 - The folder is looked at every 4 seconds. A file is taken when it has stopped changing between two
   looks (it may still be copying), goes to the queue as any other campaign, and its results are written
   to `<results>\<file name>\<timestamp>\`.
@@ -227,10 +234,27 @@ except the watched one itself).
   queued with its place in line, running with progress and the time it ends, done, stopped, failed and
   why) and the results folder. The same is written as text to `SPICA_listener.txt` in the watched
   folder (refreshed at every change and at least every 30 s), so that whoever dropped the file can
-  follow it without access to the workstation's screen.
+  follow it without access to the workstation's screen. `SPICA_listener_state.tsv` holds the same for
+  programs: it is what Run Remote follows.
 - Each file runs once. A file that changes is a new campaign; **Run Again** repeats one as it is.
   What ran is kept in `SPICA_listener_jobs.tsv` in the results folder, so closing SPICA loses nothing:
   the listener starts again with SPICA, and campaigns that were waiting or running are taken again.
+
+## Run Remote
+
+**Run Remote** (toolbar, F6) runs the campaign of the Setup tab on another PC, typically a workstation,
+through a shared folder that a SPICA listener watches there. The folder is set once in
+**Tools > Options > Remote PC** (asked the first time).
+
+- SPICA writes the campaign as a bundle into that folder: schematic, sub-sheets, setup, the netlist as
+  converted on this PC, and every model, include and symbol file that is not part of LTspice.
+- The remote PC runs it with its own options (automatic or manual instances, its own cores): nothing
+  about this PC's hardware travels with the campaign.
+- This PC's Queue tab follows the campaign with what the listener reports every few seconds (sent,
+  waiting with its place in line, running with progress and end time, finished). A campaign running
+  there and one running here are followed side by side. The list is kept when SPICA closes.
+- **Open Results** opens a finished remote campaign from the shared folder when the listener writes its
+  results inside the watched folder (the default); otherwise it says where they are on the remote PC.
 
 ## Scheduler (Automatic mode)
 

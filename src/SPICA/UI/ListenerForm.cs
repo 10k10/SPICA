@@ -45,7 +45,7 @@ namespace Spica.UI
             {
                 Location = new Point(x + 44, y), Size = new Size(W - 44, 44), BackColor = Win98.Face, UseMnemonic = false,
                 Text = "While it listens, SPICA runs every campaign that appears in the watched folder, one after another, and writes the results to the results folder.\n" +
-                       "A campaign is a setup (.spica) with its schematic beside it, or a bundle (.zip) made on another PC with File > Send to a Listener Folder.\n" +
+                       "A campaign is a setup (.spica) with its schematic beside it, or a bundle (.zip) sent from another PC with Run Remote.\n" +
                        "Each file runs once; to run it again, change it or use Run Again.",
             });
             y += 54;

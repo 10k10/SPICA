@@ -69,7 +69,7 @@ namespace Spica.UI
         SensitivityReport sensRep;
 
         // temperature
-        ComboBox cbTempMeas, cbTempRef;
+        ComboBox cbTempMeas, cbTempRef, cbTempShow;
         Win98Chart chTemp;
         Win98ListView lvTemp;
         TextBox txtTemp;
@@ -1328,7 +1328,7 @@ namespace Spica.UI
                 txtWc.Text = ("This campaign is a Monte Carlo (random units), not a worst case: there is nothing to show on this page.\n\n" +
                               "A worst case sets every tolerance to an edge of its range and reports the guaranteed limits of each\n" +
                               "measurement, with the tolerances that cause them.\n\n" +
-                              "To run one: on the Setup tab choose Analysis > Worst case, then press Add to Queue.").Replace("\n", "\r\n");
+                              "To run one: on the Setup tab choose Analysis > Worst case, then press Run Here.").Replace("\n", "\r\n");
                 return;
             }
             if (lvWc.SelectedIndices.Count == 0 || lvWc.SelectedIndices[0] >= wcRep.Items.Count) { txtWc.Text = "Select a measurement."; return; }
@@ -1928,8 +1928,11 @@ namespace Spica.UI
             var bar = Bar(30);
             cbTempMeas = Combo(82, 2, 150);
             cbTempRef = Combo(330, 2, 90);
-            lblTempMode = new Label { AutoSize = true, Location = new Point(432, 7), BackColor = Win98.Face, ForeColor = Win98.Shadow };
-            bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbTempMeas, Lbl("Drift reference:", 244, 2), cbTempRef, lblTempMode });
+            cbTempShow = Combo(470, 2, 160);
+            cbTempShow.Items.AddRange(new object[] { "Value", "Drift from the reference" });
+            cbTempShow.SelectedIndex = 0;
+            lblTempMode = new Label { AutoSize = true, Location = new Point(642, 7), BackColor = Win98.Face, ForeColor = Win98.Shadow };
+            bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbTempMeas, Lbl("Drift reference:", 244, 2), cbTempRef, Lbl("Show:", 432, 2), cbTempShow, lblTempMode });
 
             chTemp = new Win98Chart();
             txtTemp = Memo();
@@ -1956,7 +1959,7 @@ namespace Spica.UI
             lvTemp.Items.Clear();
             txtTemp.Text = "";
             if (rs == null) return;
-            cbTempRef.Enabled = rs.Mode == TempMode.Corners && rs.Paired;
+            cbTempRef.Enabled = cbTempShow.Enabled = rs.Mode == TempMode.Corners && rs.Paired;
             if (rs.Mode == TempMode.Default)
             {
                 lblTempMode.Text = "";
@@ -1981,31 +1984,46 @@ namespace Spica.UI
             lblTempMode.Text = rs.Paired ? "Paired samples: the same units at every temperature." : "Independent samples per temperature (LTspice mc()): no per-unit drift.";
             double tref = SelectedRef();
             var rows = TempAnalysis.Corners(rs, m, tref);
-            ch.Title = $"{m} vs temperature";
-            ch.XLabel = "temperature (°C)"; ch.YLabel = m;
+            // drift: every unit minus itself at the reference temperature (all lines meet at zero there)
+            bool drift = rs.Paired && cbTempShow.SelectedIndex == 1;
+            ch.Title = drift ? $"{m}: drift from {tref:0.#} °C" : $"{m} vs temperature";
+            ch.XLabel = "temperature (°C)"; ch.YLabel = drift ? $"{m} - {m} at {tref:0.#} °C" : m;
+            ch.XTicks = rs.Corners.Distinct().OrderBy(t => t).ToArray();
             int col = rs.Col(m);
             if (rs.Paired && col >= 0)
             {
-                // a sample of individual units, each one line across the corners
-                var byRun = rs.Rows.Where(r => r.Status == RunStatus.Ok && !double.IsNaN(r.V[col])).GroupBy(r => r.Run).Where(g => g.Count() == rs.Corners.Count).Take(60);
-                bool first = true;
+                // a sample of individual units: a faint line across the corners, a point at each
+                var byRun = rs.Rows.Where(r => r.Status == RunStatus.Ok && !double.IsNaN(r.V[col])).GroupBy(r => r.Run).Where(g => g.Count() == rs.Corners.Count).Take(60).ToList();
+                var px = new List<double>();
+                var py = new List<double>();
                 foreach (var g in byRun)
                 {
                     var pts = g.OrderBy(r => r.Temp).ToList();
-                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = pts.Select(r => r.Temp).ToArray(), Y = pts.Select(r => r.V[col]).ToArray(), Color = Win98Chart.Silver, Label = first ? "units (60 shown)" : null, InLegend = first });
-                    first = false;
+                    double off = drift ? pts.FirstOrDefault(r => r.Temp == tref)?.V[col] ?? double.NaN : 0;
+                    var ys = pts.Select(r => r.V[col] - off).ToArray();
+                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = pts.Select(r => r.Temp).ToArray(), Y = ys, Color = Color.FromArgb(214, 214, 214), Size = 1, InLegend = false });
+                    px.AddRange(pts.Select(r => r.Temp));
+                    py.AddRange(ys);
                 }
+                if (px.Count > 0)
+                    ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = px.ToArray(), Y = py.ToArray(), Color = Color.FromArgb(128, 128, 128), Size = 3, Label = $"units ({byRun.Count} shown)" });
             }
+            // per corner: mean +/- 3 sigma, and the extremes as marks
+            Descriptive D(TempAnalysis.CornerRow r) => !drift ? r.S.D : r.Temp == tref ? Descriptive.Of(new[] { 0.0 }) : r.Drift;
+            var shown = rows.Where(r => D(r) != null && D(r).N > 0).ToList();
             ch.Add(new ChartSeries
             {
-                Kind = SeriesKind.ErrorBars, X = rows.Select(r => r.Temp).ToArray(), Y = rows.Select(r => r.S.D.Mean).ToArray(),
-                Lo = rows.Select(r => r.S.D.Mean - 3 * r.S.D.Std).ToArray(), Hi = rows.Select(r => r.S.D.Mean + 3 * r.S.D.Std).ToArray(),
+                Kind = SeriesKind.ErrorBars, X = shown.Select(r => r.Temp).ToArray(), Y = shown.Select(r => D(r).Mean).ToArray(),
+                Lo = shown.Select(r => D(r).Mean - 3 * D(r).Std).ToArray(), Hi = shown.Select(r => D(r).Mean + 3 * D(r).Std).ToArray(),
                 Color = Win98Chart.Navy, Label = "mean +/- 3 sigma",
             });
-            ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = rows.Select(r => r.Temp).ToArray(), Y = rows.Select(r => r.S.D.Min).ToArray(), Color = Win98Chart.Teal, Dashed = true, Label = "min / max" });
-            ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = rows.Select(r => r.Temp).ToArray(), Y = rows.Select(r => r.S.D.Max).ToArray(), Color = Win98Chart.Teal, Dashed = true, InLegend = false });
+            ch.Add(new ChartSeries
+            {
+                Kind = SeriesKind.Points, X = shown.SelectMany(r => new[] { r.Temp, r.Temp }).ToArray(), Y = shown.SelectMany(r => new[] { D(r).Min, D(r).Max }).ToArray(),
+                Color = Win98Chart.Teal, Size = 6, Label = "min / max",
+            });
             var spec = rs.Setup.Spec(m);
-            if (spec != null && spec.IsSet) ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = new[] { spec.Lsl, spec.Usl }.Where(v => !double.IsNaN(v)).ToArray(), Color = Win98Chart.Red, Label = "spec limits" });
+            if (!drift && spec != null && spec.IsSet) ch.Add(new ChartSeries { Kind = SeriesKind.HLine, Y = new[] { spec.Lsl, spec.Usl }.Where(v => !double.IsNaN(v)).ToArray(), Color = Win98Chart.Red, Label = "spec limits" });
 
             lv.BeginUpdate();
             lv.Columns.Clear();

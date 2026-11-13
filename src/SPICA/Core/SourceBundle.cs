@@ -20,7 +20,39 @@ namespace Spica.Core
     public static class SourceBundle
     {
         public const string Manifest = "SPICA_bundle.txt";
+        public const string NetlistFile = "netlist.net";
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+        /// <summary>
+        /// The netlist a bundle carries for the schematic unzipped beside it, as long as that schematic is still the
+        /// one that was bundled; null otherwise. With it a campaign runs on a PC whose LTspice cannot convert the
+        /// schematic (symbols and libraries only the sending PC has), and it simulates exactly what was sent.
+        /// </summary>
+        public static Netlist ShippedNetlist(string ascPath)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(Path.GetFullPath(ascPath));
+                string man = Path.Combine(dir, Manifest), net = Path.Combine(dir, NetlistFile);
+                if (!File.Exists(man) || !File.Exists(net)) return null;
+                var m = ReadManifest(man);
+                string sha = Value(m, "Campaign", "SchematicSha256");
+                if (string.IsNullOrEmpty(sha) || !sha.Equals(Sha256(File.ReadAllBytes(ascPath)), StringComparison.OrdinalIgnoreCase)) return null;
+                byte[] bytes = File.ReadAllBytes(net);
+                string want = Value(m, "Campaign", "NetlistSha256");
+                if (!string.IsNullOrEmpty(want) && !want.Equals(Sha256(bytes), StringComparison.OrdinalIgnoreCase)) return null;
+                Encoding enc;
+                string text;
+                if (int.TryParse(Value(m, "Campaign", "NetlistCodePage"), NumberStyles.Integer, Inv, out int cp))
+                {
+                    enc = cp == 65001 ? new UTF8Encoding(false) : Encoding.GetEncoding(cp);
+                    text = enc.GetString(bytes);
+                }
+                else text = Ltspice.ReadText(net, out enc);
+                return Netlist.Parse(text, Path.GetFullPath(ascPath), enc);
+            }
+            catch { return null; }
+        }
 
         public static string PathFor(string folder, string ascPath) =>
             Path.Combine(folder, Path.GetFileNameWithoutExtension(ascPath) + "_sources.zip");
@@ -255,6 +287,7 @@ namespace Spica.Core
             man.Append($"Schematic={asc}\r\n");
             man.Append($"SchematicSha256={entries[0].Sha}\r\n");
             man.Append($"NetlistSha256={Sha256(opt.Netlist.Encoding.GetBytes(netText))}\r\n");
+            man.Append($"NetlistCodePage={opt.Netlist.Encoding.CodePage.ToString(Inv)}\r\n");
             man.Append($"Seed={opt.Seed}\r\n");
             man.Append($"Generator={(opt.Mc != null ? "SPICA paired samples (reproducible from the seed)" : opt.ClockReseed ? "LTspice mc(), reseeded from the clock (not reproducible run by run)" : "LTspice mc()")}\r\n");
             man.Append("[Environment]\r\n");
@@ -283,7 +316,7 @@ namespace Spica.Core
                 }
                 foreach (var en in entries) Put(en.Zip, data[en], File.GetLastWriteTime(en.Source));
                 if (setupBytes != null) Put(stem + ".spica", setupBytes, started);
-                Put("netlist.net", opt.Netlist.Encoding.GetBytes(netText), started);
+                Put(NetlistFile, opt.Netlist.Encoding.GetBytes(netText), started);
                 Put(Manifest, new UTF8Encoding(false).GetBytes(man.ToString()), started);
             }
             if (File.Exists(zipPath)) File.Delete(zipPath);
