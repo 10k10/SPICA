@@ -192,6 +192,13 @@ static class Program
                     for (int i = 0; i < cb.Items.Count; i++) { cb.SelectedIndex = i; Shot("bud" + i); }
                     view.SelectPage(3);
                     Shot("hist");
+                    // several sigma lines, on a measurement given as a 4th argument
+                    var meas = (System.Windows.Forms.ComboBox)typeof(Spica.UI.ResultsView).GetField("cbHistMeas", flags).GetValue(view);
+                    var sig = (System.Windows.Forms.ComboBox)typeof(Spica.UI.ResultsView).GetField("cbHistSigma", flags).GetValue(view);
+                    if (args.Length > 3) meas.SelectedItem = args[3];
+                    sig.Text = "3, 4.5, 6";
+                    typeof(Spica.UI.ResultsView).GetMethod("RefreshHist", flags).Invoke(view, null);
+                    Shot("hist_sigmas");
                     form.Close();
                 };
                 form.Shown += (s, e) => timer.Start();

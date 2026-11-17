@@ -119,7 +119,7 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
   Anderson-Darling normality, spec limits, observed yield with exact (Clopper-Pearson) 95 % CI, Cpk,
   normal-model ppm. The sigma analysis (mean +/- k sigma, predicted ppm) is shown only when the
   sample is consistent with a normal distribution; otherwise percentiles are used.
-- **Histogram** with normal fit, +/-3 sigma and spec lines.
+- **Histogram** with normal fit, mean +/- k sigma lines (one k or several, e.g. 3, 6) and spec lines.
 - **Scatter & TF**: finds the TF: fitted line (gain, offset with CIs, R2), the scatter around it,
   and an optional ideal (`2*x`, `x*(1+50e-6*(T-25))`, SPICE suffixes accepted) with its gain and
   offset error. *Use as ideal in Error Budget* / *Use the fitted line* send it to the Error Budget,

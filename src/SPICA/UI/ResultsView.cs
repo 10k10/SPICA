@@ -49,7 +49,7 @@ namespace Spica.UI
         List<MeasStats> statRows = new List<MeasStats>();
 
         // histogram
-        ComboBox cbHistMeas, cbHistGroup, cbHistView, cbHistBins;
+        ComboBox cbHistMeas, cbHistGroup, cbHistView, cbHistBins, cbHistSigma;
         Win98CheckBox chkHistNormal;
         Win98Chart chHist;
         Label lblHist;
@@ -1554,10 +1554,18 @@ namespace Spica.UI
             cbHistBins = Combo(682, 2, 64);
             cbHistBins.Items.AddRange(new object[] { "Auto", "10", "20", "30", "50", "100" });
             cbHistBins.SelectedIndex = 0;
-            chkHistNormal = new Win98CheckBox { Text = "Normal fit && 3 sigma", Location = new Point(762, 5), Checked = true };
-            chkHistNormal.CheckedChanged += (s, e) => RefreshHist();
+            chkHistNormal = new Win98CheckBox { Text = "Normal fit", Location = new Point(762, 5), Width = 84, Checked = true };
+            chkHistNormal.CheckedChanged += (s, e) => { cbHistSigma.Enabled = chkHistNormal.Checked; RefreshHist(); };
+            // the sigma lines: one value or several (e.g. 3, 6); typed values are taken on Enter or when leaving the box
+            cbHistSigma = Combo(900, 2, 78);
+            cbHistSigma.DropDownStyle = ComboBoxStyle.DropDown;
+            cbHistSigma.Items.AddRange(new object[] { "1", "2", "3", "4", "4.5", "5", "6", "3, 6", "1, 2, 3", "3, 4.5, 6" });
+            cbHistSigma.Text = "3";
+            cbHistSigma.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; RefreshHist(); } };
+            cbHistSigma.Leave += (s, e) => RefreshHist();
+            new ToolTip { AutoPopDelay = 30000, InitialDelay = 400 }.SetToolTip(cbHistSigma, "Lines at mean +/- k sigma: one value, or several separated by commas (e.g. 3, 6).");
             bar.Controls.AddRange(new Control[] { Lbl("Measurement:", 0, 2), cbHistMeas, Lbl("Group:", 246, 2), cbHistGroup,
-                Lbl("View:", 454, 2), cbHistView, Lbl("Bins:", 650, 2), cbHistBins, chkHistNormal });
+                Lbl("View:", 454, 2), cbHistView, Lbl("Bins:", 650, 2), cbHistBins, chkHistNormal, Lbl("Sigma:", 856, 2), cbHistSigma });
             chHist = new Win98Chart();
             lblHist = new Label { Dock = DockStyle.Bottom, Height = 18, BackColor = Win98.Face, TextAlign = ContentAlignment.MiddleLeft };
             p.Controls.Add(ChartWell(chHist));
@@ -1573,7 +1581,9 @@ namespace Spica.UI
             int g = Math.Max(0, cbHistGroup.SelectedIndex);
             int bins = cbHistBins.SelectedIndex > 0 ? int.Parse((string)cbHistBins.SelectedItem, Inv) : 0;
             cbHistBins.Enabled = cbHistView.SelectedIndex == 0;
-            var s = BuildHistogram(chHist, m, g, chkHistNormal.Checked, cbHistView.SelectedIndex, bins);
+            var ks = SpicaProject.ParseList(cbHistSigma.Text).Where(k => k > 0 && k <= 20).Distinct().OrderBy(k => k).Take(6).ToArray();
+            if (ks.Length == 0) { ks = new[] { 3.0 }; cbHistSigma.Text = "3"; }
+            var s = BuildHistogram(chHist, m, g, chkHistNormal.Checked, cbHistView.SelectedIndex, bins, ks);
             var a = s == null || !chkHistNormal.Checked ? null : HistAsymmetry(m, g, s);
             lblHist.Text = s == null ? "" :
                 $"n = {s.D.N}   mean = {F(s.D.Mean)}   sigma = {F(s.D.Std)}   normal p = {MeasStats.P(s.AdP)}" +
@@ -1596,8 +1606,10 @@ namespace Spica.UI
 
         /// <param name="view">0 histogram, 1 cumulative distribution, 2 normal probability plot</param>
         /// <param name="bins">histogram bins, 0 = automatic</param>
-        MeasStats BuildHistogram(Win98Chart ch, string meas, int group, bool normal, int view = 0, int bins = 0)
+        /// <param name="sigmas">where the mean +/- k sigma lines go (default 3)</param>
+        MeasStats BuildHistogram(Win98Chart ch, string meas, int group, bool normal, int view = 0, int bins = 0, double[] sigmas = null)
         {
+            sigmas = sigmas ?? new[] { 3.0 };
             ch.Clear();
             var groups = rs.GroupNames();
             var s = MeasStats.Of(meas, groups[Math.Min(group, groups.Count - 1)], rs.Values(meas, group), rs.Setup.Spec(meas));
@@ -1616,11 +1628,18 @@ namespace Spica.UI
             if (normal && s.D.Std > 0)
             {
                 double w = edges[1] - edges[0];
-                double lo = Math.Min(edges[0], s.D.Mean - 4 * s.D.Std), hi = Math.Max(edges[edges.Length - 1], s.D.Mean + 4 * s.D.Std);
+                double reach = Math.Max(4, sigmas.Max() + 0.5);
+                double lo = Math.Min(edges[0], s.D.Mean - reach * s.D.Std), hi = Math.Max(edges[edges.Length - 1], s.D.Mean + reach * s.D.Std);
                 var xs = Enumerable.Range(0, 161).Select(i => lo + (hi - lo) * i / 160).ToArray();
                 ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = xs, Y = xs.Select(x => s.D.N * w * Stats.NormalPdf((x - s.D.Mean) / s.D.Std) / s.D.Std).ToArray(), Color = Win98Chart.Teal, Size = 2, Label = "normal fit" });
                 ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { s.D.Mean }, Color = Win98Chart.Green, Label = "mean" });
-                ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { s.D.Mean - 3 * s.D.Std, s.D.Mean + 3 * s.D.Std }, Color = Win98Chart.Purple, Dashed = true, Label = "mean +/- 3 sigma" });
+                var colors = new[] { Win98Chart.Purple, Win98Chart.Maroon, Win98Chart.Olive, Win98Chart.Blue, Win98Chart.Fuchsia, Win98Chart.Teal };
+                for (int i = 0; i < sigmas.Length; i++)
+                {
+                    double k = sigmas[i];
+                    ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { s.D.Mean - k * s.D.Std, s.D.Mean + k * s.D.Std }, Color = colors[i % colors.Length], Dashed = true,
+                                             Label = $"mean +/- {k.ToString("0.##", Inv)} sigma" });
+                }
             }
             if (s.Spec != null && s.Spec.IsSet)
                 ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { s.Spec.Lsl, s.Spec.Usl }.Where(v => !double.IsNaN(v)).ToArray(), Color = Win98Chart.Red, Label = "spec limits" });
