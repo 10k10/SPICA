@@ -4,8 +4,10 @@ Portable Windows app (C# / .NET Framework 4.8 / WinForms, Windows 98 look) that 
 Monte Carlo campaigns as many parallel LTspice batch instances, tuning the parallelism to the
 machine it runs on.
 
-`dist/SPICA.exe` is the whole app (~260 KB). Copy it anywhere; settings (`SPICA.ini`) and
-scheduler profiles (`SPICA.profiles`) are written next to it.
+`dist/SPICA-<version>.exe` is the whole app. Copy it anywhere; settings (`SPICA.ini`) and
+scheduler profiles (`SPICA.profiles`) are written next to it. `SPICA-cli-<version>.exe` is the same
+engine without a window, for scripts, other tools and the workstation that runs campaigns for others
+(see [Command line](#command-line)).
 
 ## How a campaign works
 
@@ -101,6 +103,17 @@ Results tab, for the running campaign or any folder opened with `File > Open Res
   in boxes (mean, sigma, room on each side in sigma), one row per temperature with its tightest
   point, the error vs input with the envelope and the worst point (or the histogram), and the
   tolerances that drive it.
+  A **lopsided** error (one tail reaching further) is shown with the units of its long tail in orange
+  on the histogram, and SPICA looks for the likely cause: each tolerance's effect is fitted as a broken
+  line (it follows a bend, a one-sided clipping, a saturation), and since the draws are independent the
+  asymmetry (third moment) splits among the tolerances. The notes give the cause, its share of the
+  asymmetry and a confidence (high / medium / low) from three checks: the skewness against what chance
+  gives with that many runs, the share the tolerances account for, and how often the same cause comes
+  out on top when the runs are resampled (bootstrap, 30 times). When no tolerance explains it alone, pairs
+  of tolerances acting together are tried. Chart **Error vs cause** shows the error against that
+  tolerance, every other effect removed, with the long-tail units in orange (for a pair: one tolerance
+  against the other, the tail gathering in a corner). The Histogram tab does the same for any measurement.
+  It is a model fitted to the runs, so it points where to look; it does not prove the cause.
 - **Table**: every run, out-of-spec values in red, filter and sort.
 - **Statistics**: n, mean, sigma, min/max, median, 0.135/99.865 % percentiles, skewness, kurtosis,
   Anderson-Darling normality, spec limits, observed yield with exact (Clopper-Pearson) 95 % CI, Cpk,
@@ -240,6 +253,8 @@ their results; any other folder will do, except the watched one itself).
   What ran is kept in `SPICA_listener_jobs.tsv` in the results folder, so closing SPICA loses nothing:
   the listener starts again with SPICA, and campaigns that were waiting or running are taken again.
 
+- The listener also runs without the window: `SPICA-cli listen <folder>` (see [Command line](#command-line)).
+
 ## Run Remote
 
 **Run Remote** (toolbar, F6) runs the campaign of the Setup tab on another PC, typically a workstation,
@@ -317,11 +332,42 @@ completed with 0 failures.
 
 The ΣΔ needs an absolute budget: with a bipolar input, a % budget explodes near 0 V.
 
+## Command line
+
+`SPICA-cli-<version>.exe` (rename it as you like, e.g. `spica.exe`) is the same engine as the window,
+for scripts, other tools and the workstation that runs campaigns. It reads `SPICA.ini` next to it
+(LTspice location, automatic or manual instances); the options override it.
+
+```
+SPICA-cli run <setup.spica | bundle.zip | schematic.asc> [--out <folder>] [--runs n] [--seed n]
+              [--raw | --no-raw] [--cores n] [--threads n] [--ltspice <path>] [--strict] [--quiet]
+SPICA-cli listen <folder> [--out <folder>] [--cores n] [--threads n] [--ltspice <path>]
+SPICA-cli status <folder>
+SPICA-cli budget <campaign folder> [--sigma k]
+```
+
+- `run` runs one campaign and waits for it: progress on the console, then the error budget verdicts
+  when the setup has errors. The last line printed is the campaign folder (`results.csv`, `samples.csv`,
+  `campaign.log`, `campaign.spica`), so a script can take it from there. Warnings that the window asks
+  about are printed and the campaign goes on; `--strict` stops at them instead.
+- `listen` is the listener of the window, without it: it watches the folder (results in `<folder>\results`
+  by default), prints each campaign as it starts and ends, and writes the same status files, so Run
+  Remote on other PCs follows it as before.
+- `status` shows a listener's state and its campaigns from its status file (any PC that sees the folder).
+- `budget` prints the Error Budget of a finished campaign.
+- **Ctrl+C** once: the simulations already running finish and nothing new starts; twice: stop now.
+- Exit codes: 0 done; 1 some runs failed or gave no data; 2 could not run; 3 stopped with Ctrl+C.
+  `budget`: 0 every error PASS, 1 a FAIL, 4 only CHECK, 2 an error could not be computed.
+
 ## Build
 
 ```
 dotnet build src/SPICA/SPICA.csproj -c Release
+dotnet build src/SPICA.Cli/SPICA.Cli.csproj -c Release
 ```
+
+The version of both is in `src/Directory.Build.props`. The command line compiles the engine
+(`src/SPICA/Core`) in, so it is a single exe too.
 
 `tests/SPICA.Smoke` runs a headless campaign: `SPICA.Smoke.exe <file.asc> <runs> [instances threads]`
 (environment: `SPICA_TEMP=corners:-40,25,90` or `random:-40,90`, `SPICA_PAIRED=1`, `SPICA_SEED=n`, `SPICA_NORAW=1`).

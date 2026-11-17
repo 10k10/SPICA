@@ -355,7 +355,7 @@ namespace Spica.Core
             return f;
         }
 
-        static void Unzip(string zip, string dir)
+        internal static void Unzip(string zip, string dir)
         {
             if (Directory.Exists(dir)) Directory.Delete(dir, true);
             Directory.CreateDirectory(dir);

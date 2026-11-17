@@ -166,6 +166,42 @@ static class Program
             t.Join();
             return 0;
         }
+        if (args.Length > 2 && args[0] == "--budgetcharts")
+        {
+            // the Error Budget page with each chart (histogram, error vs input, error vs cause), then the Histogram page
+            var t = new Thread(() =>
+            {
+                var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]), Width = 1280, Height = 860 };
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var timer = new System.Windows.Forms.Timer { Interval = 800 };
+                void Shot(string name)
+                {
+                    for (int k = 0; k < 10; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                    using (var bmp = new System.Drawing.Bitmap(form.Width, form.Height))
+                    {
+                        form.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, form.Width, form.Height));
+                        bmp.Save(args[2].Replace(".png", "_" + name + ".png"));
+                    }
+                }
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    var view = (Spica.UI.ResultsView)typeof(Spica.UI.MainForm).GetField("resultsView", flags).GetValue(form);
+                    view.SelectPage(0);
+                    var cb = (System.Windows.Forms.ComboBox)typeof(Spica.UI.ResultsView).GetField("cbBudChart", flags).GetValue(view);
+                    for (int i = 0; i < cb.Items.Count; i++) { cb.SelectedIndex = i; Shot("bud" + i); }
+                    view.SelectPage(3);
+                    Shot("hist");
+                    form.Close();
+                };
+                form.Shown += (s, e) => timer.Start();
+                System.Windows.Forms.Application.Run(form);
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            return 0;
+        }
         if (args.Length > 1 && args[0] == "--budget")
         {
             // error budget of a campaign folder; with a 3rd argument also writes the HTML report there

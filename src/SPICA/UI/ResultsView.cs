@@ -609,7 +609,7 @@ namespace Spica.UI
             // the verdict in words, and what the chart under it shows
             lblBudVerdict = new Label { Dock = DockStyle.Fill, BackColor = Win98.Face, TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false, AutoEllipsis = true };
             cbBudChart = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Right, Width = 130, Font = Win98.Font };
-            cbBudChart.Items.AddRange(new object[] { "Histogram", "Error vs input" });
+            cbBudChart.Items.AddRange(new object[] { "Histogram", "Error vs input", "Error vs cause" });
             cbBudChart.SelectedIndex = 0;
             cbBudChart.SelectedIndexChanged += (s, e) => ShowBudgetSlice();
             var verdictRow = new Panel { Dock = DockStyle.Top, Height = 29, BackColor = Win98.Face, Padding = new Padding(0, 4, 0, 4) };
@@ -1025,7 +1025,7 @@ namespace Spica.UI
             lvBudCond.Items.Clear();
             budCond.Clear(); budCondVerdict.Clear();
             // an input that varies: the error across it is the main view
-            if (budShown != null && budShown.Error == null && budShown.InputVaries && cbBudChart.SelectedIndex != 1) cbBudChart.SelectedIndex = 1;
+            if (budShown != null && budShown.Error == null && budShown.InputVaries && cbBudChart.SelectedIndex == 0) cbBudChart.SelectedIndex = 1;
             if (budShown != null && budShown.Error == null)
             {
                 var r = budShown;
@@ -1086,7 +1086,8 @@ namespace Spica.UI
             }
             Side(budTiles[4], s.SigmasLo, s.MarginLo);
             Side(budTiles[5], s.SigmasHi, s.MarginHi);
-            budTiles[6].Set(s.Normal ? "yes" : s.TailsOk ? "shorter tails" : "no", "p = " + MeasStats.P(s.AdP),
+            var lop = r.AsymmetryOf(s);
+            budTiles[6].Set(s.Normal ? "yes" : s.TailsOk ? "shorter tails" : lop != null && lop.Error == null ? $"no: long {lop.SideText} tail" : "no", "p = " + MeasStats.P(s.AdP),
                 s.Normal ? Win98Chart.Green : s.TailsOk ? Win98Chart.Olive : Win98Chart.Maroon);
 
             lblBudVerdict.ForeColor = vc ?? Color.Black;
@@ -1197,12 +1198,14 @@ namespace Spica.UI
                 return;
             }
             if (view == 1) { ch.EmptyText = "The input does not vary between runs: see the histogram."; return; }
+            if (view == 2) { BuildCauseChart(ch, r, s); return; }
             ch.YFromZero = true;
             if (r.Slices.Count > 1) ch.Title += $"  -  {s.Label}";
             ch.XLabel = "error" + (unit.Length > 0 ? " (%)" : ""); ch.YLabel = "runs";
             var edges = Stats.HistogramEdges(s.D);
             var counts = Stats.Histogram(s.D.Sorted, edges);
             ch.Add(new ChartSeries { Kind = SeriesKind.Bars, Edges = edges, Y = counts.Select(c => (double)c).ToArray(), X = edges, Color = Win98Chart.Navy, Label = "runs", InLegend = false });
+            AddTail(ch, edges, r.AsymmetryOf(s), ErrorBudget.Column(r.Item));
             if (s.D.Std > 0)
             {
                 double w = edges[1] - edges[0];
@@ -1218,6 +1221,66 @@ namespace Spica.UI
                 double reach = Math.Max(bounds.Max(v => Math.Abs(v)), Math.Max(Math.Abs(s.Lo), Math.Abs(s.Hi)));
                 ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = new[] { Math.Min(s.Lo, bounds.Min()) - 0.12 * reach, Math.Max(s.Hi, bounds.Max()) + 0.12 * reach }, Color = Color.White, InLegend = false });
                 ch.Add(new ChartSeries { Kind = SeriesKind.VLine, X = bounds, Color = Win98Chart.Red, Size = 2, Label = "boundaries" });
+            }
+        }
+
+        /// <summary>Units in the long tail, drawn in orange over the histogram bars they fall in.</summary>
+        void AddTail(Win98Chart ch, double[] edges, Asymmetry a, string column)
+        {
+            if (a == null || a.Error != null || a.Tail.Count == 0) return;
+            var v = a.Tail.Select(row => rs.Get(row, column)).Where(x => !double.IsNaN(x)).OrderBy(x => x).ToArray();
+            var c = Stats.Histogram(v, edges);
+            ch.Add(new ChartSeries { Kind = SeriesKind.Bars, Edges = edges, X = edges, Y = c.Select(x => (double)x).ToArray(), Color = TailColor,
+                                     Label = $"long {a.SideText} tail ({v.Length} units)" + (a.HasPair ? $": likely {Short(a.PairA)} with {Short(a.PairB)}"
+                                                                                             : a.Top != null && a.Top.Share >= 0.3 ? $": likely {Short(a.Top.Name)}" : "") });
+        }
+
+        static readonly Color TailColor = Color.FromArgb(255, 128, 0);
+
+        /// <summary>
+        /// The error against the tolerance most likely to make it lopsided, with every other fitted effect removed,
+        /// and the fitted curve: a bend shows on its own. The units of the long tail are in orange, as on the histogram.
+        /// </summary>
+        void BuildCauseChart(Win98Chart ch, ErrorResult r, ErrorSlice s)
+        {
+            var a = r.AsymmetryOf(s);
+            if (a == null)
+            {
+                ch.EmptyText = "The error is not lopsided in this condition, so there is no cause to look for.\n" +
+                               "When one side reaches further, its units turn orange on the histogram and this chart shows the likely cause.";
+                return;
+            }
+            if (a.Error == null && a.HasPair)
+            {
+                // two tolerances acting together: the units of the tail gather where both are at one end
+                ch.YFromZero = false;
+                ch.Title += $"  -  {Short(a.PairA)} with {Short(a.PairB)}" + (r.Slices.Count > 1 ? $"  -  {s.Label}" : "");
+                ch.XLabel = $"{a.PairA}  (together with {Short(a.PairB)}: {(100 * a.PairShare).ToString("0", Inv)} % of the asymmetry, confidence {a.Confidence})";
+                ch.YLabel = a.PairB;
+                var ids = Enumerable.Range(0, a.PlotX.Length).ToList();
+                var no = ids.Where(i => !a.PlotTail[i]).ToList();
+                var yes = ids.Where(i => a.PlotTail[i]).ToList();
+                ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = no.Select(i => a.PlotX[i]).ToArray(), Y = no.Select(i => a.PlotY[i]).ToArray(), Color = Win98Chart.Navy, Size = 3, Label = "units" });
+                ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = yes.Select(i => a.PlotX[i]).ToArray(), Y = yes.Select(i => a.PlotY[i]).ToArray(), Color = TailColor, Size = 5, Label = $"long {a.SideText} tail" });
+                return;
+            }
+            if (a.Error != null || a.Top == null || a.Top.Share < 0.1) { ch.EmptyText = a.Error ?? "No single tolerance explains the long tail: see the notes."; return; }
+            var c = a.Top;
+            ch.YFromZero = false;
+            ch.Title += $"  -  vs {Short(c.Name)}" + (r.Slices.Count > 1 ? $"  -  {s.Label}" : "");
+            ch.XLabel = $"{c.Name}  ({(100 * c.Share).ToString("0", Inv)} % of the asymmetry, confidence {a.Confidence})";
+            ch.YLabel = "error, other tolerances removed";
+            var idx = Enumerable.Range(0, a.PlotX.Length).ToList();
+            var rest = idx.Where(i => !a.PlotTail[i]).ToList();
+            var tail = idx.Where(i => a.PlotTail[i]).ToList();
+            ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = rest.Select(i => a.PlotX[i]).ToArray(), Y = rest.Select(i => a.PlotY[i]).ToArray(), Color = Win98Chart.Navy, Size = 3, Label = "units" });
+            ch.Add(new ChartSeries { Kind = SeriesKind.Points, X = tail.Select(i => a.PlotX[i]).ToArray(), Y = tail.Select(i => a.PlotY[i]).ToArray(), Color = TailColor, Size = 5, Label = $"long {a.SideText} tail" });
+            if (a.PlotX.Length > 1)
+            {
+                double x0 = a.PlotX.Min(), x1 = a.PlotX.Max();
+                var gx = Enumerable.Range(0, 81).Select(j => x0 + (x1 - x0) * j / 80).ToArray();
+                ch.Add(new ChartSeries { Kind = SeriesKind.Line, X = gx, Y = gx.Select(x => { double z = (x - c.Mean) / c.Sd; return a.PlotA + c.Effect(z); }).ToArray(),
+                                         Color = Win98Chart.Green, Size = 2, Label = c.OwnShape ? "fitted effect (its draws are lopsided)" : "fitted effect (the error bends with it)" });
             }
         }
 
@@ -1511,9 +1574,24 @@ namespace Spica.UI
             int bins = cbHistBins.SelectedIndex > 0 ? int.Parse((string)cbHistBins.SelectedItem, Inv) : 0;
             cbHistBins.Enabled = cbHistView.SelectedIndex == 0;
             var s = BuildHistogram(chHist, m, g, chkHistNormal.Checked, cbHistView.SelectedIndex, bins);
+            var a = s == null || !chkHistNormal.Checked ? null : HistAsymmetry(m, g, s);
             lblHist.Text = s == null ? "" :
                 $"n = {s.D.N}   mean = {F(s.D.Mean)}   sigma = {F(s.D.Std)}   normal p = {MeasStats.P(s.AdP)}" +
-                (s.Cap.N > 0 && s.Spec?.IsSet == true ? $"   yield = {MeasStats.Pct(s.Cap.Yield)}   Cpk = {Num(s.Cap.Cpk, "0.000")}" : "");
+                (s.Cap.N > 0 && s.Spec?.IsSet == true ? $"   yield = {MeasStats.Pct(s.Cap.Yield)}   Cpk = {Num(s.Cap.Cpk, "0.000")}" : "") +
+                (a == null || a.Error != null ? "" : $"   |   long {a.SideText} tail: " + (a.CauseText(1) ?? "no single tolerance explains it") + $", confidence {a.Confidence}");
+        }
+
+        readonly Dictionary<string, Asymmetry> histAsym = new Dictionary<string, Asymmetry>();
+        ResultSet histAsymFor;
+
+        /// <summary>The cause of a lopsided measurement (null when it is bell-shaped or not skewed); kept per measurement and group.</summary>
+        Asymmetry HistAsymmetry(string meas, int group, MeasStats s)
+        {
+            if (s == null || double.IsNaN(s.AdP) || s.AdP >= MeasStats.NormalAlpha || !Asymmetry.IsLopsided(s.D)) return null;
+            if (histAsymFor != rs) { histAsym.Clear(); histAsymFor = rs; }
+            string key = meas + "\t" + group;
+            if (!histAsym.TryGetValue(key, out var a)) histAsym[key] = a = Asymmetry.Of(rs, meas, rs.InGroup(group));
+            return a;
         }
 
         /// <param name="view">0 histogram, 1 cumulative distribution, 2 normal probability plot</param>
@@ -1534,6 +1612,7 @@ namespace Spica.UI
                 : Stats.HistogramEdges(s.D);
             var counts = Stats.Histogram(s.D.Sorted, edges);
             ch.Add(new ChartSeries { Kind = SeriesKind.Bars, Edges = edges, Y = counts.Select(c => (double)c).ToArray(), X = edges, Color = Win98Chart.Navy, Label = "runs", InLegend = false });
+            if (normal) AddTail(ch, edges, HistAsymmetry(meas, group, s), meas);
             if (normal && s.D.Std > 0)
             {
                 double w = edges[1] - edges[0];

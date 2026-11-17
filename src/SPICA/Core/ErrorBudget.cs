@@ -169,6 +169,19 @@ namespace Spica.Core
         public ErrorSlice Deciding;                                   // the point that sets the verdict (a CHECK may be elsewhere)
         public double FitOffset = double.NaN, FitSlope = double.NaN, ResidualStd = double.NaN;   // e = a + b x
         public SensitivityReport Sens;
+        internal ResultSet Rs;
+        readonly Dictionary<ErrorSlice, Asymmetry> asym = new Dictionary<ErrorSlice, Asymmetry>();
+
+        /// <summary>The condition is lopsided: not bell-shaped, tails not shorter, and clearly skewed.</summary>
+        public static bool Lopsided(ErrorSlice s) => s != null && !s.Normal && !s.TailsOk && Asymmetry.IsLopsided(s.Shape ?? s.D);
+
+        /// <summary>Which tolerance makes the condition lopsided (null when it is not); computed once per condition.</summary>
+        public Asymmetry AsymmetryOf(ErrorSlice s)
+        {
+            if (Rs == null || !Lopsided(s)) return null;
+            if (!asym.TryGetValue(s, out var a)) asym[s] = a = Asymmetry.Of(Rs, ErrorBudget.Column(Item), s.Rows);
+            return a;
+        }
 
         // the worst slice, for tables
         public Descriptive D => Worst?.D ?? Descriptive.Of(new double[0]);
@@ -225,8 +238,18 @@ namespace Spica.Core
                 else
                 {
                     var d = w.Shape ?? w.D;
-                    string shape = d.ExKurt > 0.5 ? "heavy-tailed (longer tails than sigma says)" : Math.Abs(d.Skew) > 0.3 ? "lopsided (one side reaches further)" : "tails longer than a normal's";
+                    var a = AsymmetryOf(w);
+                    string shape = a != null && a.Error == null ? $"lopsided, the {a.SideText} side reaches further (skewness {a.Skew.ToString("+0.00;-0.00", Inv)})"
+                                 : d.ExKurt > 0.5 ? "heavy-tailed (longer tails than sigma says)" : Math.Abs(d.Skew) > 0.3 ? "lopsided (one side reaches further)" : "tails longer than a normal's";
                     n.Add($"Not bell-shaped (p = {MeasStats.P(w.AdP)}): {shape}. Use a worst case, or more runs: with no unit outside, {RunsToShow(0.9973):N0} runs show 3 sigma, {RunsToShow(0.99994):N0} show 4 sigma.");
+                    if (a != null && a.Error == null)
+                    {
+                        string cause = a.CauseText();
+                        n.Add(cause != null
+                            ? $"Likely cause of the long {a.SideText} tail: {cause}. Confidence: {a.ConfidenceText()}. Chart \"Error vs cause\" shows it."
+                            : $"No tolerance explains the long {a.SideText} tail, alone or with another ({a.ConfidenceText().Substring(a.Confidence.Length).Trim()}): " +
+                              "several acting together, or random values SPICA does not draw (LTspice's mc() without paired samples, encrypted models).");
+                    }
                 }
             }
             if (!double.IsNaN(FitOffset) && InputVaries)
@@ -241,7 +264,12 @@ namespace Spica.Core
                 n.Add($"The input ({string.Join(", ", Sens.InputNames)}) explains {(100 * Sens.InputShare).ToString("0", Inv)} % of this error, but the error has no input set: units at every input are pooled, " +
                       "which widens sigma and can make the shape look not bell-shaped. Set the input in the error's definition to judge it across the input.");
             if (Sens != null && Sens.Error == null && Sens.Items.Count > 0 && Sens.R2 < 0.9)
-                n.Add($"{(100 * (1 - Sens.R2)).ToString("0", Inv)} % of the spread is not explained by the tolerances: nonlinear effects, or random values SPICA does not draw (LTspice's mc() without paired samples, encrypted models).");
+            {
+                var aw = AsymmetryOf(w);
+                n.Add(aw != null && aw.Error == null && aw.Confidence != "low" && aw.CauseText() != null
+                    ? $"{(100 * (1 - Sens.R2)).ToString("0", Inv)} % of the spread is not a straight-line effect of the tolerances: mostly the {(aw.HasPair ? "interaction" : "bend")} found above."
+                    : $"{(100 * (1 - Sens.R2)).ToString("0", Inv)} % of the spread is not explained by the tolerances: nonlinear effects, or random values SPICA does not draw (LTspice's mc() without paired samples, encrypted models).");
+            }
             return n;
         }
 
@@ -414,7 +442,7 @@ namespace Spica.Core
 
         public static ErrorResult Compute(ResultSet rs, ErrorItem it, int group, double k, bool pessimistic)
         {
-            var res = new ErrorResult { Item = it, K = k, Pessimistic = pessimistic };
+            var res = new ErrorResult { Item = it, K = k, Pessimistic = pessimistic, Rs = rs };
             string bad = Check(rs, it);
             if (bad != null) { res.Error = bad; return res; }
             Expr tf = null;
