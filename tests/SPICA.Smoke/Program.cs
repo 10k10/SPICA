@@ -166,6 +166,37 @@ static class Program
             t.Join();
             return 0;
         }
+        if (args.Length > 1 && args[0] == "--locate")
+        {
+            // a remote campaign's results found in the share when the listener names its folder differently: --locate <empty dir>
+            string share = Path.Combine(Path.GetFullPath(args[1]), "jobs"), camp = Path.Combine(share, "results", "job", "20261117_090000");
+            string beside = Path.Combine(Path.GetFullPath(args[1]), "jobs_results", "job2", "20261113_151242");
+            foreach (var d in new[] { camp, beside })
+            {
+                Directory.CreateDirectory(d);
+                File.WriteAllText(Path.Combine(d, "results.csv"), "run\n");
+            }
+            var cases = new[]
+            {
+                (share, Path.Combine(share, "results", "job", "20261117_090000"), true),           // same name on both sides
+                (@"D:\Fila", @"D:\Fila\results\job\20261117_090000", true),                      // local path on the workstation
+                (@"\\WS\fila", @"D:\Fila\results\job\20261117_090000", true),                    // listener started on the UNC name
+                (@"Z:\", @"Z:\results\job\20261117_090000", true),                               // mapped drive
+                (@"D:\Fila", @"E:\elsewhere\job\20261117_090001", false),                        // not in the share at all
+                (@"F:\X\jobs", @"F:\X\jobs_results\job2\20261113_151242", true),                 // beside the watched folder
+                (@"F:\X\jobs", beside, true),                                                    // same drive on both PCs
+            };
+            int bad = 0;
+            foreach (var (input, results, found) in cases)
+            {
+                string got = RemoteState.Locate(share, input, results);
+                string want = results.Contains("jobs_results") ? beside : camp;
+                bool ok = (got != null) == found && (got == null || string.Equals(Path.GetFullPath(got).TrimEnd('\\'), want, StringComparison.OrdinalIgnoreCase));
+                if (!ok) bad++;
+                Console.WriteLine($"{(ok ? "ok   " : "WRONG")} input {input}, results {results} -> {got ?? "(not found)"}");
+            }
+            return bad;
+        }
         if (args.Length > 2 && args[0] == "--budgetcharts")
         {
             // the Error Budget page with each chart (histogram, error vs input, error vs cause), then the Histogram page

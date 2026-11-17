@@ -74,6 +74,39 @@ namespace Spica.Core
             return Path.Combine(folder, results.Substring(root.Length));
         }
 
+        /// <summary>
+        /// A finished campaign's folder as this PC reaches it, looked for on disk: through the listener's watched folder
+        /// when the path starts with it, else by the end of the path inside the shared folder (results\name\stamp).
+        /// The listener may know its folder by another name than this PC does (a mapped drive, D:\ against
+        /// \\server\share, a redirected Desktop), so the end of the path is what both sides share. Null when not found.
+        /// </summary>
+        public static string Locate(string folder, string input, string results)
+        {
+            if (string.IsNullOrEmpty(folder) || string.IsNullOrEmpty(results)) return null;
+            // as given first: the workstation's drive (F:\...) may be mapped the same way on this PC
+            var tries = new List<string> { results };
+            if (!string.IsNullOrEmpty(input))
+            {
+                string root = input.TrimEnd('\\', '/') + "\\";
+                if (results.StartsWith(root, StringComparison.OrdinalIgnoreCase)) tries.Add(Path.Combine(folder, results.Substring(root.Length)));
+            }
+            var parts = results.TrimEnd('\\', '/').Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int k = Math.Min(parts.Length - 1, 6); k >= 1; k--)
+                tries.Add(Path.Combine(folder, string.Join("\\", parts.Skip(parts.Length - k))));
+            // results kept beside the watched folder (...\jobs and ...\jobs_results): the folders above it, by name\stamp or more
+            string up = folder.TrimEnd('\\', '/');
+            for (int u = 0; u < 4; u++)
+            {
+                try { up = Path.GetDirectoryName(up); } catch { up = null; }
+                if (string.IsNullOrEmpty(up)) break;
+                for (int k = Math.Min(parts.Length - 1, 6); k >= 2; k--)
+                    tries.Add(Path.Combine(up, string.Join("\\", parts.Skip(parts.Length - k))));
+            }
+            foreach (var d in tries)
+                try { if (File.Exists(Path.Combine(d, "results.csv"))) return d; } catch { }
+            return null;
+        }
+
         static string At(string[] p, int i) => i < p.Length ? p[i] : "";
         static int I(string s) => int.TryParse(s, NumberStyles.Integer, Inv, out var v) ? v : 0;
         static double N(string s) => double.TryParse(s, NumberStyles.Float, Inv, out var v) ? v : double.NaN;
@@ -232,7 +265,7 @@ namespace Spica.Core
         static DateTime? D(string s) => DateTime.TryParseExact(s, "yyyy-MM-dd HH:mm:ss", Inv, DateTimeStyles.None, out var t) ? t : (DateTime?)null;
         static string C(string s) => (s ?? "").Replace('\t', ' ').Replace("\r", "").Replace('\n', ' ');
 
-        void Save()
+        public void Save()
         {
             try
             {

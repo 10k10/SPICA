@@ -522,6 +522,13 @@ namespace Spica.UI
         void ShowRemoteResults(RemoteJob r)
         {
             string dir = r.ResultsHere;
+            // looked for again now: the listener may name its folder differently from this PC
+            if (dir == null || !File.Exists(Path.Combine(dir, "results.csv")))
+            {
+                Cursor = Cursors.WaitCursor;
+                try { dir = RemoteState.Locate(r.Folder, remote.States.TryGetValue(r.Folder, out var st) ? st?.Input : null, r.Results) ?? dir; }
+                finally { Cursor = Cursors.Default; }
+            }
             if (dir != null && File.Exists(Path.Combine(dir, "results.csv")))
             {
                 if (r.Pending)
@@ -529,10 +536,35 @@ namespace Spica.UI
                 OpenResultsFolder(dir);
                 return;
             }
-            string where = r.Results.Length > 0 ? $"Its results are on {r.Machine}, in\n{r.Results}" : "It has no results yet.";
-            Win98MessageBox.Show(this, where + (r.Results.Length > 0 && dir == null
-                    ? "\n\nThat folder is not inside the shared folder, so this PC cannot reach it. On " + r.Machine + ", set the listener's results folder inside the watched folder (Tools > Listener) to open the results from here."
-                    : ""), "SPICA", MessageBoxButtons.OK, Win98Icon.Information);
+            if (r.Results.Length == 0)
+            {
+                Win98MessageBox.Show(this, "It has no results yet.", "SPICA", MessageBoxButtons.OK, Win98Icon.Information);
+                return;
+            }
+            int c = Win98MessageBox.Choose(this, $"Its results are on {r.Machine}, in\n{r.Results}\n\n" +
+                    $"SPICA looked for that folder as written, inside the shared folder ({r.Folder}) and beside it, and did not find its results.csv. " +
+                    "Find it yourself (it is remembered), or, if the listener writes its results outside the watched folder, set them inside it on " +
+                    r.Machine + " (Tools > Listener, or SPICA-cli listen --out).", "SPICA", Win98Icon.Information, "&Find the Folder...", "Close");
+            if (c != 0) return;
+            using (var d = new FolderBrowserDialog { Description = $"The folder of {r.Name} (the one containing results.csv):", ShowNewFolderButton = false,
+                                                     SelectedPath = Directory.Exists(r.Folder) ? r.Folder : "" })
+            {
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                string pick = d.SelectedPath;
+                if (!File.Exists(Path.Combine(pick, "results.csv")))
+                {
+                    // the campaign's own folder may be one level down (results\name\stamp)
+                    pick = Directory.GetDirectories(pick).Where(x => File.Exists(Path.Combine(x, "results.csv"))).OrderByDescending(x => x).FirstOrDefault();
+                    if (pick == null)
+                    {
+                        Win98MessageBox.Show(this, "That folder has no results.csv.\nChoose the campaign folder (named like 20261024_085624).", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
+                        return;
+                    }
+                }
+                r.ResultsHere = pick;
+                remote.Save();
+                OpenResultsFolder(pick);
+            }
         }
 
         void OnRemoteEnded(RemoteJob r)

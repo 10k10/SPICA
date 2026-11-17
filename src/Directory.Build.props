@@ -1,7 +1,7 @@
 <Project>
   <!-- shared by SPICA.exe (the window) and SPICA-cli.exe (the command line): one version for both -->
   <PropertyGroup>
-    <Version>0.7.1</Version>
+    <Version>0.7.2</Version>
     <Company>10k10</Company>
     <Authors>10k10</Authors>
     <Copyright>Copyright © 2026 10k10. Apache-2.0 with Commons Clause: free to use, not for sale.</Copyright>
