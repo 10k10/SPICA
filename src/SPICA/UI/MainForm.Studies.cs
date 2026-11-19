@@ -381,6 +381,7 @@ namespace Spica.UI
             var st = CurrentStudy;
             if (st == null) return new List<string>();
             var list = st.Validate().Where(i => i.Block == 0).Select(i => i.Message).ToList();
+            if (!st.Blocks.Any(b => b.Kind == BlockKind.Simulate)) list.Add("No Simulate block: nothing runs. Add one (Simulation, in the library) with a condition (e.g. Nominal) into it; Add to Queue offers to.");
             foreach (var b in st.Blocks.OrderBy(x => x.Id))
                 foreach (var m in BlockProblems(b)) list.Add($"{b.Spec?.Title ?? b.Kind} ({b.Id}): {m}");
             return list;

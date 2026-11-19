@@ -101,6 +101,14 @@ namespace Spica.UI
             if (StudyRunning) { Win98MessageBox.Show(this, $"The study \"{studyRunner.Study.Name}\" is still running.", "SPICA", MessageBoxButtons.OK, Win98Icon.Information); return; }
             if (ascPath == null) { BrowseSchematic(); return; }
             if (!File.Exists(settings.LtspicePath ?? "")) { Win98MessageBox.Show(this, "LTspice.exe was not found. Set its location in Tools > Options.", "SPICA", MessageBoxButtons.OK, Win98Icon.Error); return; }
+            // a study without a simulation runs nothing: offer the shortest one that does (nominal, as drawn)
+            if (!st.Blocks.Any(b => b.Kind == BlockKind.Simulate))
+            {
+                if (Win98MessageBox.Show(this, "This study has no Simulate block, so nothing would run.\n\n" +
+                        "Add a Simulate block after the circuit, with a Nominal condition (every tolerance at its nominal value), and run it?",
+                        "SPICA", MessageBoxButtons.YesNo, Win98Icon.Question) != DialogResult.Yes) return;
+                if (!AddNominalSimulation(st)) { ValidateStudy(true); return; }
+            }
             if (!ValidateStudy(false)) { ValidateStudy(true); return; }
             ReadUiIntoProject();
 
@@ -130,6 +138,27 @@ namespace Spica.UI
             if (!started) { ValidateStudy(true); return; }
             if (studyRunner.Waiting) tabs.SelectedIndex = TabQueue;
             UpdateCommandState();
+        }
+
+        /// <summary>
+        /// Nominal → Simulate after the study's circuit (the block whose Circuit output feeds nothing yet), wired, to the
+        /// right of it. False when there is no circuit to simulate.
+        /// </summary>
+        bool AddNominalSimulation(Study st)
+        {
+            var circuit = st.Blocks.Where(b => b.Spec != null && b.Spec.Outputs.Any(o => o.Type == PortType.Circuit))
+                                   .Where(b => !st.Wires.Any(w => w.From == b.Id && st[w.To]?.Spec?.Inputs.Any(i => i.Name == w.ToPort && i.Type == PortType.Circuit) == true))
+                                   .OrderByDescending(b => b.X).FirstOrDefault();
+            if (circuit == null) return false;
+            var sim = st.Add(BlockKind.Simulate, circuit.X + 250, circuit.Y);
+            var nom = st.Add(BlockKind.Nominal, circuit.X + 30, circuit.Y + 120);
+            st.Connect(circuit, sim);
+            st.Connect(nom, sim);
+            MarkDirty();
+            studyCanvas.Invalidate();
+            studyCanvas.Reveal(sim);
+            FillModelTree();
+            return true;
         }
 
         /// <summary>Stops the study that runs: its queued campaigns leave the queue, the running one is stopped as usual.</summary>
@@ -300,6 +329,8 @@ namespace Spica.UI
             studyRuns.RemoveAll(x => x.Study == st.Name);
             studyRuns.Insert(0, run);
             while (studyRuns.Count > 8) studyRuns.RemoveAt(studyRuns.Count - 1);
+            // nothing judged (no evaluation block): its waveforms are what there is to see
+            if (run.Verdicts.Count == 0 && run.Sets.Any(x => x.Dir != null)) { ShowStudyWaves(run, null); return; }
             FillResultsTree(Tuple.Create(run, "verdicts"));
             ShowVerdicts(run);
             tabs.SelectedIndex = TabResults;

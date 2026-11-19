@@ -389,6 +389,8 @@ namespace Spica.Core.Graph
                     sigs.AddRange(plot.Select(v.Map));
                     sigs.AddRange(v.Save.Select(v.Map));
                     foreach (var s in sigs) if (!setup.Signals.Contains(s, StringComparer.OrdinalIgnoreCase)) setup.Signals.Add(s);
+                    // nothing asked for at all (a circuit simulated as drawn): keep every signal, as LTspice does, to look at
+                    if (sigs.Count == 0 && setup.Signals.Count == 0) { setup.SaveSelected = false; setup.KeepRaw = true; }
 
                     var req = new CampaignRequest
                     {

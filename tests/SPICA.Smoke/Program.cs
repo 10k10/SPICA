@@ -66,9 +66,71 @@ static class Program
         return bad;
     }
 
+    /// <summary>--plainrun asc png: a schematic alone, Add to Queue: Nominal and Simulate are added, it runs, the waveforms open with every signal.</summary>
+    static int PlainRun(string[] args)
+    {
+        int bad = 0;
+        var t = new Thread(() =>
+        {
+            var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]), Width = 1360, Height = 860 };
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var mf = typeof(Spica.UI.MainForm);
+            object Get(string f) => mf.GetField(f, flags).GetValue(form);
+            void Check(bool ok, string what) { if (!ok) bad++; Console.WriteLine($"{(ok ? "ok   " : "WRONG")} {what}"); }
+            void Pump(int n = 15) { for (int k = 0; k < n; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); } }
+            var start = new System.Windows.Forms.Timer { Interval = 4000 };
+            var began = DateTime.UtcNow;
+            start.Tick += (s, e) =>
+            {
+                start.Stop();
+                ((Spica.UI.Win98TextField)Get("txtOut")).Text = Path.Combine(Path.GetTempPath(), "spq");
+                var project = (SpicaProject)Get("project");
+                var st = project.Studies.Single();
+                Check(st.Blocks.Count == 1 && st.Blocks[0].Kind == "Schematic", "the schematic opens alone in its study");
+                var problems = (System.Collections.Generic.List<string>)mf.GetMethod("StudyProblems", flags).Invoke(form, null);
+                Check(problems.Any(p => p.Contains("No Simulate")), "Validate says nothing would run: " + string.Join("; ", problems));
+                Check((bool)mf.GetMethod("AddNominalSimulation", flags).Invoke(form, new object[] { st }), "Nominal and Simulate are added");
+                Check(st.Validate().Count == 0 && st.Blocks.Count == 3 && st.Wires.Count == 2, $"and wired: {st.Blocks.Count} blocks, {st.Wires.Count} wires");
+                var queue = (CampaignQueue)Get("queue");
+                int before = queue.Jobs.Count;
+                mf.GetMethod("RunStudy", flags).Invoke(form, null);
+                Pump(5);
+                Check(queue.Jobs.Count == before + 1, $"one campaign joins the queue ({queue.Jobs.Count - before})");
+                var poll = new System.Windows.Forms.Timer { Interval = 1000 };
+                poll.Tick += (s2, e2) =>
+                {
+                    if ((bool)mf.GetProperty("StudyRunning", flags).GetValue(form) && (DateTime.UtcNow - began).TotalSeconds < 300) return;
+                    poll.Stop();
+                    Pump(20);
+                    var wv = (Spica.UI.WaveformView)Get("waveView");
+                    var lb = (System.Windows.Forms.ListBox)typeof(Spica.UI.WaveformView).GetField("lbSignals", flags).GetValue(wv);
+                    var names = lb.Items.Cast<string>().ToList();
+                    Check(wv.Visible && ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex == TabOf(form, "TabResults"), "with nothing judged, the waveforms open");
+                    Check(names.Count >= 3, "every signal was kept: " + string.Join(" ", names));
+                    using (var bmp = new System.Drawing.Bitmap(form.Width, form.Height))
+                    {
+                        form.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, form.Width, form.Height));
+                        bmp.Save(args[2]);
+                    }
+                    project.Dirty = false;
+                    form.Close();
+                };
+                poll.Start();
+            };
+            form.Shown += (s, e) => start.Start();
+            System.Windows.Forms.Application.Run(form);
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        Console.WriteLine(bad == 0 ? "PLAIN RUN: all ok" : $"PLAIN RUN: {bad} wrong");
+        return bad;
+    }
+
     static int Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "--hittest") return HitTest();
+        if (args.Length > 2 && args[0] == "--plainrun") return PlainRun(args);
         // SPICA.Smoke --ui <campaign folder> <png dir> [meas lsl usl] [tfX tfY theory budget] : screenshot every Results tab
         if (args.Length > 0 && args[0] == "--ui") return UiCapture(args);
         // SPICA.Smoke --setup <file.asc|.spica> <png> : render the main window's Setup tab after loading a file
