@@ -459,6 +459,7 @@ namespace Spica.UI
             }
             finally { loadingUi = false; }
             ShowQualification();
+            ShowStudies();
             UpdateTitle();
         }
 

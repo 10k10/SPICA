@@ -15,6 +15,7 @@ namespace Spica.Core.Graph
     public sealed class BlockKind
     {
         public string Name;
+        public string Title;              // shown in the editor: "Supply Waveform"
         public BlockFamily Family;
         public string Summary;
         public readonly List<PortSpec> Inputs = new List<PortSpec>();
@@ -26,6 +27,9 @@ namespace Spica.Core.Graph
 
         static readonly List<BlockKind> all = new List<BlockKind>();
         public static IReadOnlyList<BlockKind> All => all;
+        public static string FamilyTitle(BlockFamily f) =>
+            f == BlockFamily.External ? "External Data" : f.ToString();
+
         public static BlockKind Find(string name) => all.FirstOrDefault(k => k.Name.Equals((name ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
 
         // ------------------------------------------------------------------ the catalogue
@@ -33,7 +37,11 @@ namespace Spica.Core.Graph
         sealed class Def
         {
             readonly BlockKind k;
-            public Def(string name, BlockFamily fam, string summary) { k = new BlockKind { Name = name, Family = fam, Summary = summary }; all.Add(k); }
+            public Def(string name, BlockFamily fam, string summary, string title = null)
+            {
+                k = new BlockKind { Name = name, Family = fam, Summary = summary, Title = title ?? System.Text.RegularExpressions.Regex.Replace(name, "(?<=[a-z])(?=[A-Z])", " ") };
+                all.Add(k);
+            }
             public Def In(string n, PortType t, bool many = false, bool optional = false) { k.Inputs.Add(new PortSpec(n, t, many, optional)); return this; }
             public Def Out(string n, PortType t) { k.Outputs.Add(new PortSpec(n, t)); return this; }
             public Def P(string key, string def = "") { k.Defaults.Add(new KeyValuePair<string, string>(key, def)); return this; }
@@ -74,7 +82,7 @@ namespace Spica.Core.Graph
                 .Out("conditions", K).P("Runs", "1000").P("Paired", "0").P("Seed", "0").P("Temperature").P("Stop");
             new Def(Corners, va, "Named conditions: temperatures and tolerance edges.")
                 .Out("conditions", K).P("Temperatures").P("Edges");
-            new Def(WorstCase, va, "Finds the tolerance and temperature point that pushes a measurement furthest, and gives it as a condition.")
+            new Def(WorstCase, va, "Finds the tolerance and temperature point that pushes a measurement furthest, and gives it as a condition.", "Worst-Case Search")
                 .In("circuit", C).Out("conditions", K).P("Objective").P("Direction", "min").P("Method").P("Sigma", "3");
             new Def(Combine, va, "Union or product of condition sets.")
                 .In("conditions", K, many: true).Out("conditions", K).P("Mode", "product");

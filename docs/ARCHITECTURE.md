@@ -1,10 +1,18 @@
 # SPICA architecture: analysis graphs
 
-Status: **agreed direction** (2026-11-19). Step 1 of section 10 is done: the engine is its own project
-(`src/SPICA.Engine`) and holds the graph model (`Graph/`). That model covers block kinds and typed ports,
-validation and run order, the runner, the `[Study]` / `[Block]` sections of the `.spica`, and the studies
-an older setup stands for. Nothing in the window uses it yet. It is meant to
-guide the move from today's fixed tabs (Setup, Qualification, Queue, Results) to one modular app
+Status: **agreed direction** (2026-11-19). Steps 1 and 2 of section 10 are done.
+
+- **Step 1:** the engine is its own project (`src/SPICA.Engine`) and holds the graph model (`Graph/`).
+- **Step 2:** the app has a Studies tab with the editor:
+  - the block library as a tree with search;
+  - the canvas, where blocks are dragged, wired with the mouse (typed, no loops), given a new block that
+    fits from a port's menu, removed, panned and zoomed;
+  - the properties of the selected block, with lists of the nets, tests, criteria, errors and signals;
+  - templates, and the studies the old tabs stand for.
+
+Blocks do not run yet (step 3).
+
+This document guides the move from today's fixed tabs (Setup, Qualification, Queue, Results) to one modular app
 where every analysis is a graph of blocks.
 
 ## 1. Why

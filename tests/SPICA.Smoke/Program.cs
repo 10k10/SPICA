@@ -197,6 +197,103 @@ static class Program
             }
             return bad;
         }
+        if (args.Length > 2 && args[0] == "--studies")
+        {
+            // the Studies tab: templates on the canvas, a block's properties, a wire drawn with the mouse, the New Study dialog: <asc> <png>
+            int bad = 0;
+            var t = new Thread(() =>
+            {
+                var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]), Width = 1360, Height = 860 };
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var mf = typeof(Spica.UI.MainForm);
+                object Get(string f) => mf.GetField(f, flags).GetValue(form);
+                void Call(string m) => mf.GetMethod(m, flags, null, Type.EmptyTypes, null).Invoke(form, null);
+                void Check(bool ok, string what) { if (!ok) bad++; Console.WriteLine($"{(ok ? "ok   " : "WRONG")} {what}"); }
+                void Pump(int n = 15) { for (int k = 0; k < n; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); } }
+                void Shot(System.Windows.Forms.Control c, string name)
+                {
+                    Pump();
+                    using (var bmp = new System.Drawing.Bitmap(c.Width, c.Height))
+                    {
+                        c.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, c.Width, c.Height));
+                        bmp.Save(args[2].Replace(".png", "_" + name + ".png"));
+                    }
+                }
+                var start = new System.Windows.Forms.Timer { Interval = 4000 };
+                start.Tick += (s, e) =>
+                {
+                    start.Stop();
+                    var project = (SpicaProject)Get("project");
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 4;
+                    Shot(form, "empty");
+                    foreach (var name in new[] { "Qualification at corners + worst case", "Compare candidates", "Derating" })
+                        project.Studies.Add(Spica.Core.Graph.StudyTemplates.Find(name).Make(project));
+                    project.Studies.AddRange(Spica.Core.Graph.LegacyStudies.From(project));
+                    Call("ShowStudies");
+                    var cb = (System.Windows.Forms.ComboBox)Get("cbStudy");
+                    var canvas = (Spica.UI.StudyCanvas)Get("studyCanvas");
+                    Check(cb.Items.Count == project.Studies.Count, $"{cb.Items.Count} studies listed");
+                    foreach (var st in project.Studies)
+                        Console.WriteLine($"      {st.Name}: {st.Blocks.Count} blocks, {st.Validate().Count} issues" + (st.Validate().Count > 0 ? " (" + string.Join("; ", st.Validate().Select(i => i.Message)) + ")" : ""));
+                    for (int i = 0; i < cb.Items.Count; i++) { cb.SelectedIndex = i; Shot(form, "study" + i); }
+                    // a block's properties
+                    cb.SelectedIndex = 0;
+                    var sw = project.Studies[0].Blocks.First(b => b.Kind == "SupplyWaveform");
+                    canvas.Select(sw);
+                    Shot(form, "props");
+                    // a wire with the mouse: a new Nominal block's output onto the Simulate input of a blank study
+                    project.Studies.Add(new Spica.Core.Graph.Study { Name = "Mouse" });
+                    Call("ShowStudies");
+                    cb.SelectedIndex = cb.Items.Count - 1;
+                    var nom = canvas.AddBlock("Nominal", new System.Drawing.Point(40, 60));
+                    var sim = canvas.AddBlock("Simulate", new System.Drawing.Point(420, 60));
+                    Pump();
+                    var cv = typeof(Spica.UI.StudyCanvas);
+                    var pp = cv.GetMethod("PortPoint", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                    var toScreen = cv.GetMethod("ToScreen", flags);
+                    System.Drawing.Point Scr(Spica.Core.Graph.Block b, bool input, int i) => (System.Drawing.Point)toScreen.Invoke(canvas, new object[] { pp.Invoke(null, new object[] { b, input, i }) });
+                    var a = Scr(nom, false, 0); var z = Scr(sim, true, 1);
+                    void Mouse(string m, System.Windows.Forms.MouseButtons btn, System.Drawing.Point p) =>
+                        cv.GetMethod(m, flags).Invoke(canvas, new object[] { new System.Windows.Forms.MouseEventArgs(btn, 1, p.X, p.Y, 0) });
+                    Mouse("OnMouseDown", System.Windows.Forms.MouseButtons.Left, a);
+                    Mouse("OnMouseMove", System.Windows.Forms.MouseButtons.Left, new System.Drawing.Point((a.X + z.X) / 2, a.Y + 30));
+                    Mouse("OnMouseMove", System.Windows.Forms.MouseButtons.Left, z);
+                    Mouse("OnMouseUp", System.Windows.Forms.MouseButtons.Left, z);
+                    var mouseStudy = project.Studies.Last();
+                    Check(mouseStudy.Wires.Count == 1 && mouseStudy.Wires[0].ToPort == "conditions", "a wire drawn with the mouse joins Conditions to Simulate: " + string.Join("; ", mouseStudy.Wires));
+                    // a wrong one is refused: Simulate's Data output onto its own Circuit input
+                    var d = Scr(sim, false, 0); var c = Scr(sim, true, 0);
+                    Mouse("OnMouseDown", System.Windows.Forms.MouseButtons.Left, d);
+                    Mouse("OnMouseMove", System.Windows.Forms.MouseButtons.Left, c);
+                    Mouse("OnMouseUp", System.Windows.Forms.MouseButtons.Left, c);
+                    Check(mouseStudy.Wires.Count == 1, "a Data wire into a Circuit input is refused");
+                    canvas.Select(nom);
+                    canvas.DeleteSelection();
+                    Check(mouseStudy.Blocks.Count == 1 && mouseStudy.Wires.Count == 0, "removing a block removes its wires");
+                    // the setup keeps the studies
+                    string tmp = Path.Combine(Path.GetTempPath(), "spica_studies_ui.spica");
+                    project.Save(tmp);
+                    var back = SpicaProject.Load(tmp);
+                    Check(back.Studies.Count == project.Studies.Count, $"saved and loaded back: {back.Studies.Count} studies");
+                    var nfType = typeof(Spica.UI.MainForm).Assembly.GetType("Spica.UI.NewStudyForm");
+                    using (var nf = (System.Windows.Forms.Form)nfType.GetConstructors(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)[0].Invoke(new object[] { false }))
+                    {
+                        nf.Show(form);
+                        Shot(nf, "new");
+                        nf.Close();
+                    }
+                    project.Dirty = false;
+                    form.Close();
+                };
+                form.Shown += (s, e) => start.Start();
+                System.Windows.Forms.Application.Run(form);
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            Console.WriteLine(bad == 0 ? "STUDIES: all ok" : $"STUDIES: {bad} wrong");
+            return bad;
+        }
         if (args.Length > 0 && args[0] == "--graph")
         {
             // the study graphs: typed wires, loops, single inputs, validation, run order, the runner, the file format, older setups

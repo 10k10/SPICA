@@ -227,16 +227,26 @@ namespace Spica.Core.Graph
         }
 
         /// <summary>Places the blocks in columns by depth (stimuli and sources on the left), for studies made without the editor.</summary>
-        public void AutoLayout(int colWidth = 220, int rowHeight = 110, int left = 40, int top = 40)
+        public void AutoLayout(int colWidth = 250, int rowHeight = 110, int left = 40, int top = 40)
         {
             var order = Order() ?? Blocks.ToList();
             var depth = new Dictionary<int, int>();
             foreach (var b in order)
                 depth[b.Id] = Wires.Where(w => w.To == b.Id && depth.ContainsKey(w.From)).Select(w => depth[w.From] + 1).DefaultIfEmpty(0).Max();
-            foreach (var col in order.GroupBy(b => depth[b.Id]))
+            // a source that only feeds later blocks (Nominal, Parts Database...) sits just left of the first one it feeds
+            for (int i = order.Count - 1; i >= 0; i--)
+            {
+                var b = order[i];
+                if (Wires.Any(w => w.To == b.Id)) continue;
+                var next = Wires.Where(w => w.From == b.Id && depth.ContainsKey(w.To)).Select(w => depth[w.To] - 1).DefaultIfEmpty(depth[b.Id]).Min();
+                depth[b.Id] = Math.Max(depth[b.Id], next);
+            }
+            foreach (var col in order.GroupBy(b => depth[b.Id]).OrderBy(g => g.Key))
             {
                 int row = 0;
-                foreach (var b in col) { b.X = left + col.Key * colWidth; b.Y = top + row++ * rowHeight; }
+                // in each column, blocks follow the average height of what feeds them, so wires cross less
+                var placed = col.OrderBy(b => Wires.Where(w => w.To == b.Id).Select(w => this[w.From]?.Y ?? 0).DefaultIfEmpty(int.MaxValue).Average()).ThenBy(b => b.Id);
+                foreach (var b in placed) { b.X = left + col.Key * colWidth; b.Y = top + row++ * rowHeight; }
             }
         }
 

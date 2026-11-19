@@ -55,7 +55,7 @@ namespace Spica.UI
 
         readonly Timer uiTimer = new Timer { Interval = 250 };
 
-        const int TabSetup = 0, TabQual = 1, TabQueue = 2, TabResults = 3;
+        const int TabSetup = 0, TabQual = 1, TabQueue = 2, TabResults = 3, TabStudies = 4;
         const int PaneText = 0, PaneListener = 1, PaneLtspice = 2, PaneClock = 4;
 
         public MainForm()
@@ -82,6 +82,7 @@ namespace Spica.UI
             BuildQualificationPage();
             BuildQueuePage();
             BuildResultsPage();
+            BuildStudiesPage();
 
             Controls.Add(tabs);
             Controls.Add(status);
@@ -246,10 +247,13 @@ namespace Spica.UI
             pageQual = new Win98TabPage("Qualification", Win98.Icon("check16"));
             pageQueue = new Win98TabPage("Queue", Win98.Icon("queue16"));
             pageResults = new Win98TabPage("Results", Win98.Icon("results16"));
+            // the study editor: last until the blocks can run, then the place every analysis starts from
+            pageStudies = new Win98TabPage("Studies", Win98.Icon("chart16"));
             tabs.AddPage(pageSetup);
             tabs.AddPage(pageQual);
             tabs.AddPage(pageQueue);
             tabs.AddPage(pageResults);
+            tabs.AddPage(pageStudies);
             tabs.SelectedIndexChanged += (s, e) =>
             {
                 if (tabs.SelectedIndex != TabResults) return;
