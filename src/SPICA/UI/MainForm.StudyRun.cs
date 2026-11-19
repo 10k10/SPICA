@@ -18,7 +18,6 @@ namespace Spica.UI
     {
         StudyRunner studyRunner;
         StudyHost studyHost;
-        StudyResultsForm studyResults;
         readonly List<VerdictRecord> lastVerdicts = new List<VerdictRecord>();
         string lastStudyReport;
 
@@ -146,42 +145,147 @@ namespace Spica.UI
             UpdateCommandState();
         }
 
-        void ShowStudyResults(Study st, List<string> problems)
+        // ------------------------------------------------------------------ the Results tab: campaigns and studies
+
+        TreeView tvResults;
+        Panel resultsHost;
+        StudyVerdictsView verdictsView;
+        WaveformView waveView;
+        readonly List<StudyRunData> studyRuns = new List<StudyRunData>();
+        StudyRunData shownStudy;
+
+        /// <summary>The Results tab's left side: the campaign open, and the studies that ran (Verdicts, Waveforms, Report).</summary>
+        void BuildResultsNavigator()
         {
-            if (studyResults == null || studyResults.IsDisposed)
-            {
-                studyResults = new StudyResultsForm { OpenWaves = OpenStudyWaves, OpenCampaign = d => { if (Directory.Exists(d)) OpenResultsFolder(d); } };
-                studyResults.Show(this);
-            }
-            studyResults.ShowVerdicts(st.Name, lastVerdicts, problems, lastStudyReport);
-            studyResults.Activate();
+            var left = new Win98GroupBox { Text = "Open", Dock = DockStyle.Left, Width = 200 };
+            var images = new ImageList { ImageSize = new Size(16, 16), ColorDepth = ColorDepth.Depth32Bit };
+            foreach (var n in new[] { "results16", "chart16", "check16", "doc16", "folder16" }) images.Images.Add(n, Win98.Icon(n));
+            tvResults = new TreeView { Font = Win98.Font, ImageList = images, BorderStyle = BorderStyle.Fixed3D, HideSelection = false, ShowLines = true, ItemHeight = 18 };
+            tvResults.AfterSelect += (s, e) => ShowResultsNode(e.Node);
+            left.Controls.Add(tvResults);
+            left.Resize += (s, e) => tvResults.SetBounds(8, 20, left.Width - 16, left.Height - 28);
+
+            verdictsView = new StudyVerdictsView { Visible = false };
+            verdictsView.OpenWaves = r => ShowStudyWaves(shownStudy, r);
+            verdictsView.OpenCampaign = d => { if (Directory.Exists(d)) OpenResultsFolder(d); };
+            waveView = new WaveformView { Visible = false, LtspicePath = () => settings.LtspicePath };
+            resultsHost = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            pageResults.Controls.Remove(resultsView);
+            resultsView.Dock = DockStyle.Fill;
+            resultsHost.Controls.Add(resultsView);
+            resultsHost.Controls.Add(verdictsView);
+            resultsHost.Controls.Add(waveView);
+            pageResults.Controls.Add(resultsHost);
+            pageResults.Controls.Add(Gap(DockStyle.Left));
+            pageResults.Controls.Add(left);
+            resultsView.DataChanged += () => FillResultsTree(null);
+            FillResultsTree(null);
         }
 
-        /// <summary>The waveforms of one case at one condition, as the qualification shows them.</summary>
-        void OpenStudyWaves(VerdictRecord r)
+        void FillResultsTree(object select)
         {
-            var set = r?.Run;
-            if (set?.Dir == null || set.Case == null) return;
-            ResultSet rs;
-            try { rs = set.Results; }
-            catch (Exception ex) { Win98MessageBox.Show(this, "Cannot read the results:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); return; }
-            var v = set.Variant;
-            string net = v.Stimulus == null ? (set.Criteria.FirstOrDefault()?.Signal ?? "") : v.Stimulus.IsFault ? v.MapNet(v.Stimulus.From) : v.MapNet(v.Stimulus.Net);
-            var m = System.Text.RegularExpressions.Regex.Match(net, @"^V\((.+)\)$");
-            if (m.Success) net = m.Groups[1].Value;
-            var plot = CurrentStudy?.Blocks.Where(b => b.Kind == BlockKind.Plots).SelectMany(b => b.Get("Signals").Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)).Select(v.Map).ToList() ?? new List<string>();
-            var qc = set.Case;
-            var f = new QualWaveForm(qc, net, set.Dir, rs, plot, v.Stimulus?.Rser ?? 0) { OpenResults = d => { if (Directory.Exists(d)) OpenResultsFolder(d); } };
-            f.Text += $" - {v.Label}, {set.Condition.Name}";
-            f.Show(this);
+            if (tvResults == null) return;
+            // a refresh keeps what is selected
+            if (select == null) select = tvResults.SelectedNode?.Tag;
+            tvResults.BeginUpdate();
+            tvResults.Nodes.Clear();
+            string camp = resultsView.Data == null ? "Campaign (none open)" : "Campaign: " + Path.GetFileName((resultsView.Data.Folder ?? "").TrimEnd('\\', '/'));
+            var cn = new TreeNode(camp) { Tag = "campaign", ImageKey = "results16", SelectedImageKey = "results16" };
+            tvResults.Nodes.Add(cn);
+            TreeNode pick = select == null || (select as string) == "campaign" ? cn : null;
+            foreach (var r in studyRuns)
+            {
+                var sn = new TreeNode($"Study: {r.Study}  ({r.Ended:HH:mm})") { Tag = r, ImageKey = "folder16", SelectedImageKey = "folder16" };
+                var v = new TreeNode($"Verdicts ({r.Verdicts.Count(x => x.Verdict == "FAIL")} FAIL of {r.Verdicts.Count})") { Tag = Tuple.Create(r, "verdicts"), ImageKey = "check16", SelectedImageKey = "check16" };
+                var w = new TreeNode("Waveforms") { Tag = Tuple.Create(r, "waves"), ImageKey = "chart16", SelectedImageKey = "chart16" };
+                sn.Nodes.Add(v); sn.Nodes.Add(w);
+                if (r.Report != null) sn.Nodes.Add(new TreeNode("Report") { Tag = Tuple.Create(r, "report"), ImageKey = "doc16", SelectedImageKey = "doc16" });
+                tvResults.Nodes.Add(sn);
+                sn.Expand();
+                if (select is Tuple<StudyRunData, string> t && t.Item1 == r) pick = t.Item2 == "waves" ? w : v;
+            }
+            tvResults.EndUpdate();
+            if (pick != null && tvResults.SelectedNode != pick) { suppressNode = true; tvResults.SelectedNode = pick; suppressNode = false; }
         }
+
+        bool suppressNode;
+
+        void ShowResultsNode(TreeNode n)
+        {
+            if (suppressNode || n == null) return;
+            if (n.Tag as string == "campaign") { ShowResultsPane(resultsView); return; }
+            if (n.Tag is StudyRunData r0) { ShowVerdicts(r0); return; }
+            if (n.Tag is Tuple<StudyRunData, string> t)
+            {
+                if (t.Item2 == "verdicts") ShowVerdicts(t.Item1);
+                else if (t.Item2 == "waves") ShowStudyWaves(t.Item1, null);
+                else if (t.Item2 == "report" && t.Item1.Report != null && File.Exists(t.Item1.Report)) try { Process.Start(t.Item1.Report); } catch { }
+            }
+        }
+
+        /// <summary>The campaign page of the Results tab to the front (a campaign was opened or followed).</summary>
+        void ShowCampaignResults()
+        {
+            if (resultsHost == null) return;
+            ShowResultsPane(resultsView);
+            FillResultsTree("campaign");
+        }
+
+        void ShowResultsPane(Control c)
+        {
+            foreach (Control x in resultsHost.Controls) x.Visible = x == c;
+            c.BringToFront();
+        }
+
+        void ShowVerdicts(StudyRunData r)
+        {
+            shownStudy = r;
+            verdictsView.ShowVerdicts(r);
+            ShowResultsPane(verdictsView);
+        }
+
+        /// <summary>The study's waveforms: the case of a verdict ticked (or the first), its stimulus and judged signals in panes.</summary>
+        void ShowStudyWaves(StudyRunData r, VerdictRecord focus)
+        {
+            if (r == null) return;
+            shownStudy = r;
+            var set = focus?.Run ?? r.Sets.FirstOrDefault(s => s.Dir != null);
+            var sigs = new List<string>();
+            if (focus != null && focus.Run != null) sigs.AddRange(focus.Run.Criteria.Where(c => c.Name == focus.Criterion).Select(c => c.Signal));
+            else if (set != null) sigs.AddRange(set.Criteria.Select(c => c.Signal));
+            if (set != null) sigs.AddRange(r.PlotSignals.Select(set.Variant.Map));
+            waveView.ShowStudy(r, set, sigs.Distinct(StringComparer.OrdinalIgnoreCase), focus?.Criterion);
+            ShowResultsPane(waveView);
+            FillResultsTree(Tuple.Create(r, "waves"));
+            tabs.SelectedIndex = TabResults;
+        }
+
+        /// <summary>A study ended: it goes into the Results tab (replacing an earlier run of the same study), its verdicts shown.</summary>
+        void ShowStudyResults(Study st, List<string> problems)
+        {
+            var run = new StudyRunData
+            {
+                Study = st.Name, Verdicts = lastVerdicts.ToList(), Problems = problems, Report = lastStudyReport,
+                Sets = studyRunner == null ? new List<RunSet>() : studyRunner.Results.Values.SelectMany(x => x.Values).OfType<List<RunSet>>().SelectMany(x => x).Distinct().ToList(),
+                PlotSignals = st.Blocks.Where(b => b.Kind == BlockKind.Plots).SelectMany(b => b.Get("Signals").Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)).ToList(),
+            };
+            studyRuns.RemoveAll(x => x.Study == st.Name);
+            studyRuns.Insert(0, run);
+            while (studyRuns.Count > 8) studyRuns.RemoveAt(studyRuns.Count - 1);
+            FillResultsTree(Tuple.Create(run, "verdicts"));
+            ShowVerdicts(run);
+            tabs.SelectedIndex = TabResults;
+        }
+
+        /// <summary>The waveforms of the case behind a verdict.</summary>
+        void OpenStudyWaves(VerdictRecord r) => ShowStudyWaves(shownStudy ?? studyRuns.FirstOrDefault(), r);
     }
 
     /// <summary>
-    /// The verdicts of a study: for each evaluation (criterion), a grid of case × condition; the details of the cell
-    /// chosen; its waveforms or its campaign on a double-click.
+    /// Results > a study > Verdicts: for each criterion, a grid of case × condition; the details of the cell chosen;
+    /// its waveforms or its campaign on a double-click.
     /// </summary>
-    sealed class StudyResultsForm : Win98Form
+    sealed class StudyVerdictsView : Panel
     {
         readonly ComboBox cbEval;
         readonly Win98ListView grid, details;
@@ -193,21 +297,17 @@ namespace Spica.UI
         public Action<VerdictRecord> OpenWaves;
         public Action<string> OpenCampaign;
 
-        public StudyResultsForm()
+        public StudyVerdictsView()
         {
-            Text = "Study Results";
-            MinimizeBox = true; MaximizeBox = true; Resizable = true; ShowInTaskbar = true;
-            StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(900, 600 + Padding.Vertical);
-            MinimumSize = new Size(560, 380);
-
+            Dock = DockStyle.Fill;
+            BackColor = Win98.Face;
             var top = new Panel { Dock = DockStyle.Top, Height = 54, BackColor = Win98.Face };
-            lblHead = new Label { Location = new Point(6, 6), AutoSize = false, Height = 16, Font = Win98.BoldFont, UseMnemonic = false };
-            top.Controls.Add(new Label { Text = "&Criterion:", Location = new Point(6, 31), AutoSize = true });
-            cbEval = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(70, 28), Width = 420, Font = Win98.Font };
+            lblHead = new Label { Location = new Point(2, 6), AutoSize = false, Height = 16, Font = Win98.BoldFont, UseMnemonic = false, AutoEllipsis = true };
+            top.Controls.Add(new Label { Text = "&Criterion:", Location = new Point(2, 31), AutoSize = true });
+            cbEval = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(66, 28), Width = 420, Font = Win98.Font };
             cbEval.SelectedIndexChanged += (s, e) => FillGrid();
             top.Controls.AddRange(new Control[] { lblHead, cbEval });
-            top.Resize += (s, e) => lblHead.Width = top.Width - 12;
+            top.Resize += (s, e) => lblHead.Width = top.Width - 6;
 
             grid = new Win98ListView { MultiSelect = false, FullRowSelect = false };
             grid.CellColor = (row, col) =>
@@ -222,51 +322,46 @@ namespace Spica.UI
 
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 170, BackColor = Win98.Face };
             details = new Win98ListView { MultiSelect = false };
-            foreach (var (t, w) in new[] { ("Case", 200), ("Condition", 120), ("Verdict", 60), ("Worst seen", 130), ("Margin", 80), ("Runs failing", 90), ("Rule", 220), ("Requirement", 100) })
+            foreach (var (t, w) in new[] { ("Case", 220), ("Condition", 110), ("Verdict", 60), ("Worst seen", 130), ("Margin", 80), ("Runs failing", 90), ("Rule", 260), ("Requirement", 100) })
                 details.Columns.Add(t, w);
             details.DoubleClick += (s, e) => { if (details.SelectedItems.Count == 1 && details.SelectedItems[0].Tag is VerdictRecord r) OpenWaves?.Invoke(r); };
             var wellDet = new Win98Well(details) { Location = new Point(0, 6) };
-            btnWaves = new Win98Button { Text = "&Waveforms...", Width = 110 };
+            btnWaves = new Win98Button { Text = "&Waveforms", Width = 110 };
             btnCampaign = new Win98Button { Text = "&Open Campaign", Width = 110 };
             btnReport = new Win98Button { Text = "Open &Report", Width = 110 };
-            var btnClose = new Win98Button { Text = "Close", Width = 110, DialogResult = DialogResult.Cancel };
             btnWaves.Click += (s, e) => { var r = Current(); if (r != null) OpenWaves?.Invoke(r); };
             btnCampaign.Click += (s, e) => { var r = Current(); if (r?.Run?.Dir != null) OpenCampaign?.Invoke(r.Run.Dir); };
             btnReport.Click += (s, e) => { if (report != null && File.Exists(report)) try { Process.Start(report); } catch { } };
-            btnClose.Click += (s, e) => Close();
-            CancelButton = btnClose;
-            bottom.Controls.AddRange(new Control[] { wellDet, btnWaves, btnCampaign, btnReport, btnClose });
+            bottom.Controls.AddRange(new Control[] { wellDet, btnWaves, btnCampaign, btnReport });
             bottom.Resize += (s, e) =>
             {
-                int bx = bottom.Width - 116;
-                btnWaves.Location = new Point(bx, 6); btnCampaign.Location = new Point(bx, 35); btnReport.Location = new Point(bx, 64); btnClose.Location = new Point(bx, bottom.Height - 29);
+                int bx = bottom.Width - 112;
+                btnWaves.Location = new Point(bx, 6); btnCampaign.Location = new Point(bx, 35); btnReport.Location = new Point(bx, 64);
                 wellDet.Size = new Size(bx - 8, bottom.Height - 8);
             };
             var hint = new Label { Dock = DockStyle.Bottom, Height = 16, ForeColor = Win98.Shadow, BackColor = Win98.Face, Text = "Click a cell for its details; double-click it for its waveforms.", UseMnemonic = false };
-
-            var body = new Panel { Dock = DockStyle.Fill };
-            body.Controls.Add(wellGrid);
-            body.Controls.Add(hint);
-            body.Controls.Add(bottom);
-            body.Controls.Add(top);
-            Controls.Add(body);
+            Controls.Add(wellGrid);
+            Controls.Add(hint);
+            Controls.Add(bottom);
+            Controls.Add(top);
         }
 
         VerdictRecord selected;
-        VerdictRecord Current() => details.SelectedItems.Count == 1 ? details.SelectedItems[0].Tag as VerdictRecord : selected;
+        VerdictRecord Current() => details.SelectedItems.Count == 1 ? details.SelectedItems[0].Tag as VerdictRecord : selected ?? recs.FirstOrDefault();
 
-        public void ShowVerdicts(string study, List<VerdictRecord> list, List<string> problems, string reportPath)
+        public void ShowVerdicts(StudyRunData run)
         {
-            recs = list.ToList();
-            report = reportPath;
+            recs = run.Verdicts.ToList();
+            report = run.Report;
             btnReport.Enabled = report != null;
             int pass = recs.Count(r => r.Verdict == "PASS"), fail = recs.Count(r => r.Verdict == "FAIL");
-            lblHead.Text = $"{study}: {recs.Count} verdicts, {pass} PASS, {fail} FAIL" + (problems.Count > 0 ? $"  -  {problems.Count} block(s) did not run: " + string.Join("; ", problems.Take(3)) : "");
-            lblHead.ForeColor = fail > 0 || problems.Count > 0 ? Color.FromArgb(150, 0, 0) : Color.FromArgb(0, 100, 0);
+            lblHead.Text = $"{run.Study}: {recs.Count} verdicts, {pass} PASS, {fail} FAIL" + (run.Problems.Count > 0 ? $"  -  {run.Problems.Count} block(s) did not run: " + string.Join("; ", run.Problems.Take(3)) : "");
+            lblHead.ForeColor = fail > 0 || run.Problems.Count > 0 ? Color.FromArgb(150, 0, 0) : Color.FromArgb(0, 100, 0);
+            string keep = cbEval.SelectedItem as string;
             cbEval.Items.Clear();
             foreach (var k in recs.Select(r => r.Source + ": " + r.Criterion).Distinct()) cbEval.Items.Add(k);
-            if (cbEval.Items.Count > 0) cbEval.SelectedIndex = 0; else FillGrid();
-            Text = "Study Results - " + study;
+            int i = keep == null ? -1 : cbEval.Items.IndexOf(keep);
+            if (cbEval.Items.Count > 0) cbEval.SelectedIndex = Math.Max(0, i); else FillGrid();
         }
 
         List<VerdictRecord> Shown => cbEval.SelectedItem is string k ? recs.Where(r => r.Source + ": " + r.Criterion == k).ToList() : new List<VerdictRecord>();

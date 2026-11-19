@@ -260,9 +260,10 @@ static class Program
                     var sim = study.Add("Simulate");
                     var lim = study.Add("Limits").Set("Criteria", "holdup | overvolt | recovered");
                     var rep = study.Add("Report").Set("Title", "Hold-up qualification");
-                    var pl = study.Add("Plots").Set("Signals", "I(D1)");
+                    var pl = study.Add("Plots");
                     var ex = study.Add("Export");
-                    study.Connect(sw, sch); study.Connect(sch, sim); study.Connect(co, sim); study.Connect(sim, lim);
+                    var meas = study.Add("Measure").Set("Save", "I(D1)");
+                    study.Connect(sw, sch); study.Connect(sch, meas); study.Connect(meas, sim); study.Connect(co, sim); study.Connect(sim, lim);
                     study.Connect(lim, rep, "", "verdicts"); study.Connect(sim, pl); study.Connect(lim, ex, "", "verdicts");
                     study.AutoLayout();
                     fault = new Spica.Core.Graph.Study { Name = "Bulk short" };
@@ -294,13 +295,30 @@ static class Program
                         var canvas = (Spica.UI.StudyCanvas)Get("studyCanvas");
                         Check(canvas.States.Values.All(s => s == Spica.Core.Graph.BlockState.Done || s == Spica.Core.Graph.BlockState.Cached), "every block done (or from the cache)");
                         Shot(form, "study");
-                        var res = (System.Windows.Forms.Form)Get("studyResults");
-                        Shot(res, "results");
-                        mf.GetMethod("OpenStudyWaves", flags).Invoke(form, new object[] { verdicts.First(v => v.Criterion == "holdup" && v.Case.Contains("200 ms")) });
+                        Check(((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex == 3, "the verdicts open on the Results tab");
+                        Shot(form, "results");
+                        mf.GetMethod("OpenStudyWaves", flags).Invoke(form, new object[] { verdicts.First(v => v.Criterion == "holdup" && v.Case.Contains("200 ms") && v.Condition.StartsWith("25")) });
                         Pump(30);
-                        var wave = System.Windows.Forms.Application.OpenForms.OfType<Spica.UI.QualWaveForm>().LastOrDefault();
-                        Check(wave != null, "the waveforms of a cell open");
-                        if (wave != null) { Shot(wave, "wave"); wave.Close(); }
+                        var wv = (Spica.UI.WaveformView)Get("waveView");
+                        int one = wv.SeriesCount;
+                        Check(wv.Visible && wv.PaneCount >= 2 && one >= 2, $"the waveforms of a cell: {wv.PaneCount} panes, {one} traces");
+                        var wvt = typeof(Spica.UI.WaveformView);
+                        var lb = (System.Windows.Forms.ListBox)wvt.GetField("lbSignals", flags).GetValue(wv);
+                        var names = lb.Items.Cast<string>().ToList();
+                        Check(names.Any(x => x.Equals("I(D1)", StringComparison.OrdinalIgnoreCase)), "the signal the Measure block asked for is in the .raw: " + string.Join(" ", names));
+                        Shot(form, "wave");
+                        // the same case at the other temperature, overlaid
+                        var sets = (System.Windows.Forms.CheckedListBox)wvt.GetField("lbSets", flags).GetValue(wv);
+                        for (int i = 0; i < sets.Items.Count; i++)
+                            if (sets.Items[i].ToString().Contains("200 ms") && sets.Items[i].ToString().Contains("85")) sets.SetItemChecked(i, true);
+                        Pump(40);
+                        Check(wv.SeriesCount == 2 * one, $"two temperatures overlaid: {wv.SeriesCount} traces");
+                        // I(D1) added to a new pane
+                        lb.SelectedItem = names.First(x => x.Equals("I(D1)", StringComparison.OrdinalIgnoreCase));
+                        wvt.GetMethod("AddSignal", flags).Invoke(wv, new object[] { lb.SelectedItem, true });
+                        Pump(30);
+                        Check(wv.PaneCount == 3, $"a signal added in a new pane: {wv.PaneCount} panes");
+                        Shot(form, "overlay");
                     });
                 });
                 steps.Enqueue(() =>

@@ -29,6 +29,18 @@ namespace Spica.Core.Graph
         public StimulusCase Stimulus;
         /// <summary>Logical signal → this candidate's own (OUT → V(vo)); empty when there is one candidate.</summary>
         public Dictionary<string, string> Signals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Signals to keep in the .raw besides what the criteria need, and .meas lines to add (Measure blocks).</summary>
+        public List<string> Save = new List<string>();
+        public List<string> Meas = new List<string>();
+
+        public CircuitVariant Clone()
+        {
+            var c = (CircuitVariant)MemberwiseClone();
+            c.Signals = new Dictionary<string, string>(Signals, StringComparer.OrdinalIgnoreCase);
+            c.Save = new List<string>(Save);
+            c.Meas = new List<string>(Meas);
+            return c;
+        }
 
         public string CaseName => Stimulus?.Name ?? "as drawn";
         public string Label => (Candidate.Length > 0 ? Candidate + " · " : "") + CaseName;

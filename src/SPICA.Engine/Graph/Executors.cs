@@ -38,6 +38,7 @@ namespace Spica.Core.Graph
             r.Register(BlockKind.Fault, new Exec(Fault));
             r.Register(BlockKind.Schematic, new Exec(ctx => Schematic(ctx, host)));
             r.Register(BlockKind.Candidates, new Exec(Candidates));
+            r.Register(BlockKind.Measure, new Exec(Measure));
             r.Register(BlockKind.Nominal, new Exec(Nominal));
             r.Register(BlockKind.MonteCarlo, new Exec(MonteCarlo));
             r.Register(BlockKind.Corners, new Exec(Corners));
@@ -145,6 +146,21 @@ namespace Spica.Core.Graph
                 }
             }
             ctx.Out("circuit", all);
+        }
+
+        /// <summary>More signals to keep in the .raw (to look at later) and more .meas lines, on every circuit that passes.</summary>
+        static void Measure(BlockContext ctx)
+        {
+            var save = ctx.Block.Get("Save").Split(new[] { ' ', ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+            var meas = Split(ctx.Block.Get("Meas")).Select(m => m.StartsWith(".") ? m : ".meas " + m).ToList();
+            var outv = ctx.All<CircuitVariant>("circuit").Select(v =>
+            {
+                var c = v.Clone();
+                c.Save.AddRange(save.Where(s => !c.Save.Contains(s, StringComparer.OrdinalIgnoreCase)));
+                c.Meas.AddRange(meas);
+                return c;
+            }).ToList();
+            ctx.Out("circuit", outv);
         }
 
         // ------------------------------------------------------------------ variation
@@ -323,6 +339,11 @@ namespace Spica.Core.Graph
                 }
                 else qc = BuildPlain(v, mine);
                 if (qc.Error != null) throw new Exception($"{v.Label}: {qc.Error}");
+                if (v.Meas.Count > 0)
+                {
+                    int end = qc.Lines.FindLastIndex(l => l.Trim().Equals(".end", StringComparison.OrdinalIgnoreCase));
+                    qc.Lines.InsertRange(end < 0 ? qc.Lines.Count : end, v.Meas.Select(v.Map));
+                }
 
                 // folders stay short: LTspice cannot open files past 260 characters of path
                 string caseDir = Path.Combine(root, (v.Candidate.Length > 0 ? Short(v.Candidate, 8) + "_" : "") + Short(v.CaseName, 18) + "_" + Hash(v.Label).Substring(0, 4));
@@ -333,7 +354,7 @@ namespace Spica.Core.Graph
                     string dir = Path.Combine(caseDir, Short(cond.Name.Replace("°C", "C"), 10) + "_" + Hash(cond.Key).Substring(0, 4));
                     if (Path.GetFullPath(dir).Length + QualCase.PathReserve > 259)
                         throw new Exception($"The study's folders would be too deep for LTspice (more than 260 characters of path): {dir}. Choose a shorter output folder on the Setup tab.");
-                    string key = Hash(string.Join("\n", qc.Lines) + "\n" + cond.Key + "\n" + string.Join(" ", plot) + "\n" + v.Asc);
+                    string key = Hash(string.Join("\n", qc.Lines) + "\n" + cond.Key + "\n" + string.Join(" ", plot) + " " + string.Join(" ", v.Save) + "\n" + v.Asc);
                     // the cache: the newest finished campaign made from the same netlist and condition
                     string cached = Directory.Exists(dir)
                         ? Directory.GetDirectories(dir).Where(d => File.Exists(Path.Combine(d, "results.csv")) && File.Exists(Path.Combine(d, "study.key")) &&
@@ -359,13 +380,14 @@ namespace Spica.Core.Graph
                         if (!double.IsNaN(cr.Hi)) setup.Specs[cr.MaxMeas] = new SpecLimit { Lsl = double.NaN, Usl = cr.Hi };
                     }
                     // the waveforms are drawn from the .raw files: keep them, with the stimulus, the judged and the plotted signals
-                    bool waves = v.Stimulus != null || qc.Criteria.Count > 0 || plot.Count > 0;
+                    bool waves = v.Stimulus != null || qc.Criteria.Count > 0 || plot.Count > 0 || v.Save.Count > 0;
                     if (waves) setup.KeepRaw = true;
                     var sigs = new List<string>();
                     if (v.Stimulus != null && !v.Stimulus.IsFault) sigs.Add($"V({v.MapNet(v.Stimulus.Net)})");
                     if (v.Stimulus != null && v.Stimulus.IsFault) sigs.Add($"V({v.MapNet(v.Stimulus.From)})");
                     sigs.AddRange(qc.Criteria.Select(x => x.Signal));
                     sigs.AddRange(plot.Select(v.Map));
+                    sigs.AddRange(v.Save.Select(v.Map));
                     foreach (var s in sigs) if (!setup.Signals.Contains(s, StringComparer.OrdinalIgnoreCase)) setup.Signals.Add(s);
 
                     var req = new CampaignRequest

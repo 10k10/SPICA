@@ -243,9 +243,19 @@ state on the canvas: running, done, from the cache, error, skipped.
 
 - **Cache:** a campaign is reused when its netlist and condition have not changed, so changing a limit and running
   again only judges again.
-- **Results window:** the verdicts open in a window of their own, with one grid per criterion (case × condition).
-  Click a cell for its details; double-click it for its waveforms (the stimulus on top, one plot per criterion,
-  the window shaded, the samples outside the limit in red).
+- **Results tab:** the study opens there when it ends. A tree on the left lists the campaign open and the
+  studies that ran, each with Verdicts, Waveforms and Report.
+  - **Verdicts:** one grid per criterion (case × condition). Click a cell for its details; double-click it for
+    its waveforms.
+  - **Waveforms:** a viewer in the manner of LTspice.
+    - **Cases:** tick several cases and conditions to overlay them (temperatures, candidates). In Monte Carlo,
+      choose the worst run, all of them or one.
+    - **Signals and panes:** double-click a signal of the .raw to add it to the pane chosen, or start a new pane.
+      The panes share the time axis: zoom one and all follow.
+    - **Criteria:** a criterion draws its window and limits on its signal.
+    - **Open in LTspice** opens the .raw there.
+- **What the .raw holds:** what the criteria and the Plots need, plus the signals chosen in a **Measure** block
+  (Save). Its Meas field adds `.meas` lines. A signal that was not saved cannot be shown.
 - **Folders:** the campaigns, the report and the CSV go under `<output>\studies\<study>`. Folder names stay short,
   because LTspice cannot open files past 260 characters of path. A study whose folders would still be too deep
   says so before it runs.

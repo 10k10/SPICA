@@ -13,11 +13,15 @@ Status: **agreed direction** (2026-11-19). Steps 1 and 2 of section 10 are done,
   - Run Here on the Studies tab; Simulate puts its campaigns in the queue and the study goes on when they end;
   - executors (`Graph/Executors.cs`): Supply Waveform, Fault, Schematic, Candidates, Nominal, Monte Carlo,
     Corners (temperatures), Combine, Simulate (with the cache), Limits, Error Budget, Spec, Report, Export, Plots;
-  - the verdicts in a results window, one grid of case × condition per criterion, with the waveforms on a
-    double-click.
+  - the Results tab, with a tree of the campaign and the studies that ran:
+    - Verdicts: one grid of case × condition per criterion;
+    - Waveforms: an LTspice-like viewer of the .raw signals, with panes and overlaid cases, conditions and
+      candidates;
+    - the Report;
+  - Measure: signals to keep in the .raw, extra .meas lines.
 
 Not yet: Worst-Case Search, tolerance edges, Stress / Survival / Derating / Parts Database, Susceptibility,
-Spectrum, overlaid candidate waveforms, studies run remotely or from the command line.
+Spectrum, studies run remotely or from the command line.
 
 This document guides the move from today's fixed tabs (Setup, Qualification, Queue, Results) to one modular app
 where every analysis is a graph of blocks.

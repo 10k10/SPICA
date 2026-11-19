@@ -87,6 +87,7 @@ namespace Spica.UI
             BuildQueuePage();
             BuildResultsPage();
             BuildStudiesPage();
+            BuildResultsNavigator();
 
             Controls.Add(tabs);
             Controls.Add(status);
@@ -336,9 +337,10 @@ namespace Spica.UI
                 liveJob = job;
                 RefreshResults();
                 liveDone = -1; nextLiveRefresh = DateTime.MinValue;
+                ShowCampaignResults();
                 tabs.SelectedIndex = TabResults;
             }
-            else if (current) tabs.SelectedIndex = TabResults;
+            else if (current) { ShowCampaignResults(); tabs.SelectedIndex = TabResults; }
             else if (!string.IsNullOrEmpty(job.OutputDir) && File.Exists(Path.Combine(job.OutputDir, "results.csv"))) OpenResultsFolder(job.OutputDir);
             else Win98MessageBox.Show(this, "This campaign left no results" + (job.Message.Length > 0 ? ":\n" + job.Message : "."), "SPICA", MessageBoxButtons.OK, Win98Icon.Information);
         }
@@ -371,6 +373,7 @@ namespace Spica.UI
             if (SameFile(ascPath, asc)) rs.Setup = project;
             liveJob = null;
             resultsView.SetData(rs, false);
+            ShowCampaignResults();
             tabs.SelectedIndex = TabResults;
             SetStatus(rs.Standalone ? $"Opened results: {dir} (analysed with the campaign's own setup: its schematic is not open)"
                                     : $"Opened results: {dir}, analysed with the setup {(project.FilePath != null ? Path.GetFileName(project.FilePath) : "(unsaved)")}");
