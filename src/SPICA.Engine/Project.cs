@@ -115,6 +115,15 @@ namespace Spica.Core
         public List<string> QualPlot = new List<string>();    // more signals to save and plot with each test (V(out)...)
         public List<QualCriterion> QualCriteria = new List<QualCriterion>();
 
+        /// <summary>
+        /// The studies (graphs of blocks, docs/ARCHITECTURE.md). Empty in a setup from before them: see
+        /// <see cref="Graph.LegacyStudies"/> for what such a setup stands for.
+        /// </summary>
+        public List<Graph.Study> Studies = new List<Graph.Study>();
+
+        /// <summary>The setup's studies, or the ones its older settings stand for when it has none.</summary>
+        public List<Graph.Study> StudiesOrLegacy() => Studies.Count > 0 ? Studies : Graph.LegacyStudies.From(this);
+
         public QualStdChoice QualOf(string library)
         {
             if (!Qual.TryGetValue(library ?? "", out var c)) Qual[library ?? ""] = c = new QualStdChoice();
@@ -167,7 +176,7 @@ namespace Spica.Core
         public void Save(string path)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("; SPICA setup - Spice Parallel Instancer Circuit Analysis");
+            sb.AppendLine("; SPICA setup - Simulation Platform for Investigation, Compliance and Analysis");
             sb.AppendLine("[Campaign]");
             sb.AppendLine("Schematic=" + RelativeTo(path, Schematic));
             sb.AppendLine("Runs=" + Runs.ToString(Inv));
@@ -271,6 +280,8 @@ namespace Spica.Core
             sb.AppendLine("MeasOff=" + string.Join(" | ", Report.MeasOff));
             sb.AppendLine("Sections=" + string.Join(",", new[] { ("budget", Report.Budget), ("summary", Report.Summary), ("histogram", Report.Histogram),
                 ("sensitivity", Report.Sensitivity), ("convergence", Report.Convergence), ("temperature", Report.Temperature), ("tf", Report.Tf) }.Where(x => x.Item2).Select(x => x.Item1)));
+            // the studies last: each [Study] is followed by its [Block] sections
+            foreach (var st in Studies) st.Write(sb);
             File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
             FilePath = path;
             Dirty = false;
@@ -280,15 +291,36 @@ namespace Spica.Core
         {
             var p = new SpicaProject { FilePath = path };
             string section = "";
+            Graph.Study study = null;
+            Graph.Block block = null;
             foreach (var raw in File.ReadAllLines(path, Encoding.UTF8))
             {
                 var line = raw.Trim();
                 if (line.Length == 0 || line[0] == ';' || line[0] == '#') continue;
-                if (line[0] == '[' && line.EndsWith("]")) { section = line.Substring(1, line.Length - 2).Trim(); continue; }
+                if (line[0] == '[' && line.EndsWith("]"))
+                {
+                    section = line.Substring(1, line.Length - 2).Trim();
+                    // a [Block n] belongs to the [Study] above it; any other section ends the study
+                    if (section.StartsWith("Study ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        study = new Graph.Study { Name = section.Substring(6).Trim() };
+                        p.Studies.Add(study);
+                        block = null;
+                    }
+                    else if (study != null && section.StartsWith("Block ", StringComparison.OrdinalIgnoreCase) &&
+                             int.TryParse(section.Substring(6).Trim(), NumberStyles.Integer, Inv, out int id))
+                    {
+                        block = new Graph.Block { Id = id };
+                        study.Blocks.Add(block);
+                    }
+                    else { study = null; block = null; }
+                    continue;
+                }
                 int eq = line.IndexOf('=');
                 if (eq <= 0) continue;
                 string key = line.Substring(0, eq).Trim(), val = line.Substring(eq + 1).Trim();
                 bool B() => val == "1" || val.Equals("true", StringComparison.OrdinalIgnoreCase);
+                if (study != null) { study.Read(block, key, val); continue; }
 
                 if (section.Equals("Campaign", StringComparison.OrdinalIgnoreCase))
                 {
@@ -468,6 +500,7 @@ namespace Spica.Core
             };
             foreach (var kv in Specs) c.Specs[kv.Key] = new SpecLimit { Lsl = kv.Value.Lsl, Usl = kv.Value.Usl };
             foreach (var kv in Qual) c.Qual[kv.Key] = kv.Value.Clone();
+            c.Studies = Studies.Select(x => x.Clone()).ToList();
             return c;
         }
 

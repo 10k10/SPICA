@@ -957,7 +957,7 @@ namespace Spica.Core
             var inv = CultureInfo.InvariantCulture;
             var snap = Snapshot();
             var sb = new StringBuilder();
-            sb.AppendLine("SPICA - Spice Parallel Instancer Circuit Analysis");
+            sb.AppendLine("SPICA - Simulation Platform for Investigation, Compliance and Analysis");
             sb.AppendLine(new string('=', 60));
             sb.AppendLine($"Schematic      : {opt.AscPath}");
             sb.AppendLine($"Runs requested : {opt.Runs}" + (opt.CornerCount > 1 ? $" x {opt.CornerCount} temperatures = {opt.Jobs} simulations" : ""));

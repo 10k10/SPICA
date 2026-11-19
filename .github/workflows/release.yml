@@ -27,6 +27,10 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      # the engine on its own: it must build without any window code
+      - name: Build SPICA engine
+        run: dotnet build src/SPICA.Engine/SPICA.Engine.csproj -c Release
+
       # net48 WinForms app: the whole program is a single SPICA.exe
       # the Release build also writes dist/SPICA-<version>.exe
       - name: Build SPICA
@@ -45,7 +49,7 @@ jobs:
         with:
           name: "SPICA ${{ github.ref_name }}"
           body: |
-            ## SPICA — Spice Parallel Instancer Circuit Analysis
+            ## SPICA — Simulation Platform for Investigation, Compliance and Analysis
 
             Download `SPICA-<version>.exe` and run it. No installation needed — it is the whole app.
             `SPICA-cli-<version>.exe` is the same engine for the command line (scripts, the workstation

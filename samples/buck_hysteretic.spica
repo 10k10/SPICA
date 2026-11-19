@@ -1,4 +1,4 @@
-; SPICA setup - Spice Parallel Instancer Circuit Analysis
+; SPICA setup - Simulation Platform for Investigation, Compliance and Analysis
 [Campaign]
 Schematic=buck_hysteretic.asc
 Runs=500

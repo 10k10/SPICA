@@ -1,8 +1,12 @@
-# SPICA — Spice Parallel Instancer Circuit Analysis
+# SPICA — Simulation Platform for Investigation, Compliance and Analysis
 
-Portable Windows app (C# / .NET Framework 4.8 / WinForms, Windows 98 look) that runs LTspice
-Monte Carlo campaigns as many parallel LTspice batch instances, tuning the parallelism to the
-machine it runs on.
+Portable Windows app (C# / .NET Framework 4.8 / WinForms, Windows 98 look) for studying a circuit
+on LTspice. It handles:
+
+- tolerance analysis: Monte Carlo, worst case, error budget;
+- qualification tests against standards, with pass/fail criteria (DO-160G Section 16 to start).
+
+It runs them as many parallel LTspice batch instances, tuning the parallelism to the machine it runs on.
 
 `dist/SPICA-<version>.exe` is the whole app. Copy it anywhere; settings (`SPICA.ini`) and
 scheduler profiles (`SPICA.profiles`) are written next to it. `SPICA-cli-<version>.exe` is the same
@@ -366,8 +370,10 @@ dotnet build src/SPICA/SPICA.csproj -c Release
 dotnet build src/SPICA.Cli/SPICA.Cli.csproj -c Release
 ```
 
-The version of both is in `src/Directory.Build.props`. The command line compiles the engine
-(`src/SPICA/Core`) in, so it is a single exe too.
+The version of both is in `src/Directory.Build.props`. The engine lives in `src/SPICA.Engine`: both exes
+compile its files in, so each is a single exe. Building `src/SPICA.Engine` on its own checks that the engine
+does not depend on any window code. The direction the app is taking (studies as graphs of blocks) is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). `SPICA-cli studies <setup.spica>` lists a setup's studies.
 
 `tests/SPICA.Smoke` runs a headless campaign: `SPICA.Smoke.exe <file.asc> <runs> [instances threads]`
 (environment: `SPICA_TEMP=corners:-40,25,90` or `random:-40,90`, `SPICA_PAIRED=1`, `SPICA_SEED=n`, `SPICA_NORAW=1`).

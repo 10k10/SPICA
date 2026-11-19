@@ -4,7 +4,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Windows.Forms;
 
 namespace Spica.Core
 {
@@ -32,9 +31,19 @@ namespace Spica.Core
             catch { }
         }
 
+        /// <summary>The folder of the running exe (SPICA.exe, SPICA-cli.exe or a test runner).</summary>
+        public static string AppDir
+        {
+            get
+            {
+                var exe = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+                return string.IsNullOrEmpty(exe) ? AppDomain.CurrentDomain.BaseDirectory : Path.GetDirectoryName(exe);
+            }
+        }
+
         public static string Resolve(string fileName)
         {
-            string dir = Path.GetDirectoryName(Application.ExecutablePath);
+            string dir = AppDir;
             try
             {
                 string probe = Path.Combine(dir, ".spica_write_test");

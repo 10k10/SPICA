@@ -479,7 +479,7 @@ namespace Spica.UI
                 .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion
              ?? typeof(MainForm).Assembly.GetName().Version.ToString()).Split('+')[0];
 
-        public static string AppTitle => $"SPICA {AppVersion} - Spice Parallel Instancer Circuit Analysis";
+        public static string AppTitle => $"SPICA {AppVersion} - Simulation Platform for Investigation, Compliance and Analysis";
 
         void UpdateTitle()
         {
@@ -917,9 +917,10 @@ namespace Spica.UI
         {
             Win98MessageBox.Show(this,
                 "SPICA  version " + AppVersion + "\n" +
-                "Spice Parallel Instancer Circuit Analysis\n\n" +
-                "Runs LTspice Monte Carlo campaigns as many parallel batch\n" +
-                "instances, one per processor core.\n\n" +
+                "Simulation Platform for Investigation, Compliance and Analysis\n\n" +
+                "Studies of a circuit on LTspice: tolerance (Monte Carlo,\n" +
+                "worst case), qualification tests with pass/fail criteria,\n" +
+                "run as parallel batch instances, here or on another PC.\n\n" +
                 "Copyright © 2026 10k10.\n" +
                 "Free to use, copy, modify and share, at home or at work;\n" +
                 "it may not be sold (Apache 2.0 with the Commons Clause).\n\n" +

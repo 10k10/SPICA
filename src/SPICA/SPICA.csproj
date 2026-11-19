@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -9,9 +9,9 @@
     <RootNamespace>Spica</RootNamespace>
     <ApplicationIcon>Resources\spica.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Product>SPICA - Spice Parallel Instancer Circuit Analysis</Product>
-    <AssemblyTitle>SPICA - Spice Parallel Instancer Circuit Analysis</AssemblyTitle>
-    <Description>Runs LTspice Monte Carlo campaigns as parallel batch instances and analyses the results.</Description>
+    <Product>SPICA - Simulation Platform for Investigation, Compliance and Analysis</Product>
+    <AssemblyTitle>SPICA - Simulation Platform for Investigation, Compliance and Analysis</AssemblyTitle>
+    <Description>Studies of a circuit on LTspice (tolerance, worst case, qualification), run as parallel batch instances.</Description>
     <NeutralLanguage>en</NeutralLanguage>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <DebugType>none</DebugType>
@@ -27,6 +27,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\Icons\*.png" />
+    <!-- the engine, compiled in so that SPICA.exe stays a single file -->
+    <Compile Include="..\SPICA.Engine\**\*.cs" Exclude="..\SPICA.Engine\obj\**;..\SPICA.Engine\bin\**" Link="Engine\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- Release: the distributable carries its version in the file name (dist\SPICA-0.3.0.exe).

@@ -197,6 +197,79 @@ static class Program
             }
             return bad;
         }
+        if (args.Length > 0 && args[0] == "--graph")
+        {
+            // the study graphs: typed wires, loops, single inputs, validation, run order, the runner, the file format, older setups
+            int bad = 0;
+            void Check(bool ok, string what) { if (!ok) bad++; Console.WriteLine($"{(ok ? "ok   " : "WRONG")} {what}"); }
+            var st = new Spica.Core.Graph.Study { Name = "Hold-up" };
+            var sw = st.Add("SupplyWaveform").Set("Library", "do160g_s16_28vdc").Set("Net", "in").Set("Tests", "Power interruption, single, 10 ms");
+            var sch = st.Add("Schematic").Set("File", "holdup.asc");
+            var nom = st.Add("Nominal");
+            var sim = st.Add("Simulate");
+            var lim = st.Add("Limits").Set("Criteria", "holdup").Add("Note", "multi\nline = text");
+            var rep = st.Add("Report");
+            Check(st.Connect(sw, sch) == null && st.Connect(sch, sim) == null && st.Connect(nom, sim) == null &&
+                  st.Connect(sim, lim) == null && st.Connect(lim, rep) == null, "wires of matching types join");
+            Check(st.Validate().Count == 0, "a complete study validates: " + string.Join("; ", st.Validate()));
+            Check(st.Connect(nom, sch) != null, "Conditions cannot go into a Schematic: " + st.Connect(nom, sch));
+            Check(st.Connect(lim, sim) != null, "a Verdicts output finds no input on Simulate");
+            var nom2 = st.Add("Nominal");
+            Check(st.Connect(nom2, sim) == null && st.Wires.Count(w => w.To == sim.Id && w.ToPort == "conditions") == 1, "a second wire into a single input replaces the first");
+            Check(st.Connect(sim, sch, "data", "stimulus") != null, "a wire of the wrong type is refused even when the ports are named");
+            var c1 = st.Add("Combine"); var c2 = st.Add("Combine");
+            Check(st.Connect(c1, c2) == null && st.Connect(c2, c1) != null, "a loop is refused: " + st.Connect(c2, c1));
+            var issues = st.Validate();
+            Check(issues.Any(i => i.Block == c1.Id && i.Message.Contains("not wired")), "an empty input is reported: " + string.Join("; ", issues));
+            st.Remove(c1); st.Remove(c2); st.Remove(nom);
+            var order = st.Order().Select(b => b.Kind).ToList();
+            Check(order.IndexOf("SupplyWaveform") < order.IndexOf("Schematic") && order.IndexOf("Schematic") < order.IndexOf("Simulate") &&
+                  order.IndexOf("Simulate") < order.IndexOf("Limits") && order.IndexOf("Limits") < order.IndexOf("Report"), "run order follows the wires: " + string.Join(" > ", order));
+
+            // the runner: values flow along the wires; a kind without an executor is skipped, and so is what it feeds
+            var ran = new System.Collections.Generic.List<string>();
+            var runner = new Spica.Core.Graph.StudyRunner();
+            foreach (var k in new[] { "SupplyWaveform", "Schematic", "Nominal", "Simulate" })
+                runner.Register(k, new FakeExec(k, ran));
+            bool graphDone = runner.Run(st);
+            Check(!graphDone && string.Join(",", ran) == "SupplyWaveform,Schematic,Nominal,Simulate", "the runner runs in order: " + string.Join(",", ran));
+            Check(runner.Results[sim.Id]["data"] as string == "Simulate(circuit:Schematic(stimulus:SupplyWaveform) conditions:Nominal)", "inputs reach each block: " + runner.Results[sim.Id]["data"]);
+            Check(runner.State[lim.Id] == Spica.Core.Graph.BlockState.Skipped && runner.State[rep.Id] == Spica.Core.Graph.BlockState.Skipped, "no executor: skipped, and what follows too");
+
+            // the file format: a project with a study saves and loads back the same; an older one keeps its format
+            string dir = Path.Combine(Path.GetTempPath(), "spica_graph_test");
+            Directory.CreateDirectory(dir);
+            var p = new SpicaProject { Schematic = Path.Combine(dir, "holdup.asc") };
+            p.Studies.Add(st);
+            string f1 = Path.Combine(dir, "a.spica"), f2 = Path.Combine(dir, "b.spica"), f3 = Path.Combine(dir, "c.spica");
+            p.Save(f1);
+            var back = SpicaProject.Load(f1);
+            back.Save(f2);
+            Check(File.ReadAllText(f1) == File.ReadAllText(f2), "a study saves and loads back unchanged");
+            var bs = back.Studies.FirstOrDefault();
+            Check(bs != null && bs.Blocks.Count == st.Blocks.Count && bs.Wires.Count == st.Wires.Count && bs.Validate().Count == 0, "the loaded study is complete and valid");
+            Check(bs != null && bs[lim.Id].Get("Note") == "multi\r\nline = text", "a property with a line break and '=' survives");
+            Check(back.Schematic == p.Schematic && back.Runs == p.Runs, "the rest of the setup is read as before");
+            var old = new SpicaProject { Schematic = p.Schematic };
+            old.Save(f3);
+            Check(!File.ReadAllText(f3).Contains("[Study"), "a setup without studies is written as before");
+
+            // an older setup stands for its studies
+            old.Qual["do160g_s16_28vdc"] = new QualStdChoice { Category = "A", Net = "in", Tests = { "Power interruption, single, 10 ms" } };
+            old.QualCriteria.Add(new QualCriterion { Name = "holdup", Signal = "V(bulk)", Lo = 18 });
+            old.Errors.Add(new ErrorItem { Name = "gain_err", Y = "err" });
+            old.Temp = TempMode.Corners;
+            var legacy = old.StudiesOrLegacy();
+            Check(legacy.Count == 2 && legacy.All(x => x.Validate().Count == 0), "an older setup gives a tolerance and a qualification study, both valid: " +
+                  string.Join("; ", legacy.SelectMany(x => x.Validate())));
+            Check(legacy[0].Blocks.Any(b => b.Kind == "ErrorBudget" && b.Get("Errors") == "gain_err") && legacy[0].Blocks.Any(b => b.Kind == "Corners"),
+                  "the tolerance study has the error budget and the temperature corners");
+            Check(legacy[1].Blocks.Any(b => b.Kind == "SupplyWaveform" && b.Get("Net") == "in") && legacy[1].Blocks.Any(b => b.Kind == "Limits" && b.Get("Criteria") == "holdup"),
+                  "the qualification study has the waveform into its net and the criteria");
+            Check(legacy[1].Blocks.First(b => b.Kind == "SupplyWaveform").X < legacy[1].Blocks.First(b => b.Kind == "Schematic").X, "the stimulus is laid out left of the schematic");
+            Console.WriteLine(bad == 0 ? "GRAPH: all ok" : $"GRAPH: {bad} wrong");
+            return bad;
+        }
         if (args.Length > 0 && args[0] == "--qual")
         {
             // the default DO-160G library: every test of every category gives a waveform; the step language's checks
@@ -1184,5 +1257,20 @@ static class Program
         t.Start();
         t.Join();
         return 0;
+    }
+}
+
+/// <summary>--graph: an executor that records its run and outputs "Kind(port:inputs ...)" on every output port.</summary>
+sealed class FakeExec : Spica.Core.Graph.IBlockExecutor
+{
+    readonly string kind;
+    readonly System.Collections.Generic.List<string> ran;
+    public FakeExec(string kind, System.Collections.Generic.List<string> ran) { this.kind = kind; this.ran = ran; }
+    public void Run(Spica.Core.Graph.BlockContext ctx)
+    {
+        ran.Add(kind);
+        var ins = ctx.Inputs.Select(kv => $"{kv.Key}:{string.Join("+", kv.Value)}").ToList();
+        string v = kind + (ins.Count > 0 ? "(" + string.Join(" ", ins) + ")" : "");
+        foreach (var o in ctx.Block.Spec.Outputs) ctx.Out(o.Name, v);
     }
 }

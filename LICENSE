@@ -1,4 +1,4 @@
-SPICA - Spice Parallel Instancer Circuit Analysis
+SPICA - Simulation Platform for Investigation, Compliance and Analysis
 Copyright (c) 2026 10k10
 
 In short: you may use, copy, modify and share SPICA freely, at home or at
@@ -24,7 +24,7 @@ whose value derives, entirely or substantially, from the functionality of the
 Software. Any license notice or attribution required by the License must also
 include this Commons Clause License Condition notice.
 
-Software: SPICA - Spice Parallel Instancer Circuit Analysis
+Software: SPICA - Simulation Platform for Investigation, Compliance and Analysis
 License:  Apache License, Version 2.0
 Licensor: 10k10 (https://github.com/10k10)
 

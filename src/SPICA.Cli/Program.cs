@@ -40,6 +40,7 @@ namespace Spica.Cli
                     case "listen": return Listen(a);
                     case "status": return Status(a);
                     case "budget": return Budget(a);
+                    case "studies": return Studies(a);
                     default: return Fail($"Unknown command '{args[0]}'.  (SPICA-cli --help)");
                 }
             }
@@ -48,7 +49,7 @@ namespace Spica.Cli
 
         static void Help()
         {
-            Console.WriteLine($@"SPICA {Version} - Spice Parallel Instancer Circuit Analysis, command line
+            Console.WriteLine($@"SPICA {Version} - Simulation Platform for Investigation, Compliance and Analysis, command line
 
   SPICA-cli run <setup.spica | bundle.zip | schematic.asc> [options]
       Runs one Monte Carlo campaign and waits for it. The results go to a new
@@ -68,6 +69,9 @@ namespace Spica.Cli
       The state of the listener watching a folder, and its campaigns.
   SPICA-cli budget <campaign folder> [--sigma <k>]
       The error budget of a finished campaign, as the Error Budget page shows it.
+  SPICA-cli studies <setup.spica>
+      The setup's studies (graphs of blocks): blocks in run order, wires and any
+      problem. A setup from before studies shows the studies its settings stand for.
 
   Options of run and listen:
         --cores <n>         LTspice instances at a time (default: SPICA.ini, else automatic)
@@ -375,6 +379,31 @@ namespace Spica.Cli
         }
 
         // ------------------------------------------------------------------ budget
+
+        /// <summary>The studies of a setup: blocks in run order with their properties, the wires, the problems.</summary>
+        static int Studies(Args a)
+        {
+            string file = Path.GetFullPath(a.File1("the setup (.spica)"));
+            var p = SpicaProject.Load(file);
+            var studies = p.StudiesOrLegacy();
+            bool legacy = p.Studies.Count == 0;
+            if (legacy) Console.WriteLine("This setup has no studies yet; these are the ones its settings stand for.");
+            int problems = 0;
+            foreach (var st in studies)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"Study \"{st.Name}\": {st.Blocks.Count} blocks, {st.Wires.Count} wires" + (st.Note.Length > 0 ? "  - " + st.Note : ""));
+                var order = st.Order() ?? st.Blocks;
+                foreach (var b in order)
+                {
+                    var props = b.Props.Where(kv => kv.Value.Length > 0).Select(kv => $"{kv.Key}={kv.Value}");
+                    Console.WriteLine($"  {b.Id,3} {b.Kind,-18} {string.Join("  ", props)}");
+                }
+                foreach (var w in st.Wires) Console.WriteLine($"      wire {w}");
+                foreach (var i in st.Validate()) { Console.WriteLine("  ! " + i); problems++; }
+            }
+            return problems == 0 ? Ok : Bad;
+        }
 
         static int Budget(Args a)
         {
