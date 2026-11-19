@@ -60,6 +60,7 @@ namespace Spica.Core
         public List<RunResult> Resume;          // the runs already finished in that folder
         public double PriorSeconds;
         public uint Seed;                       // 0 = the project's seed (0 there = a new one)
+        public bool NominalOnly;                // one run with every tolerance at its nominal value (qualification)
 
         public CampaignRequest Clone() => (CampaignRequest)MemberwiseClone();
     }
@@ -102,8 +103,15 @@ namespace Spica.Core
             }
 
             McPlan plan = null;
-            bool wc = project.WorstCase != WcMethod.Off;
-            if (project.Paired || wc)
+            bool wc = project.WorstCase != WcMethod.Off && !r.NominalOnly;
+            if (r.NominalOnly)
+            {
+                // the nominal unit: SPICA's generator with one design row of zeros (as run 1 of a worst case)
+                plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
+                plan.Design = new List<double[]> { new double[plan.Sites.Count] };
+                runs = 1;
+            }
+            else if (project.Paired || wc)
             {
                 plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
                 if (wc && (plan.Sites.Count == 0 || netlist.MeasNames.Count == 0))
@@ -175,9 +183,9 @@ namespace Spica.Core
             }
 
             if (netlist.MeasNames.Count == 0 && !Ask("This schematic has no .meas statements, so the results table will be empty.\nRun anyway?")) return null;
-            if (!project.Paired && !project.ClockReseed &&
+            if (!project.Paired && !r.NominalOnly && !project.ClockReseed &&
                 !Ask("Without clock reseeding every LTspice instance repeats the SAME random sequence, so chunks produce duplicate runs.\nContinue anyway?", true)) return null;
-            if (!project.Paired && corners != null && corners.Count > 1 &&
+            if (!project.Paired && !r.NominalOnly && corners != null && corners.Count > 1 &&
                 !Ask("Temperature corners without paired samples simulate DIFFERENT units at each temperature,\nso per-unit drift and 'pass at all temperatures' cannot be computed.\nContinue anyway?")) return null;
 
             List<string> save = null;
@@ -233,8 +241,8 @@ namespace Spica.Core
                 Setup = setup,
                 Resume = r.Resume,
                 PriorSeconds = r.PriorSeconds,
-                Stop = wc ? null : project.Stop.Clone(),
-                Stage = stage,
+                Stop = wc || r.NominalOnly ? null : project.Stop.Clone(),
+                Stage = r.NominalOnly ? "Nominal: every tolerance SPICA drives at its nominal value." : stage,
                 WcStage = wcStage,
             };
         }
@@ -252,6 +260,7 @@ namespace Spica.Core
             string temps = o.CornerCount > 1 ? $" x {o.CornerCount} temperatures" : o.RandomTemp ? ", random temperature" : "";
             if (o.WcStage == 1) return $"Worst case by sensitivity: {o.Mc.Sites.Count + 1} screening runs{temps}, then verification";
             if (o.WcStage == 2) return $"Worst case by sensitivity: verification{temps}";
+            if (o.Mc?.Design != null && o.Mc.Design.Count == 1 && o.Mc.Design[0].All(v => v == 0)) return $"Nominal{temps}";
             if (o.Mc?.Design != null) return $"Worst case, all corners: {o.Runs:N0} runs{temps}";
             return (o.Stop != null && o.Stop.Enabled ? $"Monte Carlo, up to {o.Runs:N0} runs (stops early)" : $"Monte Carlo, {o.Runs:N0} runs") + temps;
         }

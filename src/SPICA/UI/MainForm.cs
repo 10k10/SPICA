@@ -55,7 +55,7 @@ namespace Spica.UI
 
         readonly Timer uiTimer = new Timer { Interval = 250 };
 
-        const int TabSetup = 0, TabQueue = 1, TabResults = 2;
+        const int TabSetup = 0, TabQual = 1, TabQueue = 2, TabResults = 3;
         const int PaneText = 0, PaneListener = 1, PaneLtspice = 2, PaneClock = 4;
 
         public MainForm()
@@ -79,6 +79,7 @@ namespace Spica.UI
 
             BuildChrome();
             BuildSetupPage();
+            BuildQualificationPage();
             BuildQueuePage();
             BuildResultsPage();
 
@@ -242,9 +243,11 @@ namespace Spica.UI
 
             tabs = new Win98TabControl { Dock = DockStyle.Fill };
             pageSetup = new Win98TabPage("Setup", Win98.Icon("options16"));
+            pageQual = new Win98TabPage("Qualification", Win98.Icon("check16"));
             pageQueue = new Win98TabPage("Queue", Win98.Icon("queue16"));
             pageResults = new Win98TabPage("Results", Win98.Icon("results16"));
             tabs.AddPage(pageSetup);
+            tabs.AddPage(pageQual);
             tabs.AddPage(pageQueue);
             tabs.AddPage(pageResults);
             tabs.SelectedIndexChanged += (s, e) =>

@@ -108,6 +108,19 @@ namespace Spica.Core
         /// <summary>Random parameters that are the circuit's input (its excitation), not tolerances; null = SPICA decides.</summary>
         public List<string> Inputs;
 
+        /// <summary>Qualification tab: per library (standard) its choices, nominal or Monte Carlo, the pass/fail criteria.</summary>
+        public readonly Dictionary<string, QualStdChoice> Qual = new Dictionary<string, QualStdChoice>(StringComparer.OrdinalIgnoreCase);
+        public bool QualNominal = true;
+        public int QualRuns = 100;
+        public List<string> QualPlot = new List<string>();    // more signals to save and plot with each test (V(out)...)
+        public List<QualCriterion> QualCriteria = new List<QualCriterion>();
+
+        public QualStdChoice QualOf(string library)
+        {
+            if (!Qual.TryGetValue(library ?? "", out var c)) Qual[library ?? ""] = c = new QualStdChoice();
+            return c;
+        }
+
         public bool Dirty;
 
         public SpecLimit Spec(string meas) => meas != null && Specs.TryGetValue(meas, out var s) ? s : null;
@@ -222,6 +235,33 @@ namespace Spica.Core
             sb.AppendLine("[Sensitivity]");
             sb.AppendLine("Inputs=" + (Inputs == null ? "auto" : string.Join(" | ", Inputs)));
             sb.AppendLine();
+            sb.AppendLine("[Qualification]");
+            sb.AppendLine("Nominal=" + (QualNominal ? 1 : 0));
+            sb.AppendLine("Runs=" + QualRuns.ToString(Inv));
+            if (QualPlot.Count > 0) sb.AppendLine("Plot=" + string.Join(" ", QualPlot));
+            foreach (var kv in Qual.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                sb.AppendLine();
+                sb.AppendLine($"[QualStandard {kv.Key}]");
+                sb.AppendLine("Category=" + kv.Value.Category);
+                sb.AppendLine("Net=" + kv.Value.Net);
+                sb.AppendLine("Rser=" + Num(kv.Value.Rser));
+                sb.AppendLine("Tests=" + string.Join(" | ", kv.Value.Tests));
+            }
+            foreach (var c in QualCriteria)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"[QualCriterion {c.Name}]");
+                sb.AppendLine("Signal=" + c.Signal);
+                sb.AppendLine("Lo=" + Num(c.Lo));
+                sb.AppendLine("Hi=" + Num(c.Hi));
+                sb.AppendLine("From=" + c.From);
+                sb.AppendLine("FromOffset=" + Num(c.FromOffset));
+                sb.AppendLine("To=" + c.To);
+                sb.AppendLine("ToOffset=" + Num(c.ToOffset));
+                sb.AppendLine("Tests=" + c.Tests);
+            }
+            sb.AppendLine();
             sb.AppendLine("[Report]");
             sb.AppendLine("Kind=" + Report.Kind);
             sb.AppendLine("Auto=" + (Report.Auto ? 1 : 0));
@@ -332,6 +372,43 @@ namespace Spica.Core
                     if (key.Equals("inputs", StringComparison.OrdinalIgnoreCase))
                         p.Inputs = val.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase) ? null : ReportOptions.Split(val);
                 }
+                else if (section.Equals("Qualification", StringComparison.OrdinalIgnoreCase))
+                {
+                    switch (key.ToLowerInvariant())
+                    {
+                        case "nominal": p.QualNominal = B(); break;
+                        case "runs": if (int.TryParse(val, NumberStyles.Integer, Inv, out var qr) && qr > 0) p.QualRuns = qr; break;
+                        case "plot": p.QualPlot = val.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).ToList(); break;
+                    }
+                }
+                else if (section.StartsWith("QualStandard ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var q = p.QualOf(section.Substring(13).Trim());
+                    switch (key.ToLowerInvariant())
+                    {
+                        case "category": q.Category = val; break;
+                        case "net": q.Net = val; break;
+                        case "rser": { var r = ParseNum(val); q.Rser = double.IsNaN(r) ? 0 : r; break; }
+                        case "tests": q.Tests = ReportOptions.Split(val); break;
+                    }
+                }
+                else if (section.StartsWith("QualCriterion ", StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = section.Substring(14).Trim();
+                    var c = p.QualCriteria.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (c == null) p.QualCriteria.Add(c = new QualCriterion { Name = name });
+                    switch (key.ToLowerInvariant())
+                    {
+                        case "signal": c.Signal = val; break;
+                        case "lo": c.Lo = ParseNum(val); break;
+                        case "hi": c.Hi = ParseNum(val); break;
+                        case "from": if (Enum.TryParse(val, true, out QualAnchor fa)) c.From = fa; break;
+                        case "fromoffset": { var o = ParseNum(val); c.FromOffset = double.IsNaN(o) ? 0 : o; break; }
+                        case "to": if (Enum.TryParse(val, true, out QualAnchor ta)) c.To = ta; break;
+                        case "tooffset": { var o = ParseNum(val); c.ToOffset = double.IsNaN(o) ? 0 : o; break; }
+                        case "tests": c.Tests = val; break;
+                    }
+                }
                 else if (section.Equals("Report", StringComparison.OrdinalIgnoreCase))
                 {
                     var ro = p.Report;
@@ -386,9 +463,11 @@ namespace Spica.Core
                 DesignSigma = DesignSigma, PessimisticSigma = PessimisticSigma, Errors = Errors.Select(e => e.Clone()).ToList(),
                 Report = Report.Clone(),
                 Inputs = Inputs == null ? null : new List<string>(Inputs),
+                QualNominal = QualNominal, QualRuns = QualRuns, QualPlot = new List<string>(QualPlot), QualCriteria = QualCriteria.Select(x => x.Clone()).ToList(),
                 Tf = new TfSetup { X = Tf.X, Y = Tf.Y, Theory = Tf.Theory, Budget = Tf.Budget, BudgetPercent = Tf.BudgetPercent, K = Tf.K },
             };
             foreach (var kv in Specs) c.Specs[kv.Key] = new SpecLimit { Lsl = kv.Value.Lsl, Usl = kv.Value.Usl };
+            foreach (var kv in Qual) c.Qual[kv.Key] = kv.Value.Clone();
             return c;
         }
 

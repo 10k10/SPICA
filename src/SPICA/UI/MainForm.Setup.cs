@@ -458,6 +458,7 @@ namespace Spica.UI
                 UpdateAnalysisUi();
             }
             finally { loadingUi = false; }
+            ShowQualification();
             UpdateTitle();
         }
 

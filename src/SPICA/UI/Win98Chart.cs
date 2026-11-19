@@ -9,7 +9,7 @@ using System.Windows.Forms;
 
 namespace Spica.UI
 {
-    public enum SeriesKind { Bars, Points, Line, VLine, HLine, ErrorBars, HBars }
+    public enum SeriesKind { Bars, Points, Line, VLine, HLine, ErrorBars, HBars, Span }
 
     public sealed class ChartSeries
     {
@@ -20,6 +20,8 @@ namespace Spica.UI
         public double[] Lo, Hi;              // ErrorBars: lower / upper ends
         public double[] Edges;               // Bars: bin edges (X.Length + 1), Y = heights
                                              // HBars: X = bar lengths, bar i on category row i (YCategories)
+                                             // Span: X = pairs (from, to) of shaded time bands, full height
+                                             // Line: a NaN in Y breaks the line
         public Color NegColor = Win98Chart.Maroon;   // HBars: colour of negative bars
         public bool Dashed;
         public int Size = 3;                 // point size / line width
@@ -45,6 +47,7 @@ namespace Spica.UI
 
         public readonly List<ChartSeries> Series = new List<ChartSeries>();
         public string Title = "", XLabel = "", YLabel = "";
+        public Color TitleColor = Color.Black;
         public string EmptyText = "No data.";
         public bool YFromZero;
         /// <summary>Category names for HBars: row i is labelled YCategories[i], top to bottom.</summary>
@@ -100,7 +103,7 @@ namespace Spica.UI
             plot = Rectangle.FromLTRB(left, top, Math.Max(left + 10, right), Math.Max(top + 10, bottom));
 
             if (Title.Length > 0)
-                TextRenderer.DrawText(g, Title, Win98.BoldFont, new Rectangle(bounds.Left, bounds.Top + 4, bounds.Width, 16), Color.Black, TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis);
+                TextRenderer.DrawText(g, Title, Win98.BoldFont, new Rectangle(bounds.Left, bounds.Top + 4, bounds.Width, 16), TitleColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis);
 
             DrawAxes(g, bounds);
             var oldClip = g.Clip;
@@ -138,7 +141,7 @@ namespace Spica.UI
                         foreach (var v in s.Y) Y(v);
                         Y(0);
                         break;
-                    case SeriesKind.VLine: foreach (var v in s.X) X(v); break;
+                    case SeriesKind.VLine: case SeriesKind.Span: foreach (var v in s.X) X(v); break;
                     case SeriesKind.HBars: foreach (var v in s.X) X(v); X(0); break;
                     case SeriesKind.HLine: foreach (var v in s.Y) Y(v); break;
                     default:
@@ -158,6 +161,7 @@ namespace Spica.UI
             x0 = xa - px; x1 = xb + px;
             y0 = (YFromZero && ya >= 0) ? 0 : ya - py; y1 = yb + py;
             if (YCategories != null) { y0 = YCategories.Length - 0.4; y1 = -0.6; }   // row 0 at the top
+            if (FixedX.HasValue && FixedX.Value.Value > FixedX.Value.Key) { x0 = FixedX.Value.Key; x1 = FixedX.Value.Value; }
             if (view.HasValue) { var v = view.Value; x0 = v.X0; x1 = v.X1; y0 = v.Y0; y1 = v.Y1; }
         }
 
@@ -256,12 +260,25 @@ namespace Spica.UI
                     {
                         var pts = new List<PointF>();
                         int n = Math.Min(s.X.Length, s.Y.Length);
-                        for (int i = 0; i < n; i++) if (Ok(s.X[i]) && Ok(s.Y[i])) pts.Add(new PointF(MapX(s.X[i]), MapY(s.Y[i])));
-                        if (pts.Count > 1)
-                            using (var p = new Pen(s.Color, Math.Max(1, s.Size == 3 ? 1 : s.Size)) { DashStyle = s.Dashed ? DashStyle.Dash : DashStyle.Solid })
-                                g.DrawLines(p, pts.ToArray());
+                        using (var p = new Pen(s.Color, Math.Max(1, s.Size == 3 ? 1 : s.Size)) { DashStyle = s.Dashed ? DashStyle.Dash : DashStyle.Solid })
+                            for (int i = 0; i <= n; i++)
+                            {
+                                if (i < n && Ok(s.X[i]) && Ok(s.Y[i])) { pts.Add(new PointF(MapX(s.X[i]), MapY(s.Y[i]))); continue; }
+                                if (i < n && !Ok(s.X[i])) continue;       // a NaN time is skipped, a NaN value breaks the line
+                                if (pts.Count > 1) g.DrawLines(p, pts.ToArray());
+                                pts.Clear();
+                            }
                         break;
                     }
+                case SeriesKind.Span:
+                    using (var b = new SolidBrush(s.Color))
+                        for (int i = 0; i + 1 < s.X.Length; i += 2)
+                        {
+                            if (!Ok(s.X[i]) || !Ok(s.X[i + 1])) continue;
+                            float a = MapX(Math.Min(s.X[i], s.X[i + 1])), c = MapX(Math.Max(s.X[i], s.X[i + 1]));
+                            g.FillRectangle(b, a, plot.Top, Math.Max(1, c - a), plot.Height);
+                        }
+                    break;
                 case SeriesKind.VLine:
                     using (var p = new Pen(s.Color, 1) { DashStyle = s.Dashed ? DashStyle.Dash : DashStyle.Solid })
                         foreach (var v in s.X) if (Ok(v)) { float x = MapX(v); g.DrawLine(p, x, plot.Top, x, plot.Bottom); }
@@ -326,7 +343,7 @@ namespace Spica.UI
                 using (var b = new SolidBrush(s.Color))
                 using (var p = new Pen(s.Color) { DashStyle = s.Dashed ? DashStyle.Dash : DashStyle.Solid })
                 {
-                    if (s.Kind == SeriesKind.Bars) { g.FillRectangle(b, sw); g.DrawRectangle(Pens.Black, sw); }
+                    if (s.Kind == SeriesKind.Bars || s.Kind == SeriesKind.Span) { g.FillRectangle(b, sw); g.DrawRectangle(Pens.Black, sw); }
                     else if (s.Kind == SeriesKind.Points || s.Kind == SeriesKind.ErrorBars) g.FillRectangle(b, sw.X + 6, sw.Y + 2, 5, 5);
                     else g.DrawLine(p, sw.Left, sw.Top + 4, sw.Right, sw.Top + 4);
                 }

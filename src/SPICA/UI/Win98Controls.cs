@@ -486,6 +486,15 @@ namespace Spica.UI
             PerformLayout();
         }
 
+        /// <summary>Takes every page out (they are disposed), e.g. to build them again.</summary>
+        public void ClearPages()
+        {
+            foreach (var p in pages) { Controls.Remove(p); p.Dispose(); }
+            pages.Clear();
+            selected = 0;
+            Invalidate();
+        }
+
         public int SelectedIndex
         {
             get => selected;

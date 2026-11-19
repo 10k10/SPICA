@@ -31,10 +31,40 @@ namespace Spica.UI
 
         public bool IsZoomed => view.HasValue;
 
+        /// <summary>The time axis of a chart linked to others (stacked plots): set by <see cref="LinkX"/>, null = its own data.</summary>
+        public KeyValuePair<double, double>? FixedX;
+
+        /// <summary>Raised when the user zooms, pans or resets this chart, so that linked charts follow its X range.</summary>
+        public event EventHandler XViewChanged;
+
+        public double ViewX0 => x0;
+        public double ViewX1 => x1;
+
+        /// <summary>Shows the X range of another chart (null = back to the data), keeping this chart's own Y zoom.</summary>
+        public void LinkX(double? a, double? b)
+        {
+            if (a.HasValue && b.HasValue && b.Value > a.Value)
+            {
+                FixedX = new KeyValuePair<double, double>(a.Value, b.Value);
+                if (view.HasValue) { var v = view.Value; v.X0 = a.Value; v.X1 = b.Value; view = v; }
+            }
+            else { FixedX = null; view = null; }
+            Invalidate();
+        }
+
+        void ViewReset()
+        {
+            view = null;
+            FixedX = null;
+            Invalidate();
+            XViewChanged?.Invoke(this, EventArgs.Empty);
+        }
+
         /// <summary>Back to the full data range with every series shown.</summary>
         public void ResetView()
         {
             view = null;
+            FixedX = null;
             hiddenLabels.Clear();
             Invalidate();
         }
@@ -54,7 +84,9 @@ namespace Spica.UI
             // y may run downwards (category rows), so only a collapsed or broken range is refused
             if (!(xb > xa) || !(Math.Abs(yb - ya) > 0) || double.IsInfinity(xb - xa) || double.IsInfinity(yb - ya)) return;
             view = new View { X0 = xa, X1 = xb, Y0 = ya, Y1 = yb };
+            x0 = xa; x1 = xb;
             Invalidate();
+            XViewChanged?.Invoke(this, EventArgs.Empty);
         }
 
         // ------------------------------------------------------------------ mouse
@@ -144,7 +176,7 @@ namespace Spica.UI
         protected override void OnMouseDoubleClick(MouseEventArgs e)
         {
             base.OnMouseDoubleClick(e);
-            if (e.Button == MouseButtons.Left && !legendHits.Any(h => h.Key.Contains(e.Location))) { view = null; Invalidate(); }
+            if (e.Button == MouseButtons.Left && !legendHits.Any(h => h.Key.Contains(e.Location))) ViewReset();
         }
 
         protected override void OnMouseLeave(EventArgs e)
@@ -174,7 +206,7 @@ namespace Spica.UI
             if (menu == null)
             {
                 menu = new ContextMenuStrip();
-                menu.Items.Add("&Reset zoom", null, (s, e) => { view = null; Invalidate(); });
+                menu.Items.Add("&Reset zoom", null, (s, e) => ViewReset());
                 menu.Items.Add("&Show all series", null, (s, e) => { hiddenLabels.Clear(); Invalidate(); });
                 menu.Items.Add(new ToolStripSeparator());
                 menu.Items.Add("&Copy image", null, (s, e) => { using (var b = ToBitmap(Math.Max(200, Width), Math.Max(150, Height))) Clipboard.SetImage(b); });
@@ -185,7 +217,7 @@ namespace Spica.UI
                 Win98Renderer.Apply(menu);
                 Win98Renderer.StyleDropDowns(menu.Items);
             }
-            menu.Items[0].Enabled = view.HasValue;
+            menu.Items[0].Enabled = view.HasValue || FixedX.HasValue;
             menu.Items[1].Enabled = hiddenLabels.Count > 0;
             menu.Show(this, at);
         }

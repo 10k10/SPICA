@@ -2424,33 +2424,56 @@ namespace Spica.UI
             var sb = new StringBuilder();
             sb.Append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
               .Append($"<title>{H(title)} - SPICA report</title><style>")
-              .Append("body{margin:0;background:#fff;color:#000;font:13px/1.4 Arial,Helvetica,sans-serif;counter-reset:h2}")
-              .Append(".page{max-width:900px;margin:0 auto;padding:32px 44px 20px}")
-              .Append("header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #000080;padding-bottom:8px}")
-              .Append("header .kind{font-size:12px;font-weight:bold;color:#000080;text-transform:uppercase;letter-spacing:.04em}")
-              .Append("h1{margin:2px 0 3px;font-size:24px}header .sub{font-size:12px;color:#333}")
-              .Append(".mark{text-align:center;font:bold 11px Arial,sans-serif;letter-spacing:.12em;color:#000080;margin-left:24px}")
-              .Append(".mark img{display:block;width:48px;height:48px;margin:0 auto 2px;image-rendering:pixelated}")
-              .Append("h2{font-size:16px;margin:30px 0 8px;padding-bottom:2px;border-bottom:1px solid #000080;counter-increment:h2;counter-reset:h3}")
-              .Append("h2::before{content:counter(h2) \"  \";color:#000080}")
-              .Append("h3{font-size:14px;margin:20px 0 6px;counter-increment:h3}h3::before{content:counter(h2) \".\" counter(h3) \"  \";color:#000080}")
-              .Append("h3.plain::before{content:none}")
-              .Append("table{border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;margin:6px 0 8px}")
-              .Append("th,td{border:1px solid #9a9a9a;padding:3px 8px;text-align:right;white-space:nowrap}")
-              .Append("th{background:#e4e4e4;font-weight:bold;text-align:center}td:first-child{text-align:left}")
-              .Append("table.kv td{text-align:left;white-space:normal;vertical-align:top}table.kv td:first-child{background:#f0f0f0;font-weight:bold;white-space:nowrap}")
-              .Append("table.fig{min-width:65%}table.fig td:nth-child(2){font-weight:bold;white-space:nowrap}table.fig td:nth-child(3){color:#333}")
-              .Append(".memo{white-space:pre-wrap;margin:4px 0 0;padding:6px 10px;border:1px solid #9a9a9a}.warn{color:#b00000}td.hash{font:11px Consolas,monospace;color:#333}")
-              .Append(".verdict{font-weight:bold;margin:8px 0 4px}")
-              .Append(".wide{overflow-x:auto}.note{color:#222;font-size:12px;margin:4px 0 8px}ul.notes{margin:6px 0 10px;padding-left:20px}")
-              .Append("figure{margin:14px 0 18px}figure svg{display:block;width:100%;height:auto}")
-              .Append("figcaption{font-size:12px;margin-top:4px}")
-              .Append("pre{padding:6px 10px;margin:8px 0;border:1px solid #c8c8c8;background:#fafafa;font:12px/1.35 Consolas,'Courier New',monospace;white-space:pre-wrap}")
-              .Append("nav{margin:14px 0}nav b{color:#000080;text-transform:uppercase;font-size:12px}nav ol{columns:2;margin:4px 0 0;padding-left:4px;list-style:none}nav a{color:#000;text-decoration:none}")
-              .Append("footer{margin-top:36px;padding-top:5px;border-top:1px solid #000080;font-size:11px;color:#333;display:flex;justify-content:space-between}")
-              .Append("@media print{.page{margin:0;max-width:none;padding:0}nav{display:none}")
-              .Append("section.meas" + (concise ? ",section.err+section.err" : "") + "{break-before:page}figure,pre,table{break-inside:avoid}}")
+              // a sheet on a grey desk: bounded like a document on screen, plain A4 when printed
+              .Append("html{background:#e4e5e9}body{margin:0;color:#111;font:13px/1.45 Arial,Helvetica,sans-serif}")
+              .Append(".page{box-sizing:border-box;max-width:880px;margin:28px auto;padding:40px 56px 28px;background:#fff;border:1px solid #c3c5cc;box-shadow:0 2px 12px rgba(0,0,0,.12)}")
+              .Append("header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #000080;padding-bottom:10px;margin-bottom:18px}")
+              .Append("header .kind{font-size:11px;font-weight:bold;color:#000080;text-transform:uppercase;letter-spacing:.08em}")
+              .Append("h1{margin:3px 0 4px;font-size:24px;line-height:1.2}header .sub{font-size:12px;color:#444}")
+              .Append(".mark{text-align:center;font:bold 10px Arial,sans-serif;letter-spacing:.14em;color:#000080;margin-left:24px;flex:none}")
+              .Append(".mark img{display:block;width:44px;height:44px;margin:0 auto 3px;image-rendering:pixelated}")
+              .Append("h2{font-size:17px;margin:36px 0 12px;padding-bottom:4px;border-bottom:1.5px solid #000080}")
+              .Append("h3{font-size:14px;margin:26px 0 8px}h2 .no,h3 .no{color:#000080;display:inline-block;min-width:2.4em}h3 .no{min-width:3em}")
+              .Append("p{margin:8px 0}")
+              // tables: full width, rules between rows, numbers right-aligned, text left
+              .Append("table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;margin:8px 0 14px}")
+              .Append("th,td{padding:4px 8px;border-bottom:1px solid #dcdee4;text-align:right;vertical-align:top}td{white-space:nowrap}")
+              .Append("th{background:#eef0f5;border-top:1px solid #9ca1b3;border-bottom:1px solid #9ca1b3;font-weight:bold;line-height:1.25;vertical-align:bottom}")
+              .Append("th:first-child,td:first-child,.t{text-align:left}table tr:last-child td{border-bottom:1px solid #9ca1b3}")
+              .Append("table:not(.kv) tr:nth-child(odd) td{background:#f8f9fb}")
+              .Append("table.dense{font-size:11px}table.dense th,table.dense td{padding:3px 5px}")
+              .Append("table.kv{border-top:1px solid #9ca1b3}table.kv td{text-align:left;white-space:normal;overflow-wrap:anywhere}")
+              .Append("table.kv td:first-child{width:150px;background:#f3f4f7;font-weight:bold;white-space:nowrap;overflow-wrap:normal}")
+              .Append("table.fig td:nth-child(2){width:190px;font-weight:bold;white-space:nowrap}table.fig td:nth-child(3){color:#444}")
+              .Append("table.stats{table-layout:fixed;border-top:1px solid #9ca1b3}table.stats th{background:none;border-top:0;text-align:left;font-size:11px;color:#555;font-weight:normal}")
+              .Append("table.stats td{text-align:left;font-size:14px;font-weight:bold;background:none!important;padding-bottom:6px}table.stats td small{display:block;font-size:11px;font-weight:normal;color:#555}")
+              .Append(".lbl{margin:16px 0 2px;font-size:11px;font-weight:bold;color:#555;text-transform:uppercase;letter-spacing:.05em}")
+              .Append(".memo{white-space:pre-wrap;margin:4px 0 0;padding:8px 12px;border:1px solid #dcdee4;background:#fafbfc}.warn{color:#b00000}td.hash{font:11px Consolas,monospace;color:#333}")
+              .Append(".verdict{font-weight:bold;margin:10px 0 16px;padding:7px 12px;border-left:4px solid currentColor;background:#f5f6f8}")
+              .Append(".wide{overflow-x:auto}.note{color:#333;font-size:12px;margin:6px 0 10px}ul.notes{margin:8px 0 12px;padding-left:20px}ul.notes li{margin:3px 0}")
+              .Append("figure{margin:18px 0 22px}figure svg{display:block;width:100%;height:auto}")
+              .Append("figcaption{font-size:12px;color:#222;margin-top:6px}")
+              .Append("pre{padding:8px 12px;margin:10px 0 14px;border:1px solid #dcdee4;border-left:3px solid #9ca1b3;background:#f8f9fb;font:11.5px/1.4 Consolas,'Courier New',monospace;white-space:pre-wrap;overflow-wrap:anywhere}")
+              .Append("nav{margin:20px 0 8px;padding:10px 16px 12px;border:1px solid #dcdee4;background:#fafbfc}nav b{color:#000080;text-transform:uppercase;font-size:11px;letter-spacing:.08em}")
+              .Append("nav ol{columns:2;column-gap:36px;margin:6px 0 0;padding:0;list-style:none}nav li{break-inside:avoid;padding:1px 0}nav li.sub{padding-left:2.4em}")
+              .Append("nav a{color:#111;text-decoration:none}nav a:hover{text-decoration:underline}nav .no{color:#000080;display:inline-block;min-width:2.4em}nav li.sub .no{min-width:3em}")
+              .Append("footer{margin-top:40px;padding-top:6px;border-top:1px solid #000080;font-size:11px;color:#444;display:flex;justify-content:space-between;gap:16px}")
+              .Append("@page{size:A4;margin:14mm 14mm 16mm}")
+              .Append("@media print{html{background:none}.page{max-width:none;margin:0;padding:0;border:0;box-shadow:none}nav{display:none}")
+              .Append("*{-webkit-print-color-adjust:exact;print-color-adjust:exact}h2,h3{break-after:avoid}figure,pre,table,.verdict{break-inside:avoid}")
+              // paper does not scroll: wide tables wrap their cells instead
+              .Append(".wide{overflow:visible}td{white-space:normal}table.dense{font-size:10px}table.dense th,table.dense td{padding:3px 4px}}")
               .Append("</style></head><body><div class=\"page\">");
+
+            // section numbers written out, as the contents list shows them
+            int n2 = 0, n3 = 0;
+            string Head(string tag, string id, string text)
+            {
+                string no;
+                if (tag == "h2") { no = (++n2).ToString(Inv); n3 = 0; }
+                else no = $"{n2}.{++n3}";
+                return $"<{tag}{(id != null ? $" id=\"{id}\"" : "")}><span class=\"no\">{no}</span>{H(text)}</{tag}>";
+            }
 
             // ---------------------------------------------------------------- header + campaign
             sb.Append($"<header><div><div class=\"kind\">{(concise ? "Error budget" : "Analysis report")}</div><h1>{H(title)}</h1>")
@@ -2458,7 +2481,7 @@ namespace Spica.UI
               .Append("</div><div class=\"mark\">").Append(AppMark()).Append("S.P.I.C.A.</div></header>");
 
             if (!string.IsNullOrWhiteSpace(o.Notes))
-                sb.Append("<h3 class=\"plain\">Notes</h3><p class=\"memo\">").Append(H(o.Notes.Trim())).Append("</p>");
+                sb.Append("<p class=\"lbl\">Notes</p><p class=\"memo\">").Append(H(o.Notes.Trim())).Append("</p>");
 
             sb.Append("<table class=\"kv\">");
             void Row(string k, string v) => sb.Append($"<tr><td>{H(k)}</td><td>{H(v)}</td></tr>");
@@ -2481,12 +2504,13 @@ namespace Spica.UI
             {
                 // numbered as the headings are (h2 = 1, 2, ...; the errors of the full report are 1.1, 1.2, ...)
                 int sec = 0;
-                void Toc(string id, string text, string no = null) => sb.Append($"<li><a href=\"#{id}\">{no ?? (++sec).ToString(Inv)}&nbsp;&nbsp;{H(text)}</a></li>");
+                void Toc(string id, string text, string no = null) =>
+                    sb.Append($"<li{(no != null ? " class=\"sub\"" : "")}><a href=\"#{id}\"><span class=\"no\">{no ?? (++sec).ToString(Inv)}</span>{H(text)}</a></li>");
                 sb.Append("<nav><b>Contents</b><ol>");
                 if (hasBudget) Toc("budget", "Error budget");
                 int top = sec;
                 for (int j = 0; j < res.Count; j++)
-                    if (concise) Toc("e" + j, res[j].Item.Name); else Toc("e" + j, res[j].Item.Name, $"&nbsp;&nbsp;{top}.{j + 1}");
+                    if (concise) Toc("e" + j, res[j].Item.Name); else Toc("e" + j, res[j].Item.Name, $"{top}.{j + 1}");
                 if (showSummary) Toc("summary", "Summary");
                 foreach (var m in meas) Toc("m" + rs.Meas.IndexOf(m), m);
                 if (hasTf) Toc("tf", "Transfer function");
@@ -2498,14 +2522,14 @@ namespace Spica.UI
             if (hasBudget)
             {
                 int pass = res.Count(r => r.Verdict == "PASS"), fail = res.Count(r => r.Verdict == "FAIL"), check = res.Count(r => r.Verdict == "CHECK");
-                sb.Append("<h2 id=\"budget\">Error budget</h2>");
+                sb.Append(Head("h2", "budget", "Error budget"));
                 sb.Append($"<p>Criterion: mean ± {kk} σ inside the boundaries at every temperature and across the input range. " +
                           $"Result: {pass} pass, {fail} fail, {check} to check (not bell-shaped).</p>");
                 if (res.Count > 1 || !concise)
                 {
-                    sb.Append("<div class=\"wide\"><table><tr>");
+                    sb.Append("<div class=\"wide\"><table class=\"dense\"><tr>");
                     foreach (var h in new[] { "Error", "Verdict", "Margin", $"Mean ± {kk}σ", "Boundaries", "Mean", "Sigma", "Normality p", "Worst point", "n" })
-                        sb.Append($"<th>{H(h)}</th>");
+                        sb.Append($"<th{(h == "Verdict" || h == "Worst point" ? " class=\"t\"" : "")}>{H(h)}</th>");
                     sb.Append("</tr>");
                     foreach (var r in res)
                     {
@@ -2515,7 +2539,8 @@ namespace Spica.UI
                             r.Item.Name, r.Verdict, r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "", $"{u(r.Lo)} .. {u(r.Hi)}", r.Item.BoundsText(),
                             u(r.Worst.Mean), u(r.Sigma), MeasStats.P(r.AdP), r.Slices.Count > 1 ? r.Worst.Label : "", r.N.ToString(Inv),
                         };
-                        sb.Append("<tr>").Append(string.Concat(cells.Select((c, j) => j == 1 ? $"<td style=\"color:{HtmlVerdict(r.Verdict)};font-weight:bold;text-align:left\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
+                        sb.Append("<tr>").Append(string.Concat(cells.Select((c, j) => j == 1 ? $"<td class=\"t\" style=\"color:{HtmlVerdict(r.Verdict)};font-weight:bold\">{H(c)}</td>"
+                                    : j == 8 ? $"<td class=\"t\">{H(c)}</td>" : $"<td>{H(c)}</td>"))).Append("</tr>");
                     }
                     sb.Append("</table></div>");
                 }
@@ -2527,19 +2552,20 @@ namespace Spica.UI
                 using (var cb = new Win98Chart())
                 using (var cs = new Win98Chart())
                     for (int j = 0; j < res.Count; j++)
-                        BudgetBlock(sb, res[j], j, cb, cs, concise, H, Fig, Card);
+                        BudgetBlock(sb, res[j], j, cb, cs, concise, H, Fig, Card, Head);
             }
 
             // ---------------------------------------------------------------- summary tables
             if (showSummary)
             {
-                sb.Append("<h2 id=\"summary\">Summary</h2>");
+                sb.Append(Head("h2", "summary", "Summary"));
+                sb.Append("<p class=\"note\">P0.135 % and P99.865 % bound the central 99.73 % (&plusmn;3&sigma; for a normal distribution). Normality p is the Anderson-Darling test.</p>");
                 for (int g = 0; g < groups.Count; g++)
                 {
-                    if (groups.Count > 1) sb.Append($"<h3>{H(groups[g])}</h3>");
+                    if (groups.Count > 1) sb.Append(Head("h3", null, groups[g]));
                     var stats = meas.Select(m => MeasStats.Of(m, groups[g], rs.Values(m, g), st.Spec(m))).ToList();
 
-                    sb.Append("<div class=\"wide\"><table><tr>");
+                    sb.Append("<div class=\"wide\"><table class=\"dense\"><tr>");
                     foreach (var h in new[] { "Measurement", "n", "Mean", "Std dev", "Min", "Max", "Median", "P0.135 %", "P99.865 %", "Skew", "Ex. kurt", "Normality p" })
                         sb.Append($"<th>{H(h)}</th>");
                     sb.Append("</tr>");
@@ -2550,7 +2576,6 @@ namespace Spica.UI
                         sb.Append("<tr>").Append(string.Concat(cells.Select(c => $"<td>{H(c)}</td>"))).Append("</tr>");
                     }
                     sb.Append("</table></div>");
-                    sb.Append("<p class=\"note\">P0.135 % and P99.865 % bound the central 99.73 % (&plusmn;3&sigma; for a normal distribution). Normality p is the Anderson-Darling test.</p>");
 
                     if (anySpec)
                     {
@@ -2576,12 +2601,14 @@ namespace Spica.UI
             {
                 foreach (var m in meas)
                 {
-                    sb.Append($"<section class=\"meas\"><h2 id=\"m{rs.Meas.IndexOf(m)}\">{H(m)}</h2>");
+                    sb.Append("<section class=\"meas\">").Append(Head("h2", "m" + rs.Meas.IndexOf(m), m));
                     var s = BuildHistogram(c1, m, 0, true);
-                    sb.Append("<table class=\"kv fig\">").Append(Card("Runs", s.D.N.ToString(Inv))).Append(Card("Mean", Win98Chart.Fmt(s.D.Mean))).Append(Card("Std dev", Win98Chart.Fmt(s.D.Std)))
-                      .Append(Card("Bell-shaped", s.NormalOk ? "yes" : "no", "p = " + MeasStats.P(s.AdP)));
-                    if (s.Spec?.IsSet == true) sb.Append(Card("Yield", MeasStats.Pct(s.Cap.Yield))).Append(Card("Cpk", Num(s.Cap.Cpk, "0.000")));
-                    sb.Append("</table>");
+                    // the key figures side by side, label over value
+                    var keys = new List<(string, string, string)> { ("Runs", s.D.N.ToString(Inv), null), ("Mean", Win98Chart.Fmt(s.D.Mean), null),
+                        ("Std dev", Win98Chart.Fmt(s.D.Std), null), ("Bell-shaped", s.NormalOk ? "yes" : "no", "p = " + MeasStats.P(s.AdP)) };
+                    if (s.Spec?.IsSet == true) { keys.Add(("Yield", MeasStats.Pct(s.Cap.Yield), null)); keys.Add(("Cpk", Num(s.Cap.Cpk, "0.000"), null)); }
+                    sb.Append("<table class=\"stats\"><tr>").Append(string.Concat(keys.Select(x => $"<th>{H(x.Item1)}</th>"))).Append("</tr><tr>")
+                      .Append(string.Concat(keys.Select(x => $"<td>{H(x.Item2)}{(x.Item3 != null ? $"<small>{H(x.Item3)}</small>" : "")}</td>"))).Append("</tr></table>");
                     if (o.Histogram)
                     {
                         sb.Append(Fig(c1, $"Distribution of {m} over {s.D.N} runs" + (s.Spec?.IsSet == true ? ", with the specification limits." : ".")));
@@ -2595,7 +2622,7 @@ namespace Spica.UI
                         var top = sr.Items.Where(x => !x.IsInput && !double.IsNaN(x.Share)).Take(12).ToList();
                         if (top.Count > 0)
                         {
-                            sb.Append("<h3>Sensitivity</h3>");
+                            sb.Append(Head("h3", null, "Sensitivity"));
                             string cap = sr.Conditioned
                                 ? $"The input {string.Join(", ", sr.InputNames)} (the excitation, not a tolerance) explains {SensitivityReport.ShareText(sr.InputShare)} of the variance of {m} and is left out; " +
                                   $"the bars share the other {SensitivityReport.ShareText(1 - sr.InputShare)} (sigma {ErrorBudget.Eng(sr.RestStd)}) among the tolerances, counting effects that grow with the input."
@@ -2610,7 +2637,7 @@ namespace Spica.UI
 
                     if (o.Convergence)
                     {
-                        sb.Append("<h3>Convergence</h3>");
+                        sb.Append(Head("h3", null, "Convergence"));
                         string conv = BuildConvergence(c1, c2, m, 0);
                         sb.Append(Fig(c1, $"Running mean of {m} as runs were added.", 760, 240)).Append(Fig(c2, $"Running standard deviation of {m}.", 760, 240));
                         sb.Append(Pre(conv));
@@ -2619,23 +2646,23 @@ namespace Spica.UI
                     if (o.Temperature && rs.Mode == TempMode.Corners)
                     {
                         string t = BuildTempCorners(c1, new ListView(), m);
-                        sb.Append("<h3>Temperature</h3>").Append(Fig(c1, $"{m} at each temperature corner.")).Append(Pre(t));
+                        sb.Append(Head("h3", null, "Temperature")).Append(Fig(c1, $"{m} at each temperature corner.")).Append(Pre(t));
                     }
                     else if (o.Temperature && rs.Mode == TempMode.Random)
                     {
                         string t = BuildTempRandom(c1, new ListView(), m);
-                        sb.Append("<h3>Temperature</h3>").Append(Fig(c1, $"{m} against the random temperature of each run.")).Append(Pre(t));
+                        sb.Append(Head("h3", null, "Temperature")).Append(Fig(c1, $"{m} against the random temperature of each run.")).Append(Pre(t));
                     }
                     sb.Append("</section>");
                 }
 
                 if (hasTf)
                 {
-                    sb.Append($"<section class=\"meas\"><h2 id=\"tf\">Transfer function: {H(tf.Y)} vs {H(tf.X)}</h2>");
+                    sb.Append("<section class=\"meas\">").Append(Head("h2", "tf", $"Transfer function: {tf.Y} vs {tf.X}"));
                     for (int g = 0; g < groups.Count; g++)
                     {
                         var rep = BuildTf(c1, c2, tf, g);
-                        if (groups.Count > 1) sb.Append($"<h3>{H(groups[g])}</h3>");
+                        if (groups.Count > 1) sb.Append(Head("h3", null, groups[g]));
                         sb.Append(Fig(c1, $"{tf.Y} against {tf.X}.")).Append(Fig(c2, $"Residuals of {tf.Y} around the fitted line.", 760, 240)).Append(Pre(rep.Narrative()));
                         if (rs.Mode != TempMode.Corners) break;
                     }
@@ -2643,7 +2670,7 @@ namespace Spica.UI
                 }
             }
             // ---------------------------------------------------------------- traceability
-            sb.Append("<section><h2 id=\"trace\">Traceability</h2>");
+            sb.Append("<section>").Append(Head("h2", "trace", "Traceability"));
             sb.Append("<table class=\"kv\">");
             Row("Simulated", trace.When);
             if (trace.Status != null) Row("Status", trace.Status);
@@ -2654,9 +2681,9 @@ namespace Spica.UI
             sb.Append("</table>");
             if (trace.Files.Count > 0)
             {
-                sb.Append("<h3>Files in the source bundle</h3><div class=\"wide\"><table><tr><th>Kind</th><th>File</th><th>Bytes</th><th>SHA-256</th><th>Original</th></tr>");
+                sb.Append(Head("h3", null, "Files in the source bundle")).Append("<div class=\"wide\"><table><tr><th>Kind</th><th class=\"t\">File</th><th>Bytes</th><th class=\"t\">SHA-256</th><th class=\"t\">Original</th></tr>");
                 foreach (var f in trace.Files)
-                    sb.Append($"<tr><td>{H(f[0])}</td><td>{H(f[1])}</td><td>{H(f[2])}</td><td class=\"hash\">{H(f[3].Length > 16 ? f[3].Substring(0, 16) : f[3])}</td><td>{H(f[4])}</td></tr>");
+                    sb.Append($"<tr><td>{H(f[0])}</td><td class=\"t\">{H(f[1])}</td><td>{H(f[2])}</td><td class=\"hash t\">{H(f[3].Length > 16 ? f[3].Substring(0, 16) : f[3])}</td><td class=\"t\" style=\"white-space:normal;overflow-wrap:anywhere\">{H(f[4])}</td></tr>");
                 sb.Append("</table></div>");
             }
             if (trace.Missing.Count > 0)
@@ -2685,7 +2712,8 @@ namespace Spica.UI
         /// it, the histogram, the error across the input and temperature, what drives it.
         /// </summary>
         void BudgetBlock(StringBuilder sb, ErrorResult r, int j, Win98Chart cb, Win98Chart cs, bool concise,
-                         Func<string, string> H, Func<Win98Chart, string, int, int, string> Fig, Func<string, string, string, string, string, string> Card)
+                         Func<string, string> H, Func<Win98Chart, string, int, int, string> Fig, Func<string, string, string, string, string, string> Card,
+                         Func<string, string, string, string> Head)
         {
             var it = r.Item;
             string k = r.K.ToString("0.#", Inv);
@@ -2694,10 +2722,10 @@ namespace Spica.UI
             bool pctFs = it.Unit == BudgetUnit.PctFs;
             string hx = concise ? "h2" : "h3";
 
-            sb.Append($"<section class=\"err\"><{hx} id=\"e{j}\">{H(it.Name)}</{hx}>");
+            sb.Append("<section class=\"err\">").Append(Head(hx, "e" + j, it.Name));
 
             // the requirement, as entered
-            sb.Append("<p class=\"note\"><i>Requirement, as entered:</i></p><table class=\"kv\">");
+            sb.Append("<p class=\"lbl\">Requirement, as entered</p><table class=\"kv\">");
             void Req(string a, string b) => sb.Append($"<tr><td>{H(a)}</td><td>{H(b)}</td></tr>");
             Req("Error", it.UsesTf ? "error = " + it.Definition() : $"{it.Y}, computed by a .meas in LTspice");
             if (it.UsesTf) Req("Referred to", it.ReferToInput ? $"the input: divided by the ideal gain, in units of {it.X}" : $"the output, in units of {it.Y}");
@@ -2730,7 +2758,7 @@ namespace Spica.UI
             string Side(double sig, double m) => double.IsNaN(m) ? "open" : double.IsNaN(sig) ? "-" : sig.ToString("0.0", Inv) + " σ";
             string SideSub(double m) => double.IsNaN(m) ? "no boundary" : m >= 0 ? $"needs {k} σ: {u(m)} to spare" : $"needs {k} σ: short by {u(-m)}";
             string SideColor(double m) => double.IsNaN(m) ? null : m >= 0 ? "#006400" : "#a00000";
-            sb.Append("<p class=\"note\"><i>Result" + (r.Slices.Count > 1 ? $", at the worst point ({H(w.Label)}):" : ":") + "</i></p><table class=\"kv fig\">")
+            sb.Append("<p class=\"lbl\">Result" + (r.Slices.Count > 1 ? $", at the worst point ({H(w.Label)})" : "") + "</p><table class=\"kv fig\">")
               .Append(Card("Verdict", r.Verdict == "-" ? "no boundaries" : r.Verdict, r.Verdict == "-" ? null : $"at {k} σ", vc, null))
               .Append(Card("Margin", r.HasBudget ? r.MarginPct.ToString("0", Inv) + " %" : "-", "of half the allowed range", null, null))
               .Append(Card("Mean", u(w.Mean), (pctFs ? "= " + abs(w.Mean) + "; " : "") + (w.Modelled ? "from the fit" : ""), null, null))

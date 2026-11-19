@@ -27,10 +27,15 @@ namespace Spica.UI
         public string ToSvg(int w, int h)
         {
             var sb = new StringBuilder();
-            sb.Append($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\" ")
+            // the legend goes under the chart, in rows, so it never hides data: the picture grows by those rows
+            var legend = Series.Where(s => s.InLegend && !string.IsNullOrEmpty(s.Label)).ToList();
+            int left = YCategories != null ? (int)Math.Min(w / 3.0, YCategories.Select(c => TextWidth(c)).DefaultIfEmpty(0).Max() + 16) : 66;
+            int legendRows = LegendRows(legend, left, w - 16);
+            int H = h + (legendRows > 0 ? legendRows * 17 + 6 : 0);
+            sb.Append($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {H}\" width=\"{w}\" height=\"{H}\" ")
               .Append("font-family=\"Segoe UI, Tahoma, Arial, sans-serif\" font-size=\"11\" role=\"img\">");
             if (Title.Length > 0) sb.Append($"<title>{Esc(Title)}</title>");
-            sb.Append($"<rect width=\"{w}\" height=\"{h}\" fill=\"#fff\"/>");
+            sb.Append($"<rect width=\"{w}\" height=\"{H}\" fill=\"#fff\"/>");
 
             bool any = Series.Any(s => s.X.Length > 0 || (s.Edges != null && s.Edges.Length > 0));
             if (!any)
@@ -41,7 +46,6 @@ namespace Spica.UI
 
             ComputeRange();
             int top = Title.Length > 0 ? 30 : 12;
-            int left = YCategories != null ? (int)Math.Min(w / 3.0, YCategories.Select(c => TextWidth(c)).DefaultIfEmpty(0).Max() + 16) : 66;
             int right = w - 16, bottom = h - (XLabel.Length > 0 ? 44 : 28);
             plot = Rectangle.FromLTRB(left, top, Math.Max(left + 10, right), Math.Max(top + 10, bottom));
 
@@ -74,7 +78,7 @@ namespace Spica.UI
             for (int i = 0; i < Series.Count; i++) if (!IsHidden(i)) SvgSeries(sb, Series[i]);
             sb.Append("</g>");
             sb.Append($"<path d=\"M{plot.Left} {plot.Top}V{plot.Bottom}H{plot.Right}\" fill=\"none\" stroke=\"{AxisColor}\"/>");
-            SvgLegend(sb);
+            SvgLegend(sb, legend, h + 2);
             sb.Append("</svg>");
             return sb.ToString();
         }
@@ -120,13 +124,25 @@ namespace Spica.UI
                     {
                         int n = Math.Min(s.X.Length, s.Y.Length);
                         var pts = new StringBuilder();
-                        for (int i = 0; i < n; i++)
-                            if (Ok(s.X[i]) && Ok(s.Y[i])) pts.Append(N(MapX(s.X[i]))).Append(',').Append(N(MapY(s.Y[i]))).Append(' ');
                         double lw = s.Size == 3 ? 1.5 : Math.Max(1, s.Size);
-                        if (pts.Length > 0)
-                            sb.Append($"<polyline points=\"{pts.ToString().TrimEnd()}\" fill=\"none\" stroke=\"{col}\" stroke-width=\"{N(lw)}\" stroke-linejoin=\"round\"{Dash(s)}/>");
+                        for (int i = 0; i <= n; i++)
+                        {
+                            if (i < n && Ok(s.X[i]) && Ok(s.Y[i])) { pts.Append(N(MapX(s.X[i]))).Append(',').Append(N(MapY(s.Y[i]))).Append(' '); continue; }
+                            if (i < n && !Ok(s.X[i])) continue;       // a NaN value breaks the line
+                            if (pts.Length > 0)
+                                sb.Append($"<polyline points=\"{pts.ToString().TrimEnd()}\" fill=\"none\" stroke=\"{col}\" stroke-width=\"{N(lw)}\" stroke-linejoin=\"round\"{Dash(s)}/>");
+                            pts.Clear();
+                        }
                         break;
                     }
+                case SeriesKind.Span:
+                    for (int i = 0; i + 1 < s.X.Length; i += 2)
+                    {
+                        if (!Ok(s.X[i]) || !Ok(s.X[i + 1])) continue;
+                        double a = MapX(Math.Min(s.X[i], s.X[i + 1])), c = MapX(Math.Max(s.X[i], s.X[i + 1]));
+                        sb.Append($"<rect x=\"{N(a)}\" y=\"{plot.Top}\" width=\"{N(Math.Max(1, c - a))}\" height=\"{plot.Height}\" fill=\"{col}\"/>");
+                    }
+                    break;
                 case SeriesKind.VLine:
                     foreach (var v in s.X)
                         if (Ok(v)) { var x = N(MapX(v)); sb.Append($"<line x1=\"{x}\" y1=\"{plot.Top}\" x2=\"{x}\" y2=\"{plot.Bottom}\" stroke=\"{col}\" stroke-width=\"1.5\"{Dash(s)}/>"); }
@@ -155,23 +171,39 @@ namespace Spica.UI
             }
         }
 
-        void SvgLegend(StringBuilder sb)
+        static double LegendItemWidth(ChartSeries s) => 22 + TextWidth(s.Label) + 18;
+
+        /// <summary>Rows the legend takes when its items flow from <paramref name="x0"/> and wrap before <paramref name="x1"/>.</summary>
+        static int LegendRows(List<ChartSeries> items, double x0, double x1)
         {
-            var items = Series.Where(s => s.InLegend && !string.IsNullOrEmpty(s.Label)).ToList();
-            if (items.Count == 0) return;
-            double w = items.Max(s => TextWidth(s.Label)) + 36, h = items.Count * 16 + 8;
-            double x = plot.Right - w - 8, y = plot.Top + 8;
-            sb.Append($"<g><rect x=\"{N(x)}\" y=\"{N(y)}\" width=\"{N(w)}\" height=\"{N(h)}\" fill=\"#fff\" fill-opacity=\"0.92\" stroke=\"#cfcfcf\"/>");
-            double ly = y + 6;
+            if (items.Count == 0) return 0;
+            int rows = 1;
+            double x = x0;
             foreach (var s in items)
             {
+                double iw = LegendItemWidth(s);
+                if (x > x0 && x + iw > x1) { rows++; x = x0; }
+                x += iw;
+            }
+            return rows;
+        }
+
+        /// <summary>The legend as rows of items under the chart, starting at the plot's left edge.</summary>
+        void SvgLegend(StringBuilder sb, List<ChartSeries> items, double top)
+        {
+            if (items.Count == 0) return;
+            double x0 = plot.Left, x1 = plot.Right, x = x0, cy = top + 8;
+            sb.Append("<g>");
+            foreach (var s in items)
+            {
+                double iw = LegendItemWidth(s);
+                if (x > x0 && x + iw > x1) { x = x0; cy += 17; }
                 string col = Hex(s.Color);
-                double sx = x + 8, cy = ly + 6;
-                if (s.Kind == SeriesKind.Bars) sb.Append($"<rect x=\"{N(sx)}\" y=\"{N(cy - 5)}\" width=\"16\" height=\"10\" fill=\"{col}\" fill-opacity=\"0.85\"/>");
-                else if (s.Kind == SeriesKind.Points || s.Kind == SeriesKind.ErrorBars) sb.Append($"<circle cx=\"{N(sx + 8)}\" cy=\"{N(cy)}\" r=\"3.5\" fill=\"{col}\"/>");
-                else sb.Append($"<line x1=\"{N(sx)}\" y1=\"{N(cy)}\" x2=\"{N(sx + 16)}\" y2=\"{N(cy)}\" stroke=\"{col}\" stroke-width=\"2\"{Dash(s)}/>");
-                sb.Append($"<text x=\"{N(sx + 22)}\" y=\"{N(cy + 4)}\" fill=\"{Ink}\">{Esc(s.Label)}</text>");
-                ly += 16;
+                if (s.Kind == SeriesKind.Bars) sb.Append($"<rect x=\"{N(x)}\" y=\"{N(cy - 5)}\" width=\"16\" height=\"10\" fill=\"{col}\" fill-opacity=\"0.85\"/>");
+                else if (s.Kind == SeriesKind.Points || s.Kind == SeriesKind.ErrorBars) sb.Append($"<circle cx=\"{N(x + 8)}\" cy=\"{N(cy)}\" r=\"3.5\" fill=\"{col}\"/>");
+                else sb.Append($"<line x1=\"{N(x)}\" y1=\"{N(cy)}\" x2=\"{N(x + 16)}\" y2=\"{N(cy)}\" stroke=\"{col}\" stroke-width=\"2\"{Dash(s)}/>");
+                sb.Append($"<text x=\"{N(x + 22)}\" y=\"{N(cy + 4)}\" fill=\"{Ink}\">{Esc(s.Label)}</text>");
+                x += iw;
             }
             sb.Append("</g>");
         }

@@ -76,13 +76,25 @@ namespace Spica.Core
             return root.Eval(v);
         }
 
-        public static bool TryParse(string text, out Expr expr, out string error)
+        /// <summary>With named variables (the qualification library's category values); pi is always known.</summary>
+        public double Eval(IDictionary<string, double> vars)
+        {
+            var v = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase) { ["pi"] = Math.PI };
+            foreach (var kv in vars) v[kv.Key] = kv.Value;
+            return root.Eval(v);
+        }
+
+        /// <summary>
+        /// <paramref name="anyVariable"/>: any name is a variable (looked up at Eval), and a unit after a number is
+        /// ignored as SPICE does ("10ms", "28V"); otherwise only x, T and pi.
+        /// </summary>
+        public static bool TryParse(string text, out Expr expr, out string error, bool anyVariable = false)
         {
             expr = null; error = null;
             if (string.IsNullOrWhiteSpace(text)) { error = "empty expression"; return false; }
             try
             {
-                var p = new Parser(text);
+                var p = new Parser(text) { AnyVariable = anyVariable };
                 var n = p.ParseExpr();
                 p.SkipWs();
                 if (!p.End) throw new FormatException($"unexpected '{text.Substring(p.Pos)}'");
@@ -96,6 +108,7 @@ namespace Spica.Core
         {
             readonly string s;
             public int Pos;
+            public bool AnyVariable;
             public Parser(string text) { s = text; }
             public bool End => Pos >= s.Length;
             public void SkipWs() { while (Pos < s.Length && char.IsWhiteSpace(s[Pos])) Pos++; }
@@ -173,7 +186,7 @@ namespace Spica.Core
                         Pos++;
                         return new Call { F = id, Args = args };
                     }
-                    if (id != "x" && id != "t" && id != "pi") throw new FormatException($"unknown variable '{id}' (use x, T or pi)");
+                    if (!AnyVariable && id != "x" && id != "t" && id != "pi") throw new FormatException($"unknown variable '{id}' (use x, T or pi)");
                     return new Var { Name = id };
                 }
                 throw new FormatException(End ? "unexpected end" : $"unexpected '{s[Pos]}'");
@@ -208,7 +221,7 @@ namespace Spica.Core
                             case 'k': mul = 1e3; break;
                             case 'g': mul = 1e9; break;
                             case 't': mul = 1e12; break;
-                            default: Pos = ss; mul = 1; break;   // not a suffix: let the caller see it
+                            default: Pos = AnyVariable ? Pos : ss; mul = 1; break;   // not a suffix: a unit, or let the caller see it
                         }
                     v *= mul;
                 }

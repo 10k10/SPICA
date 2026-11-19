@@ -42,6 +42,19 @@ namespace Spica.Core
             return n;
         }
 
+        /// <summary>
+        /// The same circuit with other lines (a qualification test's source, .tran and .meas): analysed again,
+        /// the op-amp models already in the lines are kept as they are.
+        /// </summary>
+        public Netlist WithLines(IEnumerable<string> lines)
+        {
+            var n = new Netlist { SourcePath = SourcePath, Encoding = Encoding };
+            n.Lines.AddRange(lines);
+            n.Analyze();
+            n.OpAmpInstances = new List<string>(OpAmpInstances);
+            return n;
+        }
+
         // ------------------------------------------------------------------ analysis
 
         static readonly HashSet<string> AnalysisWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

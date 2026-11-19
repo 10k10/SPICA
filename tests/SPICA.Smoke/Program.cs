@@ -197,6 +197,164 @@ static class Program
             }
             return bad;
         }
+        if (args.Length > 0 && args[0] == "--qual")
+        {
+            // the default DO-160G library: every test of every category gives a waveform; the step language's checks
+            var lib = QualLibrary.Parse(QualLibrary.Do160G28Vdc);
+            int bad = lib.Problems.Count;
+            foreach (var pr in lib.Problems) Console.WriteLine("PROBLEM " + pr);
+            foreach (var cat in lib.CategoryOrder)
+            {
+                var vars = lib.Variables(cat);
+                foreach (var t in lib.TestsFor(cat))
+                {
+                    var w = QualLibrary.Waveform(t, vars, out var err);
+                    bool inc = w.Zip(w.Skip(1), (a, b) => b[0] > a[0]).All(x => x);
+                    if (err != null || !inc) bad++;
+                    Console.WriteLine($"{(err == null && inc ? "ok   " : "WRONG")} {cat} {t.Name}: {(err ?? $"{w.Count} points, {w[w.Count - 1][0]:0.###} s, {w.Min(p => p[1]):0.#} .. {w.Max(p => p[1]):0.#} V")}");
+                }
+            }
+            var demo = new QualTest { Steps = "start 28V; hold 10ms; to 0 in 1m; hold 5m; repeat 2 ( jump 40; hold 1m; jump 28; hold 2m )" };
+            var dw = QualLibrary.Waveform(demo, new System.Collections.Generic.Dictionary<string, double>(), out var derr);
+            Console.WriteLine("demo: " + (derr ?? QualLibrary.PwlValue(dw)));
+            foreach (var wrong in new[] { "hold -1", "start 28; jump", "repeat 2 ( hold 1m", "fly 3", "start 28; start 20; hold 1", "hold Vbogus" })
+            {
+                QualLibrary.Waveform(new QualTest { Steps = wrong }, new System.Collections.Generic.Dictionary<string, double> { ["Vnom"] = 28 }, out var e2);
+                if (e2 == null) bad++;
+                Console.WriteLine($"{(e2 != null ? "ok   " : "WRONG")} rejects '{wrong}': {e2}");
+            }
+            return bad;
+        }
+        if (args.Length > 1 && args[0] == "--critform")
+        {
+            // Qualification > Pass / Fail > Add: the criterion dialog, new and with a range
+            var t = new Thread(() =>
+            {
+                var sig = new System.Collections.Generic.List<string> { "V(bulk)", "V(in)", "I(Rload)" };
+                foreach (var (c, name) in new[] { ((QualCriterion)null, "new"), (new QualCriterion { Name = "recovered", Signal = "V(bulk)", Lo = 26, Hi = 28, From = QualAnchor.EventEnd, FromOffset = 0.05 }, "range") })
+                    using (var f = new Spica.UI.QualCriterionForm(c, sig, new string[0]))
+                    {
+                        f.Show();
+                        for (int k = 0; k < 10; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                        using (var bmp = new System.Drawing.Bitmap(f.Width, f.Height))
+                        {
+                            f.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f.Width, f.Height));
+                            bmp.Save(args[1].Replace(".png", "_" + name + ".png"));
+                        }
+                        f.Close();
+                    }
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            return 0;
+        }
+        if (args.Length > 2 && args[0] == "--qualrun")
+        {
+            // Qualification end to end: <asc> <png> [mc]: the supply net, tests, criteria, run in the queue, the verdicts
+            int bad = 0;
+            var t = new Thread(() =>
+            {
+                var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]), Width = 1280, Height = 860 };
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var mf = typeof(Spica.UI.MainForm);
+                object Get(string f) => mf.GetField(f, flags).GetValue(form);
+                void Call(string m) => mf.GetMethod(m, flags, null, Type.EmptyTypes, null).Invoke(form, null);
+                void Shot(string name)
+                {
+                    for (int k = 0; k < 15; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                    using (var bmp = new System.Drawing.Bitmap(form.Width, form.Height))
+                    {
+                        form.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, form.Width, form.Height));
+                        bmp.Save(args[2].Replace(".png", "_" + name + ".png"));
+                    }
+                }
+                var start = new System.Windows.Forms.Timer { Interval = 4000 };
+                var poll = new System.Windows.Forms.Timer { Interval = 1000 };
+                var began = DateTime.UtcNow;
+                start.Tick += (s, e) =>
+                {
+                    start.Stop();
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 1;
+                    var project = (SpicaProject)Get("project");
+                    var ch = project.QualOf("do160g_s16_28vdc");
+                    ch.Category = "A";
+                    ch.Net = "in";
+                    ch.Tests = new System.Collections.Generic.List<string> { "Power interruption, single, 10 ms", "Power interruption, single, 200 ms",
+                                                                             "Power interruption, double, 50 ms + 50 ms", "Normal surge, overvoltage" };
+                    project.QualCriteria = new System.Collections.Generic.List<QualCriterion>
+                    {
+                        new QualCriterion { Name = "holdup", Signal = "V(bulk)", Lo = 18, From = QualAnchor.TestStart, To = QualAnchor.TestEnd, Tests = "interruption" },
+                        new QualCriterion { Name = "overvolt", Signal = "V(bulk)", Hi = 45, From = QualAnchor.TestStart, To = QualAnchor.TestEnd },
+                        new QualCriterion { Name = "recovered", Signal = "V(bulk)", Lo = 26, Hi = 28, From = QualAnchor.EventEnd, FromOffset = 0.05, To = QualAnchor.TestEnd },
+                    };
+                    project.QualPlot = new System.Collections.Generic.List<string> { "I(D1)" };
+                    project.QualNominal = args.Length < 4;
+                    project.QualRuns = 20;
+                    Call("ShowQualification");
+                    Shot("setup");
+                    Call("RunQualification");
+                    var queue = (CampaignQueue)Get("queue");
+                    Console.WriteLine($"queued {queue.Jobs.Count}: " + string.Join(" | ", queue.Jobs.Select(j => j.Name)));
+                    if (queue.Jobs.Count != 4) bad++;
+                    poll.Start();
+                };
+                poll.Tick += (s, e) =>
+                {
+                    var queue = (CampaignQueue)Get("queue");
+                    if (queue.Jobs.Any(j => j.Pending) && (DateTime.UtcNow - began).TotalSeconds < 600) return;
+                    poll.Stop();
+                    foreach (var j in queue.Jobs) Console.WriteLine($"job {j.Name}: {j.Status} {j.Done}/{j.Total}  {j.OutputDir}");
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 1;
+                    var qt = (Spica.UI.Win98TabControl)Get("qualTabs");
+                    qt.SelectedIndex = qt.Pages.Count - 1;
+                    Call("ShowQualVerdicts");
+                    var lv = (System.Windows.Forms.ListView)Get("lvVerdicts");
+                    foreach (System.Windows.Forms.ListViewItem it in lv.Items)
+                        Console.WriteLine(string.Join(" | ", it.SubItems.Cast<System.Windows.Forms.ListViewItem.ListViewSubItem>().Select(x => x.Text)));
+                    if (lv.Items.Count == 0 || lv.Items.Cast<System.Windows.Forms.ListViewItem>().Any(i => i.SubItems[2].Text != "PASS" && i.SubItems[2].Text != "FAIL")) bad++;
+                    Shot("verdicts");
+                    // the waveforms of each test: supply on top, the judged signal and the extra one below
+                    var seen = new System.Collections.Generic.HashSet<object>();
+                    int wi = 0;
+                    foreach (System.Windows.Forms.ListViewItem it in lv.Items)
+                    {
+                        if (it.Tag == null || !seen.Add(it.Tag.GetType().GetField("Dir").GetValue(it.Tag) ?? "")) continue;
+                        mf.GetMethod("ShowQualWaveforms", flags).Invoke(form, new[] { it.Tag });
+                        var wf = (Spica.UI.QualWaveForm)Get("lastQualWave");
+                        void WShot(string name)
+                        {
+                            for (int k = 0; k < 15; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                            using (var bmp = new System.Drawing.Bitmap(wf.Width, wf.Height))
+                            {
+                                wf.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, wf.Width, wf.Height));
+                                bmp.Save(args[2].Replace(".png", "_" + name + ".png"));
+                            }
+                        }
+                        WShot("wave" + wi);
+                        var info = (System.Windows.Forms.Label)typeof(Spica.UI.QualWaveForm).GetField("lblInfo", flags).GetValue(wf);
+                        Console.WriteLine($"--- waveforms {it.Text}:\n{info.Text}");
+                        if (info.Text.Contains("\n! ")) bad++;
+                        var cbRun = (System.Windows.Forms.ComboBox)typeof(Spica.UI.QualWaveForm).GetField("cbRun", flags).GetValue(wf);
+                        Console.WriteLine("runs: " + string.Join(" | ", cbRun.Items.Cast<object>().Take(4)));
+                        if (cbRun.Items.Count > 2) { cbRun.SelectedIndex = 1; WShot("wave" + wi + "_all"); }
+                        wf.Close();
+                        wi++;
+                    }
+                    if (wi == 0) bad++;
+                    qt.SelectedIndex = 0;
+                    Shot("std");
+                    ((SpicaProject)Get("project")).Dirty = false;
+                    form.Close();
+                };
+                form.Shown += (s, e) => start.Start();
+                System.Windows.Forms.Application.Run(form);
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            return bad;
+        }
         if (args.Length > 2 && args[0] == "--budgetcharts")
         {
             // the Error Budget page with each chart (histogram, error vs input, error vs cause), then the Histogram page
@@ -573,7 +731,7 @@ static class Program
                     lf.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
                     lf.Location = new System.Drawing.Point(form.Left + 60, form.Top + 60);
                     lf.Show(form);
-                    tabs.SelectedIndex = 1;
+                    tabs.SelectedIndex = 2;
                     stage = 1; ticks = 0;
                     return;
                 }
@@ -678,7 +836,7 @@ static class Program
                     ((AppSettings)Get("settings")).SendFolder = share;
                     mf.GetMethod("RunRemote", flags).Invoke(form, null);
                     mf.GetMethod("AddToQueue", flags, null, Type.EmptyTypes, null).Invoke(form, null);
-                    tabs.SelectedIndex = 1;
+                    tabs.SelectedIndex = 2;
                     stage = 2; ticks = 0;
                     return;
                 }
@@ -778,7 +936,7 @@ static class Program
                         Check(queue.Move(queue.Jobs[2], -1) && queue.Jobs[1].Id == 3, "move up: 3 before 2  [" + Order(queue) + "]");
                         Check(!queue.Move(queue.Jobs[0], -1), "the first cannot move up");
                         Check(queue.Remove(queue.Jobs[0]) && queue.Jobs.Count == 2 && queue.Jobs[0].Id == 3, "remove 1  [" + Order(queue) + "]");
-                        tabs.SelectedIndex = 1;
+                        tabs.SelectedIndex = 2;
                         Snap(form, "ops_held");
                         queue.Hold = false;
                         Check(queue.Running != null && queue.Running.Id == 3, "released: 3 runs first  [" + Order(queue) + "]");
@@ -810,8 +968,8 @@ static class Program
                         if (ticks < 8) return;
                         Check(stopped.Status == JobStatus.Stopped && stopped.Done > 0 && stopped.Done < stopped.Total, $"stopped with {stopped.Done} of {stopped.Total} runs  [" + Order(queue) + "]");
                         var view = (Spica.UI.ResultsView)Get("resultsView");
-                        Check(tabs.SelectedIndex == 2 && view.Data != null, "its results are open (" + (view.Data?.Rows.Count ?? 0) + " rows)");
-                        tabs.SelectedIndex = 1;
+                        Check(tabs.SelectedIndex == 3 && view.Data != null, "its results are open (" + (view.Data?.Rows.Count ?? 0) + " rows)");
+                        tabs.SelectedIndex = 2;
                         Snap(form, "ops_done");
                         queue.ClearEnded();
                         Check(queue.Jobs.Count == 0, "clear ended empties the list");
