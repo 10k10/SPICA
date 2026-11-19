@@ -565,13 +565,14 @@ namespace Spica.UI
             Invalidate();
         }
 
-        protected override bool IsInputKey(Keys keyData) => keyData == Keys.Delete || keyData == Keys.Space || base.IsInputKey(keyData);
+        protected override bool IsInputKey(Keys keyData) => keyData == Keys.Delete || keyData == Keys.Space || keyData == Keys.Escape || base.IsInputKey(keyData);
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
             if (e.KeyCode == Keys.Delete) DeleteSelection();
             if (e.KeyCode == Keys.Space) { FitAll(); e.Handled = true; }
+            if (e.KeyCode == Keys.Escape && Selected != null) Select(null);
         }
 
         public void DeleteSelection()

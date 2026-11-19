@@ -90,6 +90,9 @@ namespace Spica.Core
         public bool KeepRaw { get => GetBool("KeepRaw", true); set => Set("KeepRaw", value); }
         /// <summary>Show the Setup and Qualification tabs of the versions before the Workbench.</summary>
         public bool ClassicTabs { get => GetBool("ClassicTabs", false); set => Set("ClassicTabs", value); }
+        /// <summary>Where the main window was when it last closed: "x,y,w,h" (empty: never), and whether it was maximized.</summary>
+        public string WindowBounds { get => Get("WindowBounds"); set => Set("WindowBounds", value); }
+        public bool WindowMaximized { get => GetBool("WindowMaximized", false); set => Set("WindowMaximized", value); }
         public bool ClockReseed { get => GetBool("ClockReseed", true); set => Set("ClockReseed", value); }
         public bool SaveSelectedOnly { get => GetBool("SaveSelectedOnly", true); set => Set("SaveSelectedOnly", value); }
         public bool AutoParallel { get => GetBool("AutoParallel", true); set => Set("AutoParallel", value); }

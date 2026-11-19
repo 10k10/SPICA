@@ -21,7 +21,18 @@ namespace Spica.UI
         int pressedButton = -1;
         bool pressedInside;
 
-        public bool Resizable { get; set; } = true;
+        bool resizable = true;
+        /// <summary>The window can be resized; its frame is then a little wider inside, so the edges are easy to grab.</summary>
+        public bool Resizable
+        {
+            get => resizable;
+            set { resizable = value; Padding = FramePadding; }
+        }
+
+        /// <summary>How far in from each edge the window can be grabbed to resize it, and the length of a corner along each side.</summary>
+        const int Grip = 7, CornerGrip = 18;
+
+        Padding FramePadding => new Padding(resizable ? Grip - 1 : FrameSize, CaptionTop + CaptionHeight + 1, resizable ? Grip - 1 : FrameSize, resizable ? Grip - 1 : FrameSize);
         public Image CaptionIcon { get; set; }
 
         public Win98Form()
@@ -31,7 +42,7 @@ namespace Spica.UI
             Font = Win98.Font;
             DoubleBuffered = true;
             SetStyle(ControlStyles.ResizeRedraw, true);
-            Padding = new Padding(FrameSize, CaptionTop + CaptionHeight + 1, FrameSize, FrameSize);
+            Padding = FramePadding;
             CaptionIcon = Win98.Icon("app16");
             var ico = Win98.AppIcon();
             if (ico != null) Icon = ico;
@@ -95,12 +106,14 @@ namespace Spica.UI
         {
             if (Resizable && WindowState == FormWindowState.Normal)
             {
-                const int g = 5;
+                const int g = Grip, c = CornerGrip;
                 bool l = p.X < g, r = p.X >= Width - g, t = p.Y < g, b = p.Y >= Height - g;
-                if (t && l) return HTTOPLEFT;
-                if (t && r) return HTTOPRIGHT;
-                if (b && l) return HTBOTTOMLEFT;
-                if (b && r) return HTBOTTOMRIGHT;
+                // a corner answers along a stretch of both its sides, not only in its few pixels
+                bool nl = p.X < c, nr = p.X >= Width - c, nt = p.Y < c, nb = p.Y >= Height - c;
+                if ((t && nl) || (l && nt)) return HTTOPLEFT;
+                if ((t && nr) || (r && nt)) return HTTOPRIGHT;
+                if ((b && nl) || (l && nb)) return HTBOTTOMLEFT;
+                if ((b && nr) || (r && nb)) return HTBOTTOMRIGHT;
                 if (l) return HTLEFT;
                 if (r) return HTRIGHT;
                 if (t) return HTTOP;

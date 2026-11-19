@@ -22,8 +22,53 @@ static class Program
         ((Spica.UI.Win98TabControl)mf.GetField("tabs", flags).GetValue(form)).SelectedIndex = TabOf(form, "TabSetup");
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr WindowFromPoint(System.Drawing.Point p);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+
+    /// <summary>--hittest: what Windows finds at the main window's edges and corners (resizing needs a sizing code there).</summary>
+    static int HitTest()
+    {
+        int bad = 0;
+        var t = new Thread(() =>
+        {
+            var form = new Spica.UI.MainForm { TopMost = true, StartPosition = System.Windows.Forms.FormStartPosition.Manual, Location = new System.Drawing.Point(40, 40) };
+            form.Shown += (s, e) =>
+            {
+                for (int k = 0; k < 20; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); }
+                var b = form.Bounds;
+                Console.WriteLine($"window {b}, state {form.WindowState}");
+                var names = new System.Collections.Generic.Dictionary<int, string> { [1] = "client", [2] = "caption", [10] = "left", [11] = "right", [12] = "top", [13] = "top-left", [14] = "top-right", [15] = "bottom", [16] = "bottom-left", [17] = "bottom-right", [-1] = "transparent" };
+                foreach (var (name, x, y, want) in new[]
+                {
+                    ("bottom-right corner", b.Right - 2, b.Bottom - 2, 17), ("bottom-right 8 px in", b.Right - 8, b.Bottom - 8, 17),
+                    ("bottom-left corner", b.Left + 2, b.Bottom - 2, 16), ("top-left corner", b.Left + 2, b.Top + 2, 13), ("top-right corner", b.Right - 2, b.Top + 2, 14),
+                    ("right edge 2 px", b.Right - 2, b.Top + b.Height / 2, 11), ("right edge 5 px", b.Right - 5, b.Top + b.Height / 2, 11),
+                    ("left edge 2 px", b.Left + 2, b.Top + b.Height / 2, 10), ("bottom edge 2 px", b.Left + b.Width / 2, b.Bottom - 2, 15),
+                    ("bottom edge 5 px", b.Left + b.Width / 2, b.Bottom - 5, 15),
+                })
+                {
+                    var p = new System.Drawing.Point(x, y);
+                    var h = WindowFromPoint(p);
+                    int code = (int)SendMessage(h, 0x84, IntPtr.Zero, (IntPtr)((y << 16) | (x & 0xFFFF)));
+                    // a child that answers "transparent" passes the point to the window under it, the form
+                    if (code == -1) code = (int)SendMessage(form.Handle, 0x84, IntPtr.Zero, (IntPtr)((y << 16) | (x & 0xFFFF)));
+                    bool ok = code == want;
+                    if (!ok) bad++;
+                    Console.WriteLine($"{(ok ? "ok   " : "WRONG")} {name,-22} -> {(names.TryGetValue(code, out var n) ? n : code.ToString())}" + (h == form.Handle ? "" : "  (over a child)"));
+                }
+                form.Close();
+            };
+            System.Windows.Forms.Application.Run(form);
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        return bad;
+    }
+
     static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--hittest") return HitTest();
         // SPICA.Smoke --ui <campaign folder> <png dir> [meas lsl usl] [tfX tfY theory budget] : screenshot every Results tab
         if (args.Length > 0 && args[0] == "--ui") return UiCapture(args);
         // SPICA.Smoke --setup <file.asc|.spica> <png> : render the main window's Setup tab after loading a file

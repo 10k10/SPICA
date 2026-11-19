@@ -78,9 +78,8 @@ namespace Spica.UI
         public MainForm()
         {
             Text = AppTitle;
-            ClientSize = new Size(1080, 780);
             MinimumSize = new Size(1000, 720);
-            StartPosition = FormStartPosition.CenterScreen;
+            PlaceWindow();
             CaptionIcon = Win98.Icon("app16");
             KeyPreview = true;
 
@@ -631,6 +630,30 @@ namespace Spica.UI
             UpdatePlan();
         }
 
+        /// <summary>
+        /// The window where it was last time, when that is still on a screen; else most of the screen it opens on
+        /// (the Workbench needs the room), centred.
+        /// </summary>
+        void PlaceWindow()
+        {
+            var p = (settings.WindowBounds ?? "").Split(',');
+            if (p.Length == 4 && int.TryParse(p[0], out int x) && int.TryParse(p[1], out int y) && int.TryParse(p[2], out int w) && int.TryParse(p[3], out int h))
+            {
+                var r = new Rectangle(x, y, Math.Max(w, MinimumSize.Width), Math.Max(h, MinimumSize.Height));
+                // at least its caption on some screen, so it can be dragged back
+                if (Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(new Rectangle(r.X + 40, r.Y, Math.Max(1, r.Width - 80), 24))))
+                {
+                    StartPosition = FormStartPosition.Manual;
+                    Bounds = r;
+                    if (settings.WindowMaximized) WindowState = FormWindowState.Maximized;
+                    return;
+                }
+            }
+            var wa = Screen.PrimaryScreen.WorkingArea;
+            Size = new Size(Math.Max(MinimumSize.Width, Math.Min(1500, wa.Width * 92 / 100)), Math.Max(MinimumSize.Height, Math.Min(980, wa.Height * 92 / 100)));
+            StartPosition = FormStartPosition.CenterScreen;
+        }
+
         void SaveSettings()
         {
             // the last-used values that seed a new setup (the options are saved by their own window)
@@ -1004,6 +1027,10 @@ namespace Spica.UI
             closing = true;
             uiTimer.Stop();
             listener.Stop();
+            // where the window is, for next time (its normal size when it closes maximized)
+            var nb = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            settings.WindowBounds = $"{nb.X},{nb.Y},{nb.Width},{nb.Height}";
+            settings.WindowMaximized = WindowState == FormWindowState.Maximized;
             SaveSettings();
             base.OnFormClosing(e);
         }

@@ -28,18 +28,29 @@ namespace Spica.UI
             return bmp;
         }
 
-        /// <summary>A green play triangle over queue lines (Add to Queue).</summary>
-        public static Image PlayQueue()
+        /// <summary>A plain green arrow (Add to Queue).</summary>
+        public static Image Play()
         {
             var bmp = New16(out var g);
             using (g)
             {
-                using (var line = new SolidBrush(Color.FromArgb(0, 0, 128)))
-                    for (int i = 0; i < 3; i++) g.FillRectangle(line, 9, 4 + i * 4, 6, 2);
-                var tri = new[] { new PointF(1, 1.5f), new PointF(10, 8), new PointF(1, 14.5f) };
-                using (var fill = new SolidBrush(Color.FromArgb(0, 168, 0))) g.FillPolygon(fill, tri);
-                using (var hl = new SolidBrush(Color.FromArgb(150, 240, 150))) g.FillPolygon(hl, new[] { new PointF(2.5f, 4), new PointF(6, 7), new PointF(2.5f, 7) });
+                var tri = new[] { new PointF(3, 2), new PointF(13.5f, 8), new PointF(3, 14) };
+                using (var fill = new SolidBrush(Color.FromArgb(0, 160, 0))) g.FillPolygon(fill, tri);
                 using (var edge = new Pen(Color.FromArgb(0, 80, 0), 1.2f)) g.DrawPolygon(edge, tri);
+            }
+            return bmp;
+        }
+
+        /// <summary>A small cross (close).</summary>
+        public static Image Cross()
+        {
+            var bmp = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(bmp))
+            using (var p = new Pen(Color.FromArgb(48, 48, 48), 1.6f))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.DrawLine(p, 4.5f, 4.5f, 11.5f, 11.5f);
+                g.DrawLine(p, 11.5f, 4.5f, 4.5f, 11.5f);
             }
             return bmp;
         }

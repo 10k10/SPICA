@@ -63,8 +63,7 @@ namespace Spica.UI
             B("Fit", Glyphs.Magnifier(), (s, e) => studyCanvas.FitAll(), "Show the whole study (Space, or double-click the empty canvas)");
             bar.Items.Add(new ToolStripSeparator());
             // running it
-            var run = B("Add to Queue", Glyphs.PlayQueue(), (s, e) => RunStudy(), "Run this study: its campaigns join the queue on this PC  (F5)");
-            run.Font = Win98.BoldFont;
+            B("Add to Queue", Glyphs.Play(), (s, e) => RunStudy(), "Run this study: its campaigns join the queue on this PC  (F5)");
             // the wire colours, at the right end
             var legend = new ToolStripLabel { AutoSize = false, Width = 430, Height = 18, Alignment = ToolStripItemAlignment.Right };
             legend.Paint += (s, e) =>
@@ -517,7 +516,8 @@ namespace Spica.UI
         // ------------------------------------------------------------------ the inspector (right side)
 
         Panel inspector, inspectorBody;
-        Label inspectorTitle, inspectorMissing;
+        Label inspectorTitle, inspectorKind, inspectorMissing;
+        Panel inspectorHead;
         PictureBox inspectorIcon;
         Block inspected;
         /// <summary>Called by the inspector's fields after each change: marks the setup, redraws, refreshes what is missing.</summary>
@@ -529,13 +529,23 @@ namespace Spica.UI
             inspector = new Panel { Dock = DockStyle.Right, Width = 350, BackColor = Win98.Face, Visible = false, Padding = new Padding(4, 0, 0, 0) };
             var frame = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
             frame.Paint += (s, e) => Win98.Etched(e.Graphics, new Rectangle(0, 0, frame.Width, frame.Height));
-            var head = new Panel { Dock = DockStyle.Top, Height = 26, BackColor = Win98.Navy };
-            inspectorIcon = new PictureBox { Location = new Point(5, 5), Size = new Size(16, 16), BackColor = Win98.Navy };
-            inspectorTitle = new Label { Location = new Point(25, 6), AutoSize = false, Height = 16, ForeColor = Color.White, BackColor = Win98.Navy, Font = Win98.BoldFont, UseMnemonic = false, AutoEllipsis = true };
-            var close = new Win98Button { Text = "×", Size = new Size(20, 18), Font = Win98.BoldFont };
+            // the header: the family's colour on the left edge, the icon, the block's name and what kind of block it is
+            var head = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Win98.Face };
+            head.Paint += (s, e) =>
+            {
+                var fam = inspected?.Spec == null ? Win98.Shadow : StudyCanvas.FamilyColor[inspected.Spec.Family];
+                using (var br = new SolidBrush(fam)) e.Graphics.FillRectangle(br, 2, 6, 4, head.Height - 12);
+                Win98.EtchedHLine(e.Graphics, 2, head.Width - 2, head.Height - 2);
+            };
+            inspectorIcon = new PictureBox { Location = new Point(12, 7), Size = new Size(16, 16), BackColor = Win98.Face };
+            inspectorTitle = new Label { Location = new Point(32, 6), AutoSize = false, Height = 17, ForeColor = Color.Black, BackColor = Win98.Face, Font = new Font(Win98.Font.FontFamily, 9.75f, FontStyle.Bold), UseMnemonic = false, AutoEllipsis = true };
+            inspectorKind = new Label { Location = new Point(32, 23), AutoSize = false, Height = 14, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false, AutoEllipsis = true };
+            var close = new FlatGlyphButton(Glyphs.Cross()) { Size = new Size(20, 20) };
             close.Click += (s, e) => studyCanvas.Select(null);
-            head.Controls.AddRange(new Control[] { inspectorIcon, inspectorTitle, close });
-            head.Resize += (s, e) => { close.Location = new Point(head.Width - 24, 4); inspectorTitle.Width = close.Left - 30; };
+            new ToolTip().SetToolTip(close, "Close (Esc on the canvas, or click its empty part)");
+            head.Controls.AddRange(new Control[] { inspectorIcon, inspectorTitle, inspectorKind, close });
+            head.Resize += (s, e) => { close.Location = new Point(head.Width - 26, 6); inspectorTitle.Width = inspectorKind.Width = close.Left - 36; };
+            inspectorHead = head;
             inspectorMissing = new Label { Dock = DockStyle.Top, AutoSize = false, Height = 0, BackColor = Color.FromArgb(255, 235, 235), ForeColor = Color.FromArgb(150, 0, 0), Padding = new Padding(6, 4, 6, 4), UseMnemonic = false, Visible = false };
             inspectorBody = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Win98.Face };
             frame.Controls.Add(inspectorBody);
@@ -552,7 +562,9 @@ namespace Spica.UI
             var st = CurrentStudy;
             if (b == null || st == null) { inspector.Visible = false; return; }
             inspectorIcon.Image = StudyCanvas.KindIcon(b.Kind);
-            inspectorTitle.Text = $"{b.Spec?.Title ?? b.Kind}   (block {b.Id})";
+            inspectorTitle.Text = b.Spec?.Title ?? b.Kind;
+            inspectorKind.Text = $"{(b.Spec == null ? "" : BlockKind.FamilyTitle(b.Spec.Family))} block  ·  #{b.Id}";
+            inspectorHead.Invalidate();
             inspectorChanged = () => { MarkDirty(); MarkStale(b); studyCanvas.Invalidate(); UpdateMissing(); RefreshModelSoon(); };
             inspector.Visible = true;
             Action rebuild = null;
