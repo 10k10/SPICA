@@ -197,6 +197,143 @@ static class Program
             }
             return bad;
         }
+        if (args.Length > 2 && args[0] == "--studyrun")
+        {
+            // a study run from the graph, end to end with LTspice: <asc> <png>
+            // tests x temperatures with limits, a report, the cache on a second run, and a fault study (a short)
+            int bad = 0;
+            var t = new Thread(() =>
+            {
+                var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]), Width = 1360, Height = 860 };
+                var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                var mf = typeof(Spica.UI.MainForm);
+                object Get(string f) => mf.GetField(f, flags).GetValue(form);
+                void Call(string m) => mf.GetMethod(m, flags, null, Type.EmptyTypes, null).Invoke(form, null);
+                bool Running() => (bool)mf.GetProperty("StudyRunning", flags).GetValue(form);
+                void Check(bool ok, string what) { if (!ok) bad++; Console.WriteLine($"{(ok ? "ok   " : "WRONG")} {what}"); }
+                void Pump(int n = 15) { for (int k = 0; k < n; k++) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(30); } }
+                void Shot(System.Windows.Forms.Control c, string name)
+                {
+                    Pump();
+                    using (var bmp = new System.Drawing.Bitmap(c.Width, c.Height))
+                    {
+                        c.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, c.Width, c.Height));
+                        bmp.Save(args[2].Replace(".png", "_" + name + ".png"));
+                    }
+                }
+                var verdicts = (System.Collections.Generic.List<Spica.Core.Graph.VerdictRecord>)null;
+                var steps = new System.Collections.Generic.Queue<Action>();
+                var began = DateTime.UtcNow;
+                System.Windows.Forms.Timer poll = null;
+                void Next() { began = DateTime.UtcNow; if (steps.Count > 0) steps.Dequeue()(); else { ((SpicaProject)Get("project")).Dirty = false; form.Close(); } }
+                void RunAndWait(Action after)
+                {
+                    Call("RunStudy");
+                    poll = new System.Windows.Forms.Timer { Interval = 1000 };
+                    poll.Tick += (s, e) =>
+                    {
+                        if (Running() && (DateTime.UtcNow - began).TotalSeconds < 900) return;
+                        poll.Stop();
+                        verdicts = (System.Collections.Generic.List<Spica.Core.Graph.VerdictRecord>)Get("lastVerdicts");
+                        after();
+                        Next();
+                    };
+                    poll.Start();
+                }
+                Spica.Core.Graph.Study study = null, fault = null;
+                double firstSeconds = 0;
+                steps.Enqueue(() =>
+                {
+                    var project = (SpicaProject)Get("project");
+                    project.QualCriteria = new System.Collections.Generic.List<QualCriterion>
+                    {
+                        new QualCriterion { Name = "holdup", Signal = "V(bulk)", Lo = 18, Tests = "interruption", Requirement = "REQ-PWR-012" },
+                        new QualCriterion { Name = "overvolt", Signal = "V(bulk)", Hi = 45 },
+                        new QualCriterion { Name = "recovered", Signal = "V(bulk)", Lo = 26, Hi = 28, From = QualAnchor.EventEnd, FromOffset = 0.05, To = QualAnchor.TestEnd, Tests = "interruption|surge" },
+                        new QualCriterion { Name = "shorted", Signal = "I(D1)", Hi = 1, From = QualAnchor.EventStart, FromOffset = 0.002, To = QualAnchor.EventEnd },
+                    };
+                    study = new Spica.Core.Graph.Study { Name = "Holdup study" };
+                    var sw = study.Add("SupplyWaveform").Set("Library", "do160g_s16_28vdc").Set("Category", "A").Set("Net", "in")
+                                  .Set("Tests", "Power interruption, single, 10 ms | Power interruption, single, 200 ms | Normal surge, overvoltage");
+                    var sch = study.Add("Schematic").Set("File", project.Schematic).Set("Name", "holdup");
+                    var co = study.Add("Corners").Set("Temperatures", "25; 85");
+                    var sim = study.Add("Simulate");
+                    var lim = study.Add("Limits").Set("Criteria", "holdup | overvolt | recovered");
+                    var rep = study.Add("Report").Set("Title", "Hold-up qualification");
+                    var pl = study.Add("Plots").Set("Signals", "I(D1)");
+                    var ex = study.Add("Export");
+                    study.Connect(sw, sch); study.Connect(sch, sim); study.Connect(co, sim); study.Connect(sim, lim);
+                    study.Connect(lim, rep, "", "verdicts"); study.Connect(sim, pl); study.Connect(lim, ex, "", "verdicts");
+                    study.AutoLayout();
+                    fault = new Spica.Core.Graph.Study { Name = "Bulk short" };
+                    var f = fault.Add("Fault").Set("From", "bulk").Set("To", "0").Set("R", "1").Set("Start", "20m").Set("Duration", "30m");
+                    var fs = fault.Add("Schematic").Set("File", project.Schematic).Set("Name", "holdup");
+                    var fn = fault.Add("Nominal");
+                    var fsim = fault.Add("Simulate");
+                    var flim = fault.Add("Limits").Set("Criteria", "shorted");
+                    fault.Connect(f, fs); fault.Connect(fs, fsim); fault.Connect(fn, fsim); fault.Connect(fsim, flim);
+                    fault.AutoLayout();
+                    project.Studies.Clear();
+                    project.Studies.Add(study); project.Studies.Add(fault);
+                    // a short output folder: the scratch folders alone are long, and LTspice stops at 260 characters of path
+                    ((Spica.UI.Win98TextField)Get("txtOut")).Text = Path.Combine(Path.GetTempPath(), "spq");
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 4;
+                    Call("ShowStudies");
+                    ((System.Windows.Forms.ComboBox)Get("cbStudy")).SelectedIndex = 0;
+                    Check(study.Validate().Count == 0 && fault.Validate().Count == 0, "both studies are wired");
+                    RunAndWait(() =>
+                    {
+                        firstSeconds = (DateTime.UtcNow - began).TotalSeconds;
+                        foreach (var v in verdicts) Console.WriteLine($"      {v.Case} | {v.Condition} | {v.Criterion} | {v.Verdict} | {v.Worst} | {v.Requirement}");
+                        Check(verdicts.Count == 16, $"16 verdicts (3 tests x 2 temperatures, the criteria that apply): {verdicts.Count}");
+                        Check(verdicts.Where(v => v.Criterion == "holdup" && v.Case.Contains("10 ms")).All(v => v.Verdict == "PASS") &&
+                              verdicts.Where(v => v.Criterion == "holdup" && v.Case.Contains("200 ms")).All(v => v.Verdict == "FAIL"), "10 ms holds up, 200 ms does not, at both temperatures");
+                        Check(verdicts.Any(v => v.Requirement == "REQ-PWR-012"), "the requirement goes with its verdicts");
+                        var rep = (string)Get("lastStudyReport");
+                        Check(rep != null && File.Exists(rep) && File.ReadAllText(rep).Contains("REQ-PWR-012"), "the report is written: " + rep);
+                        var canvas = (Spica.UI.StudyCanvas)Get("studyCanvas");
+                        Check(canvas.States.Values.All(s => s == Spica.Core.Graph.BlockState.Done || s == Spica.Core.Graph.BlockState.Cached), "every block done (or from the cache)");
+                        Shot(form, "study");
+                        var res = (System.Windows.Forms.Form)Get("studyResults");
+                        Shot(res, "results");
+                        mf.GetMethod("OpenStudyWaves", flags).Invoke(form, new object[] { verdicts.First(v => v.Criterion == "holdup" && v.Case.Contains("200 ms")) });
+                        Pump(30);
+                        var wave = System.Windows.Forms.Application.OpenForms.OfType<Spica.UI.QualWaveForm>().LastOrDefault();
+                        Check(wave != null, "the waveforms of a cell open");
+                        if (wave != null) { Shot(wave, "wave"); wave.Close(); }
+                    });
+                });
+                steps.Enqueue(() =>
+                {
+                    // the same study again: everything from the cache
+                    RunAndWait(() =>
+                    {
+                        double again = (DateTime.UtcNow - began).TotalSeconds;
+                        var canvas = (Spica.UI.StudyCanvas)Get("studyCanvas");
+                        Check(canvas.States.Values.Contains(Spica.Core.Graph.BlockState.Cached) && verdicts.Count == 16, $"a second run comes from the cache: {again:0.0} s (first {firstSeconds:0.0} s)");
+                    });
+                });
+                steps.Enqueue(() =>
+                {
+                    ((System.Windows.Forms.ComboBox)Get("cbStudy")).SelectedIndex = 1;
+                    RunAndWait(() =>
+                    {
+                        foreach (var v in verdicts) Console.WriteLine($"      {v.Case} | {v.Condition} | {v.Criterion} | {v.Verdict} | {v.Worst}");
+                        Check(verdicts.Count == 1 && verdicts[0].Verdict == "FAIL", "the short draws current through the diode (the ideal source holds the voltage): " + (verdicts.Count > 0 ? verdicts[0].Worst : "no verdict"));
+                        Shot(form, "fault");
+                    });
+                });
+                var start = new System.Windows.Forms.Timer { Interval = 4000 };
+                start.Tick += (s, e) => { start.Stop(); Next(); };
+                form.Shown += (s, e) => start.Start();
+                System.Windows.Forms.Application.Run(form);
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            Console.WriteLine(bad == 0 ? "STUDY RUN: all ok" : $"STUDY RUN: {bad} wrong");
+            return bad;
+        }
         if (args.Length > 2 && args[0] == "--studies")
         {
             // the Studies tab: templates on the canvas, a block's properties, a wire drawn with the mouse, the New Study dialog: <asc> <png>

@@ -65,7 +65,7 @@ namespace Spica.UI
             this.qc = qc; this.net = net; this.dir = dir; this.rs = rs;
             this.extra = (extra ?? new string[0]).Where(s => s.Trim().Length > 0).ToList();
             chunks = RawFile.Chunks(dir);
-            Text = $"Waveforms - {qc.Test.Name} ({qc.Category})";
+            Text = $"Waveforms - {qc.Test.Name}" + (qc.Category.Length > 0 ? $" ({qc.Category})" : "");
             MinimizeBox = true; MaximizeBox = true; Resizable = true; ShowInTaskbar = true;
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(980, 760 + Padding.Vertical);
@@ -228,8 +228,9 @@ namespace Spica.UI
             string Unit(string sig) => sig.StartsWith("I", StringComparison.OrdinalIgnoreCase) ? "A" : "V";
 
             // 1. the supply: what the test programs (wide, grey) under what reached the net
-            var sup = NewChart($"Supply at {net}: {qc.Test.Name}", "V");
-            sup.Add(new ChartSeries { Kind = SeriesKind.Line, Label = "programmed (test waveform)", Color = Win98Chart.Silver, Size = 5, X = qc.Wave.Select(p => p[0]).ToArray(), Y = qc.Wave.Select(p => p[1]).ToArray() });
+            var sup = NewChart(qc.Wave != null ? $"Supply at {net}: {qc.Test.Name}" : $"V({net}): {qc.Test.Name}", "V");
+            if (qc.Wave != null)
+                sup.Add(new ChartSeries { Kind = SeriesKind.Line, Label = "programmed (test waveform)", Color = Win98Chart.Silver, Size = 5, X = qc.Wave.Select(p => p[0]).ToArray(), Y = qc.Wave.Select(p => p[1]).ToArray() });
             AddTraces(sup, traces, SupplySignal, null, many);
             sup.Add(Events(true));
 

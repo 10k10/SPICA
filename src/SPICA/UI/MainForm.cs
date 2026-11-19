@@ -72,6 +72,10 @@ namespace Spica.UI
             queue.Started += OnJobStarted;
             queue.Finished += OnJobFinished;
             queue.Discarded += OnJobDiscarded;
+            // a study's campaigns tell the study when they end, or leave the queue
+            queue.Finished += OnStudyJobEnded;
+            queue.Removed += OnStudyJobEnded;
+            queue.Discarded += (j, gone) => OnStudyJobEnded(j);
             queue.Changed += () => { UpdateQueueList(); UpdateCommandState(); UpdatePlan(); };
             remote = new RemoteTracker(Post);
             remote.Changed += () => { UpdateQueueList(); UpdateQueueButtons(); };
@@ -222,7 +226,7 @@ namespace Spica.UI
             tbOpen = Btn("Open", "open32", (s, e) => BrowseSchematic(), "Open an LTspice schematic (.asc) or a SPICA setup (.spica)  (Ctrl+O)");
             tbSave = Btn("Save", "save32", (s, e) => SaveSetup(false), "Save the setup (.spica): runs, temperatures, signals, spec limits, TF, error budget, report  (Ctrl+S)");
             toolbar.Items.Add(new ToolStripSeparator());
-            tbAdd = Btn("Run Here", "run32", (s, e) => AddToQueue(), "Run the campaign of the Setup tab on this PC: it joins the queue and starts at once when nothing is running  (F5)", 70);
+            tbAdd = Btn("Run Here", "run32", (s, e) => AddToQueue(), "Run on this PC: the campaign of the Setup tab, or the study shown on the Studies tab.\nIt joins the queue and starts at once when nothing is running  (F5)", 70);
             tbRemote = Btn("Run Remote", "remote32", (s, e) => RunRemote(), "Send the campaign of the Setup tab to the remote PC (the shared folder in Tools > Options):\nits listener runs it there, and the Queue tab follows it here  (F6)", 76);
             tbStop = Btn("Stop", "stop32", (s, e) => StopCampaign(), "Stop the running campaign; finished runs are kept  (Shift+F5)");
             toolbar.Items.Add(new ToolStripSeparator());

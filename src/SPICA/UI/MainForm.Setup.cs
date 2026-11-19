@@ -647,7 +647,12 @@ namespace Spica.UI
             return options != null;
         }
 
-        void AddToQueue() => AddToQueue(null, null, 0);
+        /// <summary>Run Here (F5): the study on the Studies tab while that tab is open, else the Setup tab's campaign.</summary>
+        void AddToQueue()
+        {
+            if (tabs.SelectedIndex == TabStudies) { RunStudy(); return; }
+            AddToQueue(null, null, 0);
+        }
 
         /// <summary>Puts the campaign of the Setup tab in the queue; it starts at once when nothing is running.</summary>
         void AddToQueue(string resumeDir, List<RunResult> resume, double priorSeconds)

@@ -124,6 +124,8 @@ namespace Spica.Core
         readonly List<Thread> threads = new List<Thread>();
         readonly SortedDictionary<int, RunResult> results = new SortedDictionary<int, RunResult>();
         readonly Queue<int> retry = new Queue<int>();
+        readonly Dictionary<int, int> crashes = new Dictionary<int, int>();   // worker errors per run
+        int workerErrors;
         // (time, runs done + partial credit for running chunks), for the smoothed rate
         readonly List<KeyValuePair<double, double>> history = new List<KeyValuePair<double, double>>();
         double rateEma = double.NaN, etaEma = double.NaN, lastTick = double.NaN;
@@ -546,7 +548,29 @@ namespace Spica.Core
             catch (Exception ex)
             {
                 Log($"Worker {w.Id} error: {ex.Message}");
-                lock (sync) if (plan != null) for (int j = plan.First; j <= plan.Last; j++) if (!results.ContainsKey(j)) retry.Enqueue(j);
+                lock (sync)
+                {
+                    // a run is tried again once after a worker error; a second one fails it with the error, so that an
+                    // error that always comes back (a path LTspice cannot write) ends the campaign instead of looping
+                    if (plan != null)
+                        for (int j = plan.First; j <= plan.Last; j++)
+                        {
+                            if (results.ContainsKey(j)) continue;
+                            crashes.TryGetValue(j, out int n);
+                            crashes[j] = ++n;
+                            if (n < 2) { retry.Enqueue(j); continue; }
+                            var rr = NewResult(j, plan.Id);
+                            rr.Status = RunStatus.Failed; rr.Note = ex.Message;
+                            results[j] = rr;
+                            dirty = true;
+                        }
+                    if (++workerErrors >= 20 && results.Count == resumedCount)
+                    {
+                        fatal = "Every LTspice instance fails before running: " + ex.Message;
+                        Log(fatal);
+                        Cancel();
+                    }
+                }
             }
             finally
             {

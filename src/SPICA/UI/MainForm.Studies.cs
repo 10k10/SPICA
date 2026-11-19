@@ -53,6 +53,12 @@ namespace Spica.UI
             B("Arrange", "queue16", (s, e) => { if (CurrentStudy == null) return; CurrentStudy.AutoLayout(); studyCanvas.FitAll(); StudyEdited(); }, "Place the blocks in columns, from the stimuli to the outputs");
             B("Fit", null, (s, e) => studyCanvas.FitAll(), "Show the whole study (or double-click the empty canvas)");
             bar.Items.Add(new ToolStripSeparator());
+            B("Results...", "results16", (s, e) =>
+            {
+                if (lastVerdicts.Count == 0 && studyRunner == null) { SetStatus("No study has run yet: Run Here (F5) on this tab runs the one shown."); return; }
+                ShowStudyResults(studyRunner?.Study ?? CurrentStudy, new List<string>());
+            }, "The verdicts of the last study run");
+            bar.Items.Add(new ToolStripSeparator());
             var legend = new ToolStripLabel { AutoSize = false, Width = 470, Height = 18 };
             legend.Paint += (s, e) =>
             {
@@ -374,7 +380,7 @@ namespace Spica.UI
                      Win98.BoldFont, issues.Count == 0 ? Color.FromArgb(0, 100, 0) : Color.FromArgb(160, 0, 0));
                 foreach (var i in issues.Take(20)) Text("- " + IssueText(st, i), null, Color.FromArgb(128, 0, 0));
                 y += 6;
-                Text("Running a study comes with the next step. Until then the toolbar's Run Here runs the Setup tab's campaign, as before.", null, Win98.Shadow);
+                Text("Run Here (F5) runs this study while this tab is open: its campaigns join the queue, and the verdicts open in their own window.", null, Win98.Shadow);
                 studyProps.ResumeLayout();
                 return;
             }

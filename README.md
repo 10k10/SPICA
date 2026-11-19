@@ -204,6 +204,57 @@ clock only the statistics repeat. A resumed campaign keeps its first bundle.
 The statistics were checked against SciPy (Anderson-Darling, skewness, kurtosis, quantiles,
 Clopper-Pearson, normal tail ppm, regression standard errors).
 
+## Studies (graphs of blocks)
+
+A study is an analysis drawn as a graph: blocks joined by wires, left to right, from what is applied to the
+circuit to what is delivered. The Studies tab is the editor:
+
+- **Left:** the block library, as a tree with search. Double-click a block or drag it in.
+- **Middle:** the canvas.
+- **Right:** the properties of the block you select.
+
+A wire carries one type of data and only joins ports of that type (the colours): Stimulus, Circuit, Conditions,
+Data, Table, Ratings, Verdicts. A wire of the wrong type, or one that would make a loop, is refused, with the
+reason. Right-click a port to add a block of a kind that fits it, already wired.
+
+| Family | Blocks that run in this version |
+|---|---|
+| Stimulus | **Supply Waveform** (a test of a library, e.g. DO-160G Section 16, into a net, in place of its source; one case per test), **Fault** (a switch of resistance R between two nets, closed from a time on, for a while or to the end) |
+| Circuit | **Schematic** (an `.asc`; its stimuli are wired to it, and the wire shows the net), **Candidates** (several schematics compared; `OUT = A: V(out), B: V(vo)` maps a logical signal to each one's own) |
+| Variation | **Nominal**, **Monte Carlo** (runs, paired, seed, temperature), **Corners** (temperatures), **Combine** (product or union of conditions) |
+| Simulation | **Simulate**: every case at every condition, as campaigns in the queue |
+| Evaluation | **Limits** (the criteria of Qualification > Pass / Fail), **Error Budget**, **Spec** |
+| Output | **Report** (HTML: a grid per criterion), **Export** (CSV of the verdicts), **Plots** (signals saved and drawn with the waveforms) |
+
+Worst-Case Search, tolerance edges in Corners, Stress, Survival, Derating, Parts Database, Susceptibility and
+Spectrum are in the library but do not run yet; a study that uses them shows them as skipped.
+
+**New...** starts a study blank, from a template, or from the Setup and Qualification tabs. The templates are:
+
+- qualification;
+- qualification at corners + worst case;
+- compare candidates;
+- tolerance;
+- input short;
+- derating.
+
+**Run Here** (F5) runs the study shown while the Studies tab is open, and **Stop** stops it. Each block shows its
+state on the canvas: running, done, from the cache, error, skipped.
+
+- **Cache:** a campaign is reused when its netlist and condition have not changed, so changing a limit and running
+  again only judges again.
+- **Results window:** the verdicts open in a window of their own, with one grid per criterion (case × condition).
+  Click a cell for its details; double-click it for its waveforms (the stimulus on top, one plot per criterion,
+  the window shaded, the samples outside the limit in red).
+- **Folders:** the campaigns, the report and the CSV go under `<output>\studies\<study>`. Folder names stay short,
+  because LTspice cannot open files past 260 characters of path. A study whose folders would still be too deep
+  says so before it runs.
+- **Requirement IDs:** a criterion can carry one (e.g. REQ-PWR-012); it follows its verdicts into the grid, the
+  report and the CSV.
+
+The studies are saved in the `.spica` setup (`[Study]` and `[Block n]` sections). `SPICA-cli studies <setup.spica>`
+lists them. The design and what comes next are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Queue
 
 **Run Here** takes the campaign as the Setup tab shows it at that moment (schematic netlist, runs,

@@ -269,6 +269,7 @@ namespace Spica.Core
                 sb.AppendLine("To=" + c.To);
                 sb.AppendLine("ToOffset=" + Num(c.ToOffset));
                 sb.AppendLine("Tests=" + c.Tests);
+                if (c.Requirement.Length > 0) sb.AppendLine("Requirement=" + c.Requirement);
             }
             sb.AppendLine();
             sb.AppendLine("[Report]");
@@ -439,6 +440,7 @@ namespace Spica.Core
                         case "to": if (Enum.TryParse(val, true, out QualAnchor ta)) c.To = ta; break;
                         case "tooffset": { var o = ParseNum(val); c.ToOffset = double.IsNaN(o) ? 0 : o; break; }
                         case "tests": c.Tests = val; break;
+                        case "requirement": c.Requirement = val; break;
                     }
                 }
                 else if (section.Equals("Report", StringComparison.OrdinalIgnoreCase))

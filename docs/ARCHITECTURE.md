@@ -1,6 +1,6 @@
 # SPICA architecture: analysis graphs
 
-Status: **agreed direction** (2026-11-19). Steps 1 and 2 of section 10 are done.
+Status: **agreed direction** (2026-11-19). Steps 1 and 2 of section 10 are done, and most of step 3.
 
 - **Step 1:** the engine is its own project (`src/SPICA.Engine`) and holds the graph model (`Graph/`).
 - **Step 2:** the app has a Studies tab with the editor:
@@ -9,8 +9,15 @@ Status: **agreed direction** (2026-11-19). Steps 1 and 2 of section 10 are done.
     fits from a port's menu, removed, panned and zoomed;
   - the properties of the selected block, with lists of the nets, tests, criteria, errors and signals;
   - templates, and the studies the old tabs stand for.
+- **Step 3 (most of it):** studies run from the editor:
+  - Run Here on the Studies tab; Simulate puts its campaigns in the queue and the study goes on when they end;
+  - executors (`Graph/Executors.cs`): Supply Waveform, Fault, Schematic, Candidates, Nominal, Monte Carlo,
+    Corners (temperatures), Combine, Simulate (with the cache), Limits, Error Budget, Spec, Report, Export, Plots;
+  - the verdicts in a results window, one grid of case × condition per criterion, with the waveforms on a
+    double-click.
 
-Blocks do not run yet (step 3).
+Not yet: Worst-Case Search, tolerance edges, Stress / Survival / Derating / Parts Database, Susceptibility,
+Spectrum, overlaid candidate waveforms, studies run remotely or from the command line.
 
 This document guides the move from today's fixed tabs (Setup, Qualification, Queue, Results) to one modular app
 where every analysis is a graph of blocks.

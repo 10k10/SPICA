@@ -23,6 +23,7 @@ namespace Spica.Core
         public QualAnchor From = QualAnchor.TestStart, To = QualAnchor.TestEnd;
         public double FromOffset, ToOffset;        // seconds after the anchor
         public string Tests = "";                  // "" = every test; else words a test's name contains, separated by |
+        public string Requirement = "";            // the requirement it checks (e.g. REQ-PWR-012), for reports
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 

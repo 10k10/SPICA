@@ -599,6 +599,8 @@ namespace Spica.UI
         {
             if (o.WcStage == 1) return $"Worst case, step 1 of 2: screening (nominal + each of {o.Mc.Sites.Count} tolerances at its edge); verification follows by itself";
             if (o.WcStage == 2) return "Worst case, step 2 of 2: verification (every tolerance pushed the worst way for each measurement)";
+            if (o.Mc?.Design != null && o.Mc.Design.Count == 1 && o.Mc.Design[0].All(v => v == 0))
+                return "Nominal: one unit, every tolerance at its nominal value" + (o.CornerCount > 1 ? $" x {o.CornerCount} temperatures" : "");
             if (o.Mc?.Design != null) return $"Worst case, all corners: {o.Runs:N0} combinations of {o.Mc.Sites.Count} tolerance edges";
             if (o.Stop != null && o.Stop.Enabled)
                 return s.AutoStopped ? "Stopped early, the answer is known: " + (s.StopStatus ?? "")
@@ -608,6 +610,7 @@ namespace Spica.UI
 
         void StopCampaign()
         {
+            if (StudyRunning && tabs.SelectedIndex == TabStudies) { StopStudy(); return; }
             var job = queue.Running;
             var run = job?.Engine;
             if (run == null) return;
