@@ -14,7 +14,9 @@ namespace Spica.UI
     /// - Drag a block to move it; drag from an output port to an input port to wire them (the types must match).
     /// - Click a wire to select it; Delete removes the selected block or wire.
     /// - Right-click a port for a new block of a kind that fits; right-click the canvas to add a block there.
-    /// - Drag the empty canvas (or middle-drag) to pan; wheel to zoom; double-click the empty canvas to fit.
+    /// - Drag the empty canvas (or middle-drag) to pan; wheel to zoom; Space or a double-click on the empty canvas fits.
+    /// - A double-click on a block opens its configurator (<see cref="BlockOpened"/>); a block that misses something
+    ///   it needs is drawn with a red border, and the pointer over it says what.
     /// - Blocks dropped from the library (a <see cref="BlockKind"/> name as text) are added where they fall.
     /// </summary>
     public sealed class StudyCanvas : Control
@@ -90,6 +92,30 @@ namespace Spica.UI
 
         /// <summary>A line under each block's title (e.g. "net in, 4 tests"); null = the first property.</summary>
         public Func<Block, string> Caption;
+        /// <summary>What a block misses to run (a red border when not empty); null = nothing checked.</summary>
+        public Func<Block, List<string>> Problems;
+        /// <summary>Whether a block kind runs in this version (the others are drawn faded).</summary>
+        public Func<string, bool> Runs = k => true;
+        /// <summary>A double-click on a block: open its configurator.</summary>
+        public event Action<Block> BlockOpened;
+        readonly ToolTip tip = new ToolTip { InitialDelay = 300, AutoPopDelay = 20000 };
+        string tipText = "";
+
+        /// <summary>A 16 px magnifying glass in the style of the app's icons (for Fit).</summary>
+        public static Image MagnifierIcon()
+        {
+            var bmp = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var handle = new Pen(Color.FromArgb(96, 64, 32), 3f)) g.DrawLine(handle, 10, 10, 14, 14);
+                using (var glass = new SolidBrush(Color.FromArgb(200, 230, 255))) g.FillEllipse(glass, 1, 1, 10, 10);
+                using (var shine = new SolidBrush(Color.White)) g.FillEllipse(shine, 3, 3, 4, 3);
+                using (var rim = new Pen(Color.Black, 1.5f)) g.DrawEllipse(rim, 1, 1, 10, 10);
+            }
+            return bmp;
+        }
+
         /// <summary>State badges of a run (empty = none shown).</summary>
         public readonly Dictionary<int, BlockState> States = new Dictionary<int, BlockState>();
 
@@ -159,6 +185,9 @@ namespace Spica.UI
         }
 
         static int Snap(float v) => (int)Math.Round(v / 8f) * 8;
+
+        static Color Blend(Color a, Color b, double t) =>
+            Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
 
         // ------------------------------------------------------------------ hit testing
 
@@ -316,17 +345,30 @@ namespace Spica.UI
             bool sel = b == Selected;
             using (var sh = new SolidBrush(Color.FromArgb(128, 128, 128))) g.FillRectangle(sh, r.X + 3, r.Y + 3, r.Width, r.Height);
             using (var body = new SolidBrush(Color.FromArgb(244, 244, 244))) g.FillRectangle(body, r);
-            var headCol = k == null ? Color.Gray : FamilyColor[k.Family];
+            bool runs = k != null && Runs(b.Kind);
+            var headCol = k == null ? Color.Gray : runs ? FamilyColor[k.Family] : Blend(FamilyColor[k.Family], Color.FromArgb(160, 160, 160), 0.6);
+            var missing = Problems?.Invoke(b);
+            bool bad = missing != null && missing.Count > 0;
             using (var hb = new SolidBrush(headCol)) g.FillRectangle(hb, r.X, r.Y, r.Width, Head);
             var oldSm = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.None;
             using (var frame = new Pen(sel ? Win98.Navy : Color.Black, sel ? 2.5f : 1f)) g.DrawRectangle(frame, r);
+            if (bad)
+                using (var red = new Pen(Color.FromArgb(220, 0, 0), 3f)) g.DrawRectangle(red, r.X - 3, r.Y - 3, r.Width + 6, r.Height + 6);
             g.SmoothingMode = oldSm;
 
             var oldIm = g.InterpolationMode;
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.DrawImage(KindIcon(b.Kind), r.X + 2, r.Y + 1, 16, 16);
             g.InterpolationMode = oldIm;
+            if (bad)
+            {
+                // a red "!" on the corner: something to set before it runs
+                var dot = new RectangleF(r.Right - 9, r.Y - 9, 16, 16);
+                using (var rb = new SolidBrush(Color.FromArgb(220, 0, 0))) g.FillEllipse(rb, dot);
+                using (var wp = new Pen(Color.White, 1.5f)) g.DrawEllipse(wp, dot);
+                using (var wb = new SolidBrush(Color.White)) g.DrawString("!", Win98.BoldFont, wb, dot.X + 5, dot.Y + 1);
+            }
             using (var white = new SolidBrush(Color.White))
             {
                 g.DrawString(k?.Title ?? b.Kind, Win98.BoldFont, white, new RectangleF(r.X + 20, r.Y + 3, r.Width - 22, Head - 3), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
@@ -425,6 +467,10 @@ namespace Spica.UI
                     break;
                 default:
                     var w = ToWorld(e.Location);
+                    var over = BlockAt(w);
+                    var why = over == null ? null : Problems?.Invoke(over);
+                    string t = why == null || why.Count == 0 ? "" : (over.Spec?.Title ?? over.Kind) + " misses:\n- " + string.Join("\n- ", why) + "\n(double-click to set it up)";
+                    if (t != tipText) { tipText = t; tip.SetToolTip(this, t); }
                     Cursor = PortAt(w, out _, out bool input, out _) ? (input ? Cursors.Hand : Cursors.Cross) : BlockAt(w) != null ? Cursors.SizeAll : WireAt(w) != null ? Cursors.Hand : Cursors.Default;
                     break;
             }
@@ -456,7 +502,10 @@ namespace Spica.UI
         protected override void OnMouseDoubleClick(MouseEventArgs e)
         {
             base.OnMouseDoubleClick(e);
-            if (e.Button == MouseButtons.Left && study != null && BlockAt(ToWorld(e.Location)) == null) FitAll();
+            if (e.Button != MouseButtons.Left || study == null) return;
+            var b = BlockAt(ToWorld(e.Location));
+            if (b == null) FitAll();
+            else { drag = Drag.None; BlockOpened?.Invoke(b); }
         }
 
         protected override void OnMouseWheel(MouseEventArgs e)
@@ -468,12 +517,13 @@ namespace Spica.UI
             Invalidate();
         }
 
-        protected override bool IsInputKey(Keys keyData) => keyData == Keys.Delete || base.IsInputKey(keyData);
+        protected override bool IsInputKey(Keys keyData) => keyData == Keys.Delete || keyData == Keys.Space || base.IsInputKey(keyData);
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
             if (e.KeyCode == Keys.Delete) DeleteSelection();
+            if (e.KeyCode == Keys.Space) { FitAll(); e.Handled = true; }
         }
 
         public void DeleteSelection()
@@ -571,7 +621,7 @@ namespace Spica.UI
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) menu?.Dispose();
+            if (disposing) { menu?.Dispose(); tip.Dispose(); }
             base.Dispose(disposing);
         }
     }

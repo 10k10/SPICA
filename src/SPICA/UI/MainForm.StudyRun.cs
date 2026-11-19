@@ -97,12 +97,11 @@ namespace Spica.UI
         void RunStudy()
         {
             var st = CurrentStudy;
-            if (st == null) { Win98MessageBox.Show(this, "Choose or make a study first (New... on the Studies tab).", "SPICA", MessageBoxButtons.OK, Win98Icon.Information); return; }
+            if (st == null) { Win98MessageBox.Show(this, "Choose or make a study first (New, on the Workbench).", "SPICA", MessageBoxButtons.OK, Win98Icon.Information); return; }
             if (StudyRunning) { Win98MessageBox.Show(this, $"The study \"{studyRunner.Study.Name}\" is still running.", "SPICA", MessageBoxButtons.OK, Win98Icon.Information); return; }
             if (ascPath == null) { BrowseSchematic(); return; }
             if (!File.Exists(settings.LtspicePath ?? "")) { Win98MessageBox.Show(this, "LTspice.exe was not found. Set its location in Tools > Options.", "SPICA", MessageBoxButtons.OK, Win98Icon.Error); return; }
-            var issues = st.Validate();
-            if (issues.Count > 0) { ValidateStudy(true); return; }
+            if (!ValidateStudy(false)) { ValidateStudy(true); return; }
             ReadUiIntoProject();
 
             studyHost = new StudyHost(this);

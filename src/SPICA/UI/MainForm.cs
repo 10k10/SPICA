@@ -55,7 +55,24 @@ namespace Spica.UI
 
         readonly Timer uiTimer = new Timer { Interval = 250 };
 
-        const int TabSetup = 0, TabQual = 1, TabQueue = 2, TabResults = 3, TabStudies = 4;
+        // the tabs by page: the Workbench, Queue and Results always; the classic Setup and Qualification when asked for (-1 when hidden)
+        int PageIndex(Win98TabPage p) => tabs == null ? -1 : tabs.Pages.ToList().IndexOf(p);
+        int TabSetup => PageIndex(pageSetup);
+        int TabQual => PageIndex(pageQual);
+        int TabQueue => PageIndex(pageQueue);
+        int TabResults => PageIndex(pageResults);
+        int TabStudies => PageIndex(pageStudies);
+
+        /// <summary>The tabs in their order: the Workbench first, then the queue and the results, the classic tabs last when shown.</summary>
+        void ApplyTabs()
+        {
+            var list = new List<Win98TabPage> { pageStudies, pageQueue, pageResults };
+            if (settings.ClassicTabs) { list.Add(pageSetup); list.Add(pageQual); }
+            tabs.SetPages(list);
+            if (miClassic != null) miClassic.Checked = settings.ClassicTabs;
+        }
+
+        ToolStripMenuItem miClassic;
         const int PaneText = 0, PaneListener = 1, PaneLtspice = 2, PaneClock = 4;
 
         public MainForm()
@@ -170,7 +187,7 @@ namespace Spica.UI
             miRecent.DropDownItems.Add("(empty)");
 
             var mCampaign = new ToolStripMenuItem("&Campaign");
-            miAdd = new ToolStripMenuItem("Run on &This PC", Win98.Icon("run16"), (s, e) => AddToQueue()) { ShortcutKeys = Keys.F5 };
+            miAdd = new ToolStripMenuItem("&Run the Study", Win98.Icon("run16"), (s, e) => AddToQueue()) { ShortcutKeys = Keys.F5 };
             miRemote = new ToolStripMenuItem("Run on the &Remote PC", Win98.Icon("remote16"), (s, e) => RunRemote()) { ShortcutKeys = Keys.F6 };
             miStop = new ToolStripMenuItem("S&top the Running Campaign...", Win98.Icon("stop16"), (s, e) => StopCampaign()) { ShortcutKeys = Keys.Shift | Keys.F5 };
             var miQueue = new ToolStripMenuItem("Show the Q&ueue", Win98.Icon("queue16"), (s, e) => tabs.SelectedIndex = TabQueue) { ShortcutKeys = Keys.Control | Keys.Q };
@@ -185,6 +202,20 @@ namespace Spica.UI
             mResults.DropDownItems.AddRange(new ToolStripItem[] { miResults, new ToolStripSeparator(), miExport, miReport, new ToolStripSeparator(), miFolder });
             mResults.DropDownOpening += (s, e) => UpdateCommandState();
 
+            var mView = new ToolStripMenuItem("&View");
+            mView.DropDownItems.Add(new ToolStripMenuItem("&Workbench", Win98.Icon("chart16"), (s, e) => tabs.SelectedIndex = TabStudies));
+            mView.DropDownItems.Add(new ToolStripMenuItem("&Queue", Win98.Icon("queue16"), (s, e) => tabs.SelectedIndex = TabQueue));
+            mView.DropDownItems.Add(new ToolStripMenuItem("&Results", Win98.Icon("results16"), (s, e) => tabs.SelectedIndex = TabResults));
+            mView.DropDownItems.Add(new ToolStripSeparator());
+            miClassic = new ToolStripMenuItem("&Classic Setup and Qualification Tabs", null, (s, e) =>
+            {
+                settings.ClassicTabs = !settings.ClassicTabs;
+                settings.Save();
+                ApplyTabs();
+                if (settings.ClassicTabs) tabs.SelectedIndex = TabSetup;
+            }) { Checked = settings.ClassicTabs };
+            mView.DropDownItems.Add(miClassic);
+
             var mTools = new ToolStripMenuItem("&Tools");
             mTools.DropDownItems.Add(new ToolStripMenuItem("&Listener...", Win98.Icon("listener16"), (s, e) => ShowListener()) { ShortcutKeys = Keys.Control | Keys.L });
             mTools.DropDownItems.Add(new ToolStripSeparator());
@@ -197,7 +228,7 @@ namespace Spica.UI
             var mHelp = new ToolStripMenuItem("&Help");
             mHelp.DropDownItems.Add(new ToolStripMenuItem("&About SPICA...", Win98.Icon("help16"), (s, e) => ShowAbout()));
 
-            menu.Items.AddRange(new ToolStripItem[] { mFile, mCampaign, mResults, mTools, mHelp });
+            menu.Items.AddRange(new ToolStripItem[] { mFile, mView, mCampaign, mResults, mTools, mHelp });
             Win98Renderer.StyleDropDowns(menu.Items);
 
             // the toolbar follows the work: the file, the campaign, the listener, the results, this PC
@@ -227,8 +258,8 @@ namespace Spica.UI
             tbOpen = Btn("Open", "open32", (s, e) => BrowseSchematic(), "Open an LTspice schematic (.asc) or a SPICA setup (.spica)  (Ctrl+O)");
             tbSave = Btn("Save", "save32", (s, e) => SaveSetup(false), "Save the setup (.spica): runs, temperatures, signals, spec limits, TF, error budget, report  (Ctrl+S)");
             toolbar.Items.Add(new ToolStripSeparator());
-            tbAdd = Btn("Run Here", "run32", (s, e) => AddToQueue(), "Run on this PC: the campaign of the Setup tab, or the study shown on the Studies tab.\nIt joins the queue and starts at once when nothing is running  (F5)", 70);
-            tbRemote = Btn("Run Remote", "remote32", (s, e) => RunRemote(), "Send the campaign of the Setup tab to the remote PC (the shared folder in Tools > Options):\nits listener runs it there, and the Queue tab follows it here  (F6)", 76);
+            tbAdd = Btn("Run", "run32", (s, e) => AddToQueue(), "Run the study shown on the Workbench on this PC: its campaigns join the queue\n(the classic Setup tab's campaign, when that tab is open)  (F5)", 70);
+            tbRemote = Btn("Run Remote", "remote32", (s, e) => RunRemote(), "Send the campaign of the classic Setup tab (View menu) to the remote PC (the shared folder in Tools > Options):\nits listener runs it there, and the Queue tab follows it here  (F6)", 76);
             tbStop = Btn("Stop", "stop32", (s, e) => StopCampaign(), "Stop the running campaign; finished runs are kept  (Shift+F5)");
             toolbar.Items.Add(new ToolStripSeparator());
             tbListener = Btn("Listener", "listener32", (s, e) => ShowListener(), "Watch a folder and run every campaign put there  (Ctrl+L)");
@@ -252,15 +283,12 @@ namespace Spica.UI
             pageQual = new Win98TabPage("Qualification", Win98.Icon("check16"));
             pageQueue = new Win98TabPage("Queue", Win98.Icon("queue16"));
             pageResults = new Win98TabPage("Results", Win98.Icon("results16"));
-            // the study editor: last until the blocks can run, then the place every analysis starts from
-            pageStudies = new Win98TabPage("Studies", Win98.Icon("chart16"));
-            tabs.AddPage(pageSetup);
-            tabs.AddPage(pageQual);
-            tabs.AddPage(pageQueue);
-            tabs.AddPage(pageResults);
-            tabs.AddPage(pageStudies);
+            // the study editor, where every analysis starts
+            pageStudies = new Win98TabPage("Workbench", Win98.Icon("chart16"));
+            ApplyTabs();
             tabs.SelectedIndexChanged += (s, e) =>
             {
+                UpdateCommandState();
                 if (tabs.SelectedIndex != TabResults) return;
                 // nothing shown yet: the campaign on the monitor is what the user means
                 if (resultsView.Data == null && engine != null && shownJob != null) { liveJob = shownJob; RefreshResults(); }
@@ -846,11 +874,13 @@ namespace Spica.UI
             if (tbAdd == null || resultsView == null || btnReload == null) return;
             bool has = netlist != null, slave = Slave;
             // a PC that listens runs what others send: nothing is opened or started by hand there
-            tbAdd.Enabled = miAdd.Enabled = tbRemote.Enabled = miRemote.Enabled = has && !slave;
+            tbAdd.Enabled = miAdd.Enabled = has && !slave;
+            // a study runs on this PC in this version: Run Remote sends the classic Setup tab's campaign
+            tbRemote.Enabled = miRemote.Enabled = has && !slave && tabs.SelectedIndex == TabSetup;
             tbOpen.Enabled = miOpen.Enabled = miRecent.Enabled = !slave;
             tbSave.Enabled = miSave.Enabled = miSaveAs.Enabled = has;
             btnReload.Enabled = has && !slave;
-            tbStop.Enabled = miStop.Enabled = Running;
+            tbStop.Enabled = miStop.Enabled = Running || StudyRunning;
             // Export / Report: the results shown, or the campaign on the monitor once it has finished runs
             bool can = resultsView.CanExport || (engine != null && engine.Snapshot().Done > 0);
             miExport.Enabled = miReport.Enabled = tbReport.Enabled = can;

@@ -13,7 +13,83 @@ scheduler profiles (`SPICA.profiles`) are written next to it. `SPICA-cli-<versio
 engine without a window, for scripts, other tools and the workstation that runs campaigns for others
 (see [Command line](#command-line)).
 
-## How a campaign works
+## Workbench: studies as graphs of blocks
+
+A study is an analysis drawn as a graph: blocks joined by wires, left to right, from what is applied to the
+circuit to what is delivered. The **Workbench** is the editor, and the tab the app opens on. Opening a schematic
+that has no study yet gives it one, with its Schematic block, to start from.
+
+- **Left:** the block library, as a tree with search. Double-click a block or drag it in. The blocks marked
+  "(soon)" do not run yet.
+- **The rest:** the canvas.
+  - **Moving around:** drag the empty canvas to pan, use the wheel to zoom, and press Space (or double-click the
+    empty canvas) to fit the whole study.
+  - **Setting up a block:** double-click it to open its configurator (OK keeps the changes, Cancel leaves the
+    block as it was). Limits lists the setup's criteria, with New / Edit / Delete; Simulate holds the output
+    folder of the studies.
+  - **What is missing:** a block that misses something it needs to run (a schematic, a net, tests, criteria, an
+    input not wired) has a red border and a red "!". The pointer over it says what is missing; **Validate**
+    lists it all.
+
+A wire carries one type of data and only joins ports of that type (the colours): Stimulus, Circuit, Conditions,
+Data, Table, Ratings, Verdicts. A wire of the wrong type, or one that would make a loop, is refused, with the
+reason. Right-click a port to add a block of a kind that fits it, already wired.
+
+| Family | Blocks that run in this version |
+|---|---|
+| Stimulus | **Supply Waveform** (a test of a library, e.g. DO-160G Section 16, into a net, in place of its source; one case per test), **Fault** (a switch of resistance R between two nets, closed from a time on, for a while or to the end) |
+| Circuit | **Schematic** (an `.asc`; its stimuli are wired to it, and the wire shows the net), **Candidates** (several schematics compared; `OUT = A: V(out), B: V(vo)` maps a logical signal to each one's own) |
+| Variation | **Nominal**, **Monte Carlo** (runs, paired, seed, temperature), **Corners** (temperatures), **Combine** (product or union of conditions) |
+| Simulation | **Simulate**: every case at every condition, as campaigns in the queue |
+| Evaluation | **Limits** (the setup's criteria: made and edited in its configurator), **Error Budget**, **Spec** |
+| Output | **Report** (HTML: a grid per criterion), **Export** (CSV of the verdicts), **Plots** (signals saved and drawn with the waveforms) |
+
+Worst-Case Search, tolerance edges in Corners, Stress, Survival, Derating, Parts Database, Susceptibility and
+Spectrum are in the library but do not run yet; a study that uses them shows them as skipped.
+
+**New** starts a study blank, from a template, or from the classic Setup and Qualification tabs. The templates are:
+
+- qualification;
+- qualification at corners + worst case;
+- compare candidates;
+- tolerance;
+- input short;
+- derating.
+
+**Run** (toolbar, F5) or **Add to Queue** (Workbench bar) runs the study shown, and **Stop** stops it. Each block
+shows its state on the canvas: running, done, from the cache, error, skipped.
+
+- **Cache:** a campaign is reused when its netlist and condition have not changed, so changing a limit and running
+  again only judges again.
+- **Results tab:** the study opens there when it ends. A tree on the left lists the campaign open and the
+  studies that ran, each with Verdicts, Waveforms and Report.
+  - **Verdicts:** one grid per criterion (case × condition). Click a cell for its details; double-click it for
+    its waveforms.
+  - **Waveforms:** a viewer in the manner of LTspice.
+    - **Cases:** tick several cases and conditions to overlay them (temperatures, candidates). In Monte Carlo,
+      choose the worst run, all of them or one.
+    - **Signals and panes:** double-click a signal of the .raw to add it to the pane chosen, or start a new pane.
+      The panes share the time axis: zoom one and all follow.
+    - **Criteria:** a criterion draws its window and limits on its signal.
+    - **Open in LTspice** opens the .raw there.
+- **What the .raw holds:** what the criteria and the Plots need, plus the signals chosen in a **Measure** block
+  (Save). Its Meas field adds `.meas` lines. A signal that was not saved cannot be shown.
+- **Folders:** the campaigns, the report and the CSV go under `<output>\studies\<study>`. Folder names stay short,
+  because LTspice cannot open files past 260 characters of path. A study whose folders would still be too deep
+  says so before it runs.
+- **Requirement IDs:** a criterion can carry one (e.g. REQ-PWR-012); it follows its verdicts into the grid, the
+  report and the CSV.
+
+The studies are saved in the `.spica` setup (`[Study]` and `[Block n]` sections). `SPICA-cli studies <setup.spica>`
+lists them. The design and what comes next are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### The classic tabs
+
+**View > Classic Setup and Qualification Tabs** shows the tabs of the versions before the Workbench. While the
+classic Setup tab is open, Run and Run Remote act on its campaign, as described below. Studies run on this PC only
+in this version.
+
+## How a campaign works (the engine; the classic Setup tab)
 
 1. **Open** an `.asc`. SPICA runs `LTspice -netlist`, lists every net (`V(x)`) and device current,
    and finds the `.meas` statements.
@@ -21,7 +97,7 @@ engine without a window, for scripts, other tools and the workstation that runs 
    stays small. Signals used by `.meas` are always saved (locked), because `.meas` reads the `.raw`.
 3. Type the **number of runs**. Any `.step` in the schematic is replaced by SPICA's own
    `.step param run a b 1` per chunk (a single-run chunk uses `.param run=N`, because LTspice refuses a one-point `.step`).
-4. **Run Here** (F5) or **Run Remote** (F6). Run Here puts the campaign in this PC's queue: it starts at
+4. **Run** (F5, with the classic Setup tab open) or **Run Remote** (F6). Run puts the campaign in this PC's queue: it starts at
    once, or waits its turn behind the ones already there (see *Queue*). Run Remote sends it to another PC
    (see *Run Remote*). Each chunk is launched as `LTspice.exe -b chunk.net -ini <private ini>`:
    - The private ini copies the user's LTspice settings and forces `UseClocktoReseedMC=true`
@@ -203,67 +279,6 @@ clock only the statistics repeat. A resumed campaign keeps its first bundle.
 
 The statistics were checked against SciPy (Anderson-Darling, skewness, kurtosis, quantiles,
 Clopper-Pearson, normal tail ppm, regression standard errors).
-
-## Studies (graphs of blocks)
-
-A study is an analysis drawn as a graph: blocks joined by wires, left to right, from what is applied to the
-circuit to what is delivered. The Studies tab is the editor:
-
-- **Left:** the block library, as a tree with search. Double-click a block or drag it in.
-- **Middle:** the canvas.
-- **Right:** the properties of the block you select.
-
-A wire carries one type of data and only joins ports of that type (the colours): Stimulus, Circuit, Conditions,
-Data, Table, Ratings, Verdicts. A wire of the wrong type, or one that would make a loop, is refused, with the
-reason. Right-click a port to add a block of a kind that fits it, already wired.
-
-| Family | Blocks that run in this version |
-|---|---|
-| Stimulus | **Supply Waveform** (a test of a library, e.g. DO-160G Section 16, into a net, in place of its source; one case per test), **Fault** (a switch of resistance R between two nets, closed from a time on, for a while or to the end) |
-| Circuit | **Schematic** (an `.asc`; its stimuli are wired to it, and the wire shows the net), **Candidates** (several schematics compared; `OUT = A: V(out), B: V(vo)` maps a logical signal to each one's own) |
-| Variation | **Nominal**, **Monte Carlo** (runs, paired, seed, temperature), **Corners** (temperatures), **Combine** (product or union of conditions) |
-| Simulation | **Simulate**: every case at every condition, as campaigns in the queue |
-| Evaluation | **Limits** (the criteria of Qualification > Pass / Fail), **Error Budget**, **Spec** |
-| Output | **Report** (HTML: a grid per criterion), **Export** (CSV of the verdicts), **Plots** (signals saved and drawn with the waveforms) |
-
-Worst-Case Search, tolerance edges in Corners, Stress, Survival, Derating, Parts Database, Susceptibility and
-Spectrum are in the library but do not run yet; a study that uses them shows them as skipped.
-
-**New...** starts a study blank, from a template, or from the Setup and Qualification tabs. The templates are:
-
-- qualification;
-- qualification at corners + worst case;
-- compare candidates;
-- tolerance;
-- input short;
-- derating.
-
-**Run Here** (F5) runs the study shown while the Studies tab is open, and **Stop** stops it. Each block shows its
-state on the canvas: running, done, from the cache, error, skipped.
-
-- **Cache:** a campaign is reused when its netlist and condition have not changed, so changing a limit and running
-  again only judges again.
-- **Results tab:** the study opens there when it ends. A tree on the left lists the campaign open and the
-  studies that ran, each with Verdicts, Waveforms and Report.
-  - **Verdicts:** one grid per criterion (case × condition). Click a cell for its details; double-click it for
-    its waveforms.
-  - **Waveforms:** a viewer in the manner of LTspice.
-    - **Cases:** tick several cases and conditions to overlay them (temperatures, candidates). In Monte Carlo,
-      choose the worst run, all of them or one.
-    - **Signals and panes:** double-click a signal of the .raw to add it to the pane chosen, or start a new pane.
-      The panes share the time axis: zoom one and all follow.
-    - **Criteria:** a criterion draws its window and limits on its signal.
-    - **Open in LTspice** opens the .raw there.
-- **What the .raw holds:** what the criteria and the Plots need, plus the signals chosen in a **Measure** block
-  (Save). Its Meas field adds `.meas` lines. A signal that was not saved cannot be shown.
-- **Folders:** the campaigns, the report and the CSV go under `<output>\studies\<study>`. Folder names stay short,
-  because LTspice cannot open files past 260 characters of path. A study whose folders would still be too deep
-  says so before it runs.
-- **Requirement IDs:** a criterion can carry one (e.g. REQ-PWR-012); it follows its verdicts into the grid, the
-  report and the CSV.
-
-The studies are saved in the `.spica` setup (`[Study]` and `[Block n]` sections). `SPICA-cli studies <setup.spica>`
-lists them. The design and what comes next are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Queue
 

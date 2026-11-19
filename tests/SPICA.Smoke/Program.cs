@@ -8,6 +8,20 @@ using Spica.Core;
 //   SPICA.Smoke <schematic.asc> <runs> [instances threads]
 static class Program
 {
+    /// <summary>The index of a tab of the main window by its name (TabStudies, TabQueue, TabResults, TabSetup, TabQual).</summary>
+    static int TabOf(Spica.UI.MainForm form, string tab) =>
+        (int)typeof(Spica.UI.MainForm).GetProperty(tab, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(form);
+
+    /// <summary>The classic Setup and Qualification tabs shown, the Setup tab open: Run runs its campaign, as the older tests expect.</summary>
+    static void Classic(Spica.UI.MainForm form)
+    {
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var mf = typeof(Spica.UI.MainForm);
+        ((AppSettings)mf.GetField("settings", flags).GetValue(form)).ClassicTabs = true;
+        mf.GetMethod("ApplyTabs", flags).Invoke(form, null);
+        ((Spica.UI.Win98TabControl)mf.GetField("tabs", flags).GetValue(form)).SelectedIndex = TabOf(form, "TabSetup");
+    }
+
     static int Main(string[] args)
     {
         // SPICA.Smoke --ui <campaign folder> <png dir> [meas lsl usl] [tfX tfY theory budget] : screenshot every Results tab
@@ -94,6 +108,7 @@ static class Program
             var t = new Thread(() =>
             {
                 var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]) };
+                Classic(form);
                 var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
                 string rec = Path.Combine(args[1], "campaign.spica"), before = File.ReadAllText(rec);
                 var timer = new System.Windows.Forms.Timer { Interval = 500 };
@@ -140,6 +155,7 @@ static class Program
             var t = new Thread(() =>
             {
                 var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]) };
+                Classic(form);
                 var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
                 var timer = new System.Windows.Forms.Timer { Interval = 800 };
                 timer.Tick += (s, e) =>
@@ -278,7 +294,7 @@ static class Program
                     project.Studies.Add(study); project.Studies.Add(fault);
                     // a short output folder: the scratch folders alone are long, and LTspice stops at 260 characters of path
                     ((Spica.UI.Win98TextField)Get("txtOut")).Text = Path.Combine(Path.GetTempPath(), "spq");
-                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 4;
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = TabOf(form, "TabStudies");
                     Call("ShowStudies");
                     ((System.Windows.Forms.ComboBox)Get("cbStudy")).SelectedIndex = 0;
                     Check(study.Validate().Count == 0 && fault.Validate().Count == 0, "both studies are wired");
@@ -295,7 +311,7 @@ static class Program
                         var canvas = (Spica.UI.StudyCanvas)Get("studyCanvas");
                         Check(canvas.States.Values.All(s => s == Spica.Core.Graph.BlockState.Done || s == Spica.Core.Graph.BlockState.Cached), "every block done (or from the cache)");
                         Shot(form, "study");
-                        Check(((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex == 3, "the verdicts open on the Results tab");
+                        Check(((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex == TabOf(form, "TabResults"), "the verdicts open on the Results tab");
                         Shot(form, "results");
                         mf.GetMethod("OpenStudyWaves", flags).Invoke(form, new object[] { verdicts.First(v => v.Criterion == "holdup" && v.Case.Contains("200 ms") && v.Condition.StartsWith("25")) });
                         Pump(30);
@@ -379,8 +395,16 @@ static class Program
                 {
                     start.Stop();
                     var project = (SpicaProject)Get("project");
-                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 4;
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = TabOf(form, "TabStudies");
                     Shot(form, "empty");
+                    // a schematic opened without studies gets one with its Schematic block
+                    Check(project.Studies.Count == 1 && project.Studies[0].Blocks.Count == 1 && project.Studies[0].Blocks[0].Kind == "Schematic", "the schematic opens in a study of its own");
+                    Check(((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex == TabOf(form, "TabStudies") && TabOf(form, "TabStudies") == 0, "the Workbench is the first tab, and the one shown");
+                    // the classic tabs may be on in this folder's SPICA.ini (the older tests turn them on): off, as by default
+                    ((AppSettings)Get("settings")).ClassicTabs = false;
+                    mf.GetMethod("ApplyTabs", flags).Invoke(form, null);
+                    Check(TabOf(form, "TabSetup") < 0 && TabOf(form, "TabQual") < 0 && TabOf(form, "TabStudies") == 0, "without the classic tabs the Workbench is first, Setup and Qualification hidden");
+                    project.Studies.Clear();
                     foreach (var name in new[] { "Qualification at corners + worst case", "Compare candidates", "Derating" })
                         project.Studies.Add(Spica.Core.Graph.StudyTemplates.Find(name).Make(project));
                     project.Studies.AddRange(Spica.Core.Graph.LegacyStudies.From(project));
@@ -395,7 +419,40 @@ static class Program
                     cb.SelectedIndex = 0;
                     var sw = project.Studies[0].Blocks.First(b => b.Kind == "SupplyWaveform");
                     canvas.Select(sw);
-                    Shot(form, "props");
+                    // a block missing settings is drawn red, and says what it misses
+                    var problems = (System.Collections.Generic.List<string>)mf.GetMethod("BlockProblems", flags).Invoke(form, new object[] { sw });
+                    Check(problems.Any(x => x.Contains("Tests")), "Supply Waveform without tests is flagged: " + string.Join("; ", problems));
+                    var limits = project.Studies[0].Blocks.First(b => b.Kind == "Limits");
+                    var lp = (System.Collections.Generic.List<string>)mf.GetMethod("BlockProblems", flags).Invoke(form, new object[] { limits });
+                    Check(lp.Any(), "Limits without criteria is flagged: " + string.Join("; ", lp));
+                    Shot(form, "red");
+                    // the configurators of the main kinds (shown without waiting, for the pictures)
+                    project.QualCriteria.Add(new QualCriterion { Name = "holdup", Signal = "V(bulk)", Lo = 18, Requirement = "REQ-PWR-012" });
+                    project.QualCriteria.Add(new QualCriterion { Name = "recovered", Signal = "V(bulk)", Lo = 26, Hi = 28, From = QualAnchor.EventEnd, FromOffset = 0.05 });
+                    project.Errors.Add(new ErrorItem { Name = "bulk_err", Y = "vbulk", X = "", Symmetric = true, Lower = -0.5, Upper = 0.5 });
+                    var cfgType = typeof(Spica.UI.MainForm).Assembly.GetType("Spica.UI.BlockConfigForm");
+                    var demo = new Spica.Core.Graph.Study { Name = "demo" };
+                    var shots = new System.Collections.Generic.List<Spica.Core.Graph.Block>
+                    {
+                        sw.Clone().Set("Tests", "Power interruption, single, 50 ms | Power interruption, double, 50 ms + 50 ms"),
+                        demo.Add("Schematic").Set("File", project.Schematic).Set("Name", "holdup"),
+                        demo.Add("MonteCarlo"),
+                        demo.Add("ErrorBudget").Set("Errors", "bulk_err"),
+                        demo.Add("Simulate"),
+                        demo.Add("Combine"),
+                        limits.Clone().Set("Criteria", "holdup"),
+                    };
+                    foreach (var blk in shots)
+                        using (var cfg = (System.Windows.Forms.Form)cfgType.GetConstructors()[0].Invoke(new object[] { blk.Spec.Title }))
+                        {
+                            var body = (System.Windows.Forms.Panel)cfgType.GetField("Body").GetValue(cfg);
+                            cfg.Show(form);
+                            mf.GetMethod("BuildBlockEditor", flags).Invoke(form, new object[] { body, blk, project.Studies[0], null });
+                            Pump(5);
+                            // the waveform of the first test ticked
+                            Shot(cfg, "config_" + blk.Kind);
+                            cfg.Close();
+                        }
                     // a wire with the mouse: a new Nominal block's output onto the Simulate input of a blank study
                     project.Studies.Add(new Spica.Core.Graph.Study { Name = "Mouse" });
                     Call("ShowStudies");
@@ -581,6 +638,7 @@ static class Program
             var t = new Thread(() =>
             {
                 var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]), Width = 1280, Height = 860 };
+                Classic(form);
                 var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
                 var mf = typeof(Spica.UI.MainForm);
                 object Get(string f) => mf.GetField(f, flags).GetValue(form);
@@ -600,7 +658,7 @@ static class Program
                 start.Tick += (s, e) =>
                 {
                     start.Stop();
-                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 1;
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = TabOf(form, "TabQual");
                     var project = (SpicaProject)Get("project");
                     var ch = project.QualOf("do160g_s16_28vdc");
                     ch.Category = "A";
@@ -630,7 +688,7 @@ static class Program
                     if (queue.Jobs.Any(j => j.Pending) && (DateTime.UtcNow - began).TotalSeconds < 600) return;
                     poll.Stop();
                     foreach (var j in queue.Jobs) Console.WriteLine($"job {j.Name}: {j.Status} {j.Done}/{j.Total}  {j.OutputDir}");
-                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = 1;
+                    ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = TabOf(form, "TabQual");
                     var qt = (Spica.UI.Win98TabControl)Get("qualTabs");
                     qt.SelectedIndex = qt.Pages.Count - 1;
                     Call("ShowQualVerdicts");
@@ -686,6 +744,7 @@ static class Program
             var t = new Thread(() =>
             {
                 var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]), Width = 1280, Height = 860 };
+                Classic(form);
                 var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
                 var timer = new System.Windows.Forms.Timer { Interval = 800 };
                 void Shot(string name)
@@ -1011,6 +1070,7 @@ static class Program
             if (Directory.Exists(results)) Directory.Delete(results, true);
             Directory.CreateDirectory(watch);
             var form = new Spica.UI.MainForm { StartupFile = setup };
+            Classic(form);
             object Get(string field) => mf.GetField(field, flags).GetValue(form);
             void Snap(System.Windows.Forms.Form f, string name)
             {
@@ -1056,7 +1116,7 @@ static class Program
                     lf.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
                     lf.Location = new System.Drawing.Point(form.Left + 60, form.Top + 60);
                     lf.Show(form);
-                    tabs.SelectedIndex = 2;
+                    tabs.SelectedIndex = TabOf(form, "TabQueue");
                     stage = 1; ticks = 0;
                     return;
                 }
@@ -1112,6 +1172,7 @@ static class Program
             string remoteFile = KeyValueFile.Resolve("SPICA.remote.tsv");
             if (File.Exists(remoteFile)) File.Delete(remoteFile);
             var form = new Spica.UI.MainForm { StartupFile = setup };
+            Classic(form);
             object Get(string field) => mf.GetField(field, flags).GetValue(form);
             void Snap(System.Windows.Forms.Form f, string name)
             {
@@ -1161,7 +1222,7 @@ static class Program
                     ((AppSettings)Get("settings")).SendFolder = share;
                     mf.GetMethod("RunRemote", flags).Invoke(form, null);
                     mf.GetMethod("AddToQueue", flags, null, Type.EmptyTypes, null).Invoke(form, null);
-                    tabs.SelectedIndex = 2;
+                    tabs.SelectedIndex = TabOf(form, "TabQueue");
                     stage = 2; ticks = 0;
                     return;
                 }
@@ -1187,7 +1248,7 @@ static class Program
                 }
                 if (stage == 3 && ticks > 8)
                 {
-                    tabs.SelectedIndex = 0;
+                    tabs.SelectedIndex = TabOf(form, "TabSetup");
                     Snap(form, "slave");
                     foreach (var n in new[] { "tbOpen", "tbAdd", "tbRemote", "miAdd", "miRemote" })
                     {
@@ -1217,6 +1278,7 @@ static class Program
             var mf = typeof(Spica.UI.MainForm);
             string png = Path.GetFullPath(args[2]);
             var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]) };
+            Classic(form);
             object Get(string field) => mf.GetField(field, flags).GetValue(form);
             void Check(bool ok, string what) { Console.WriteLine((ok ? "ok    " : "WRONG ") + what); if (!ok) bad++; }
             void Snap(System.Windows.Forms.Form f, string name)
@@ -1261,7 +1323,7 @@ static class Program
                         Check(queue.Move(queue.Jobs[2], -1) && queue.Jobs[1].Id == 3, "move up: 3 before 2  [" + Order(queue) + "]");
                         Check(!queue.Move(queue.Jobs[0], -1), "the first cannot move up");
                         Check(queue.Remove(queue.Jobs[0]) && queue.Jobs.Count == 2 && queue.Jobs[0].Id == 3, "remove 1  [" + Order(queue) + "]");
-                        tabs.SelectedIndex = 2;
+                        tabs.SelectedIndex = TabOf(form, "TabQueue");
                         Snap(form, "ops_held");
                         queue.Hold = false;
                         Check(queue.Running != null && queue.Running.Id == 3, "released: 3 runs first  [" + Order(queue) + "]");
@@ -1293,8 +1355,8 @@ static class Program
                         if (ticks < 8) return;
                         Check(stopped.Status == JobStatus.Stopped && stopped.Done > 0 && stopped.Done < stopped.Total, $"stopped with {stopped.Done} of {stopped.Total} runs  [" + Order(queue) + "]");
                         var view = (Spica.UI.ResultsView)Get("resultsView");
-                        Check(tabs.SelectedIndex == 3 && view.Data != null, "its results are open (" + (view.Data?.Rows.Count ?? 0) + " rows)");
-                        tabs.SelectedIndex = 2;
+                        Check(tabs.SelectedIndex == TabOf(form, "TabResults") && view.Data != null, "its results are open (" + (view.Data?.Rows.Count ?? 0) + " rows)");
+                        tabs.SelectedIndex = TabOf(form, "TabQueue");
                         Snap(form, "ops_done");
                         queue.ClearEnded();
                         Check(queue.Jobs.Count == 0, "clear ended empties the list");
@@ -1319,6 +1381,7 @@ static class Program
         var t = new Thread(() =>
         {
             var form = new Spica.UI.MainForm { StartupFile = Path.GetFullPath(args[1]) };
+            Classic(form);
             var nlField = typeof(Spica.UI.MainForm).GetField("netlist", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
             bool run = args.Length > 3 && args[3] == "run";   // also start the campaign and capture Monitor/Results
@@ -1364,8 +1427,8 @@ static class Program
                 if (stage == 1) { stage = 2; return; }
                 timer.Stop();
                 var tabs = (Spica.UI.Win98TabControl)typeof(Spica.UI.MainForm).GetField("tabs", flags).GetValue(form);
-                tabs.SelectedIndex = 1; Snap(args[2].Replace(".png", "_monitor.png"));
-                tabs.SelectedIndex = 2;
+                tabs.SelectedIndex = TabOf(form, "TabQueue"); Snap(args[2].Replace(".png", "_monitor.png"));
+                tabs.SelectedIndex = TabOf(form, "TabQueue");
                 var view = (Spica.UI.ResultsView)typeof(Spica.UI.MainForm).GetField("resultsView", flags).GetValue(form);
                 for (int i = 0; i < view.PageCount; i++) { view.SelectPage(i); Snap(args[2].Replace(".png", $"_res{i}.png")); }
                 // the Temperature page showing the drift from the reference

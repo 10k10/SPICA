@@ -88,6 +88,8 @@ namespace Spica.Core
         public string LtspicePath { get => Get("LtspicePath"); set => Set("LtspicePath", value); }
         public int Runs { get => GetInt("Runs", 1000); set => Set("Runs", value); }
         public bool KeepRaw { get => GetBool("KeepRaw", true); set => Set("KeepRaw", value); }
+        /// <summary>Show the Setup and Qualification tabs of the versions before the Workbench.</summary>
+        public bool ClassicTabs { get => GetBool("ClassicTabs", false); set => Set("ClassicTabs", value); }
         public bool ClockReseed { get => GetBool("ClockReseed", true); set => Set("ClockReseed", value); }
         public bool SaveSelectedOnly { get => GetBool("SaveSelectedOnly", true); set => Set("SaveSelectedOnly", value); }
         public bool AutoParallel { get => GetBool("AutoParallel", true); set => Set("AutoParallel", value); }

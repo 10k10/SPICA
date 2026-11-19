@@ -40,7 +40,9 @@ namespace Spica.UI
         // ------------------------------------------------------------ native plumbing
 
         const int WS_SYSMENU = 0x00080000, WS_MINIMIZEBOX = 0x00020000, WS_MAXIMIZEBOX = 0x00010000;
-        const int WM_NCHITTEST = 0x84, WM_NCLBUTTONDBLCLK = 0xA3;
+        const int WM_NCHITTEST = 0x84, WM_NCLBUTTONDOWN = 0xA1, WM_NCLBUTTONDBLCLK = 0xA3;
+        DateTime lastCaptionClick = DateTime.MinValue;
+        Point lastCaptionAt;
         const int HTCLIENT = 1, HTCAPTION = 2, HTSYSMENU = 3, HTLEFT = 10, HTRIGHT = 11, HTTOP = 12,
                   HTTOPLEFT = 13, HTTOPRIGHT = 14, HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
 
@@ -68,6 +70,23 @@ namespace Spica.UI
             {
                 if (MaximizeBox && Resizable) ToggleMaximize();
                 return;
+            }
+            // A borderless window starts moving on the first click of the caption, and that move loop swallows the
+            // second click: the double-click is told apart here, by time and place, before the move begins.
+            if (m.Msg == WM_NCLBUTTONDOWN && (int)m.WParam == HTCAPTION)
+            {
+                int lp = unchecked((int)(long)m.LParam);
+                var at = new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                var size = SystemInformation.DoubleClickSize;
+                bool again = (DateTime.UtcNow - lastCaptionClick).TotalMilliseconds <= SystemInformation.DoubleClickTime &&
+                             Math.Abs(at.X - lastCaptionAt.X) <= size.Width && Math.Abs(at.Y - lastCaptionAt.Y) <= size.Height;
+                lastCaptionClick = again ? DateTime.MinValue : DateTime.UtcNow;
+                lastCaptionAt = at;
+                if (again)
+                {
+                    if (MaximizeBox && Resizable) ToggleMaximize();
+                    return;
+                }
             }
             base.WndProc(ref m);
         }

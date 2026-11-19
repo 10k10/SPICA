@@ -647,10 +647,10 @@ namespace Spica.UI
             return options != null;
         }
 
-        /// <summary>Run Here (F5): the study on the Studies tab while that tab is open, else the Setup tab's campaign.</summary>
+        /// <summary>Run (F5): the study on the Workbench, or the classic Setup tab's campaign while that tab is open.</summary>
         void AddToQueue()
         {
-            if (tabs.SelectedIndex == TabStudies) { RunStudy(); return; }
+            if (tabs.SelectedIndex != TabSetup) { RunStudy(); return; }
             AddToQueue(null, null, 0);
         }
 

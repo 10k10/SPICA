@@ -610,7 +610,7 @@ namespace Spica.UI
 
         void StopCampaign()
         {
-            if (StudyRunning && tabs.SelectedIndex == TabStudies) { StopStudy(); return; }
+            if (StudyRunning && tabs.SelectedIndex != TabSetup) { StopStudy(); return; }
             var job = queue.Running;
             var run = job?.Engine;
             if (run == null) return;
