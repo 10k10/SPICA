@@ -165,6 +165,17 @@ namespace Spica.UI
             Invalidate();
         }
 
+        /// <summary>Pans so that a block is in view (centred when it was not), keeping the zoom.</summary>
+        public void Reveal(Block b)
+        {
+            if (b == null) return;
+            var r = Bounds(b);
+            var a = ToScreen(new PointF(r.X, r.Y)); var z = ToScreen(new PointF(r.Right, r.Bottom));
+            if (a.X >= 0 && a.Y >= 0 && z.X <= Width && z.Y <= Height) return;
+            pan = new PointF(Width / 2f - (r.X + r.Width / 2f) * zoom, Height / 2f - (r.Y + r.Height / 2f) * zoom);
+            Invalidate();
+        }
+
         public void Select(Block b)
         {
             Selected = b; SelectedWire = null;

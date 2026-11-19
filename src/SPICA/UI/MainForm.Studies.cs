@@ -27,6 +27,11 @@ namespace Spica.UI
         bool fillingStudies;
         HashSet<string> runnableKinds;
 
+        TreeView tvModel;
+        bool fillingModel;
+        /// <summary>Blocks changed since the study last ran (they and what they feed run again).</summary>
+        readonly HashSet<int> staleBlocks = new HashSet<int>();
+
         Study CurrentStudy => cbStudy?.SelectedIndex >= 0 && cbStudy.SelectedIndex < project.Studies.Count ? project.Studies[cbStudy.SelectedIndex] : null;
 
         void BuildStudiesPage()
@@ -77,7 +82,33 @@ namespace Spica.UI
             Win98Renderer.StyleDropDowns(bar.Items);
 
             // --- left: the block library --------------------------------------------------------
-            var left = new Win98GroupBox { Text = "Blocks", Dock = DockStyle.Left, Width = 214 };
+            // --- left: the study as a tree (by step, each block with its state), the block library under it
+            var leftCol = new Panel { Dock = DockStyle.Left, Width = 250, BackColor = Win98.Face };
+            var grpModel = new Win98GroupBox { Text = "Study", Dock = DockStyle.Top, Height = 300 };
+            var stateImages = new ImageList { ImageSize = new Size(16, 16), ColorDepth = ColorDepth.Depth32Bit };
+            stateImages.Images.Add("ok", Win98.Icon("check16"));
+            stateImages.Images.Add("bang", Glyphs.Bang());
+            stateImages.Images.Add("bolt", Glyphs.Bolt());
+            stateImages.Images.Add("ring", Glyphs.Ring());
+            stateImages.Images.Add("folder", Win98.Icon("folder16"));
+            stateImages.Images.Add("study", Win98.Icon("app16"));
+            tvModel = new TreeView { Font = Win98.Font, ImageList = stateImages, BorderStyle = BorderStyle.Fixed3D, HideSelection = false, ShowLines = true, ItemHeight = 18 };
+            tvModel.AfterSelect += (s, e) =>
+            {
+                if (fillingModel || !(e.Node?.Tag is Block b)) return;
+                studyCanvas.Select(b);
+                studyCanvas.Reveal(b);
+            };
+            var modelTip = new Label { Text = "✓ done     ! something missing\n⚡ changed: runs again     ○ not run yet", AutoSize = false, Height = 30, ForeColor = Win98.Shadow, UseMnemonic = false };
+            grpModel.Controls.Add(tvModel);
+            grpModel.Controls.Add(modelTip);
+            grpModel.Resize += (s, e) =>
+            {
+                modelTip.SetBounds(8, grpModel.Height - 36, grpModel.Width - 16, 30);
+                tvModel.SetBounds(8, 20, grpModel.Width - 16, modelTip.Top - 24);
+            };
+            leftCol.Resize += (s, e) => grpModel.Height = Math.Max(180, leftCol.Height * 45 / 100);
+            var left = new Win98GroupBox { Text = "Blocks", Dock = DockStyle.Fill };
             txtBlockSearch = new TextBox { Font = Win98.Font, BorderStyle = BorderStyle.Fixed3D };
             var searchHint = "Search blocks...";
             txtBlockSearch.Text = searchHint; txtBlockSearch.ForeColor = Win98.Shadow;
@@ -97,7 +128,7 @@ namespace Spica.UI
             {
                 int w = left.Width - 16;
                 txtBlockSearch.SetBounds(8, 20, w, 20);
-                lblBlockInfo.SetBounds(8, left.Height - 8 - 130, w, 130);
+                lblBlockInfo.SetBounds(8, left.Height - 8 - 96, w, 96);
                 tvBlocks.SetBounds(8, 44, w, lblBlockInfo.Top - 6 - 44);
             };
 
@@ -106,7 +137,7 @@ namespace Spica.UI
             studyCanvas.StudyChanged += (s, e) => StudyEdited();
             studyCanvas.Message += m => SetStatus(m);
             studyCanvas.BlockOpened += b => { studyCanvas.Select(b); ShowInspector(b); inspectorBody.Focus(); };
-            studyCanvas.SelectionChanged += (s, e) => ShowInspector(studyCanvas.Selected);
+            studyCanvas.SelectionChanged += (s, e) => { ShowInspector(studyCanvas.Selected); SelectInModel(studyCanvas.Selected); };
             var well = new Win98Well(studyCanvas) { Dock = DockStyle.Fill };
             lblStudyHint = new Label
             {
@@ -117,8 +148,11 @@ namespace Spica.UI
             p.Controls.Add(well);
             p.Controls.Add(BuildInspector());
             p.Controls.Add(lblStudyHint);
+            leftCol.Controls.Add(left);
+            leftCol.Controls.Add(Gap(DockStyle.Top));
+            leftCol.Controls.Add(grpModel);
             p.Controls.Add(Gap(DockStyle.Left));
-            p.Controls.Add(left);
+            p.Controls.Add(leftCol);
             p.Controls.Add(Gap(DockStyle.Top, 4));
             p.Controls.Add(bar);
 
@@ -189,13 +223,103 @@ namespace Spica.UI
             var st = CurrentStudy;
             studyCanvas.Study = st;
             studyCanvas.States.Clear();
+            staleBlocks.Clear();
             if (st != null) studyCanvas.FitAll();
+            FillModelTree();
         }
 
         void StudyEdited()
         {
             MarkDirty();
             studyCanvas.Invalidate();
+            FillModelTree();
+        }
+
+        // ------------------------------------------------------------------ the study tree
+
+        static readonly (string Title, BlockFamily[] Families)[] ModelGroups =
+        {
+            ("Stimuli", new[] { BlockFamily.Stimulus }),
+            ("Circuit", new[] { BlockFamily.Circuit }),
+            ("Conditions", new[] { BlockFamily.Variation }),
+            ("Simulation", new[] { BlockFamily.Simulation }),
+            ("Evaluations", new[] { BlockFamily.Collection, BlockFamily.Evaluation, BlockFamily.External }),
+            ("Outputs", new[] { BlockFamily.Output }),
+        };
+
+        /// <summary>A block's state in the tree: missing something, changed since it ran, done, or not run yet.</summary>
+        string ModelState(Block b)
+        {
+            if (BlockProblems(b).Count > 0) return "bang";
+            bool ran = studyCanvas.States.TryGetValue(b.Id, out var s) && (s == BlockState.Done || s == BlockState.Cached);
+            if (ran && staleBlocks.Contains(b.Id)) return "bolt";
+            return ran ? "ok" : "ring";
+        }
+
+        /// <summary>The study by step, each block with its state; the steps with a problem open.</summary>
+        void FillModelTree()
+        {
+            if (tvModel == null) return;
+            var st = CurrentStudy;
+            fillingModel = true;
+            tvModel.BeginUpdate();
+            tvModel.Nodes.Clear();
+            if (st != null)
+            {
+                var rootNode = new TreeNode(st.Name) { ImageKey = "study", SelectedImageKey = "study", NodeFont = Win98.BoldFont };
+                foreach (var (title, fams) in ModelGroups)
+                {
+                    var blocks = st.Blocks.Where(b => b.Spec != null && fams.Contains(b.Spec.Family)).OrderBy(b => b.Y).ThenBy(b => b.X).ToList();
+                    var g = new TreeNode($"{title} ({blocks.Count})") { ImageKey = "folder", SelectedImageKey = "folder" };
+                    foreach (var b in blocks)
+                    {
+                        string state = runnableKinds.Contains(b.Kind) ? ModelState(b) : "ring";
+                        string cap = BlockCaption(b);
+                        var n = new TreeNode($"{b.Spec.Title}: {cap}") { Tag = b, ImageKey = state, SelectedImageKey = state };
+                        if (!runnableKinds.Contains(b.Kind)) n.ForeColor = Win98.Shadow;
+                        if (state == "bang") n.ForeColor = Color.FromArgb(170, 0, 0);
+                        g.Nodes.Add(n);
+                    }
+                    rootNode.Nodes.Add(g);
+                }
+                tvModel.Nodes.Add(rootNode);
+                rootNode.ExpandAll();
+                // the study's own text is drawn bold: set it again so it is measured with the bold font
+                rootNode.Text = st.Name + " ";
+            }
+            tvModel.EndUpdate();
+            fillingModel = false;
+            SelectInModel(studyCanvas.Selected);
+        }
+
+        void SelectInModel(Block b)
+        {
+            if (tvModel == null) return;
+            fillingModel = true;
+            try
+            {
+                TreeNode Find(TreeNodeCollection nodes)
+                {
+                    foreach (TreeNode n in nodes)
+                    {
+                        if (n.Tag == b && b != null) return n;
+                        var f = Find(n.Nodes);
+                        if (f != null) return f;
+                    }
+                    return null;
+                }
+                var hit = b == null ? null : Find(tvModel.Nodes);
+                tvModel.SelectedNode = hit;
+            }
+            finally { fillingModel = false; }
+        }
+
+        /// <summary>A block changed after the study ran: it, and every block it feeds, run again.</summary>
+        void MarkStale(Block b)
+        {
+            var st = CurrentStudy;
+            if (st == null || b == null || studyCanvas.States.Count == 0) return;
+            foreach (var x in st.Blocks) if (x == b || st.Reaches(b.Id, x.Id)) staleBlocks.Add(x.Id);
         }
 
         void NewStudy()
@@ -429,12 +553,24 @@ namespace Spica.UI
             if (b == null || st == null) { inspector.Visible = false; return; }
             inspectorIcon.Image = StudyCanvas.KindIcon(b.Kind);
             inspectorTitle.Text = $"{b.Spec?.Title ?? b.Kind}   (block {b.Id})";
-            inspectorChanged = () => { MarkDirty(); studyCanvas.Invalidate(); UpdateMissing(); };
+            inspectorChanged = () => { MarkDirty(); MarkStale(b); studyCanvas.Invalidate(); UpdateMissing(); RefreshModelSoon(); };
             inspector.Visible = true;
             Action rebuild = null;
             rebuild = () => BuildBlockEditor(inspectorBody, b, st, rebuild);
             rebuild();
             UpdateMissing();
+        }
+
+        bool modelRefreshQueued;
+
+        /// <summary>The tree again after the typing stops for a moment (a field changes at every key).</summary>
+        void RefreshModelSoon()
+        {
+            if (modelRefreshQueued) return;
+            modelRefreshQueued = true;
+            var t = new Timer { Interval = 400 };
+            t.Tick += (s, e) => { t.Stop(); t.Dispose(); modelRefreshQueued = false; FillModelTree(); };
+            t.Start();
         }
 
         void UpdateMissing()

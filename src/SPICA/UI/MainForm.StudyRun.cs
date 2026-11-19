@@ -109,7 +109,8 @@ namespace Spica.UI
             var log = new List<string>();
             studyRunner.Log = m => { log.Add(m); SetStatus(m); };
             studyCanvas.States.Clear();
-            studyRunner.Changed = (b, s) => { if (CurrentStudy == st) { studyCanvas.States[b.Id] = s; studyCanvas.Invalidate(); } };
+            staleBlocks.Clear();
+            studyRunner.Changed = (b, s) => { if (CurrentStudy == st) { studyCanvas.States[b.Id] = s; studyCanvas.Invalidate(); RefreshModelSoon(); } };
             studyRunner.Ended = ok =>
             {
                 lastVerdicts.Clear();

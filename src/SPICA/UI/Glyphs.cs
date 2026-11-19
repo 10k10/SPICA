@@ -59,5 +59,40 @@ namespace Spica.UI
             }
             return bmp;
         }
+
+        /// <summary>A red disc with "!": something is missing.</summary>
+        public static Image Bang()
+        {
+            var bmp = New16(out var g);
+            using (g)
+            {
+                using (var red = new SolidBrush(Color.FromArgb(210, 0, 0))) g.FillEllipse(red, 1, 1, 14, 14);
+                using (var rim = new Pen(Color.FromArgb(120, 0, 0))) g.DrawEllipse(rim, 1, 1, 14, 14);
+                using (var w = new SolidBrush(Color.White)) { g.FillRectangle(w, 7, 3.5f, 2.2f, 6.5f); g.FillEllipse(w, 6.9f, 11, 2.4f, 2.4f); }
+            }
+            return bmp;
+        }
+
+        /// <summary>A yellow lightning bolt: out of date, it runs again.</summary>
+        public static Image Bolt()
+        {
+            var bmp = New16(out var g);
+            using (g)
+            {
+                var pts = new[] { new PointF(9, 0.5f), new PointF(3, 9), new PointF(7.5f, 9), new PointF(5.5f, 15.5f), new PointF(13, 6), new PointF(8.5f, 6), new PointF(11, 0.5f) };
+                using (var y = new SolidBrush(Color.FromArgb(255, 210, 0))) g.FillPolygon(y, pts);
+                using (var e = new Pen(Color.FromArgb(150, 100, 0))) g.DrawPolygon(e, pts);
+            }
+            return bmp;
+        }
+
+        /// <summary>A grey ring: set up, not run yet.</summary>
+        public static Image Ring()
+        {
+            var bmp = New16(out var g);
+            using (g)
+            using (var p = new Pen(Color.FromArgb(128, 128, 128), 2f)) g.DrawEllipse(p, 3, 3, 10, 10);
+            return bmp;
+        }
     }
 }

@@ -313,6 +313,21 @@ static class Program
                         Shot(form, "study");
                         Check(((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex == TabOf(form, "TabResults"), "the verdicts open on the Results tab");
                         Shot(form, "results");
+                        // the study tree on the Workbench: every block done; a change marks it and what it feeds to run again
+                        ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = TabOf(form, "TabStudies");
+                        Pump(20);
+                        var tv = (System.Windows.Forms.TreeView)Get("tvModel");
+                        System.Collections.Generic.IEnumerable<System.Windows.Forms.TreeNode> All(System.Windows.Forms.TreeNodeCollection c) =>
+                            c.Cast<System.Windows.Forms.TreeNode>().SelectMany(n => new[] { n }.Concat(All(n.Nodes)));
+                        var blockNodes = All(tv.Nodes).Where(n => n.Tag is Spica.Core.Graph.Block).ToList();
+                        Check(blockNodes.Count == study.Blocks.Count && blockNodes.All(n => n.ImageKey == "ok"), "the tree: every block done (" + string.Join(", ", blockNodes.Select(n => n.ImageKey)) + ")");
+                        Shot(form, "tree");
+                        var limBlock = study.Blocks.First(b => b.Kind == "Limits");
+                        mf.GetMethod("MarkStale", flags).Invoke(form, new object[] { limBlock });
+                        mf.GetMethod("FillModelTree", flags).Invoke(form, null);
+                        var stale = All(tv.Nodes).Where(n => n.ImageKey == "bolt").Select(n => ((Spica.Core.Graph.Block)n.Tag).Kind).ToList();
+                        Check(stale.Contains("Limits") && stale.Contains("Report") && !stale.Contains("Simulate"), "a changed Limits runs again with what it feeds: " + string.Join(", ", stale));
+                        Shot(form, "tree_stale");
                         mf.GetMethod("OpenStudyWaves", flags).Invoke(form, new object[] { verdicts.First(v => v.Criterion == "holdup" && v.Case.Contains("200 ms") && v.Condition.StartsWith("25")) });
                         Pump(30);
                         var wv = (Spica.UI.WaveformView)Get("waveView");
