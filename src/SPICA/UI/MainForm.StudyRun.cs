@@ -192,6 +192,15 @@ namespace Spica.UI
             var cn = new TreeNode(camp) { Tag = "campaign", ImageKey = "results16", SelectedImageKey = "results16" };
             tvResults.Nodes.Add(cn);
             TreeNode pick = select == null || (select as string) == "campaign" ? cn : null;
+            // its waveforms, when it kept its .raw files
+            string cdir = resultsView.Data?.Folder;
+            if (cdir != null && RawFile.Chunks(cdir).Count > 0)
+            {
+                var cw = new TreeNode("Waveforms") { Tag = "campaign-waves", ImageKey = "chart16", SelectedImageKey = "chart16" };
+                cn.Nodes.Add(cw);
+                cn.Expand();
+                if ((select as string) == "campaign-waves") pick = cw;
+            }
             foreach (var r in studyRuns)
             {
                 var sn = new TreeNode($"Study: {r.Study}  ({r.Ended:HH:mm})") { Tag = r, ImageKey = "folder16", SelectedImageKey = "folder16" };
@@ -213,6 +222,7 @@ namespace Spica.UI
         {
             if (suppressNode || n == null) return;
             if (n.Tag as string == "campaign") { ShowResultsPane(resultsView); return; }
+            if (n.Tag as string == "campaign-waves") { ShowCampaignWaves(); return; }
             if (n.Tag is StudyRunData r0) { ShowVerdicts(r0); return; }
             if (n.Tag is Tuple<StudyRunData, string> t)
             {
@@ -257,6 +267,24 @@ namespace Spica.UI
             ShowResultsPane(waveView);
             FillResultsTree(Tuple.Create(r, "waves"));
             tabs.SelectedIndex = TabResults;
+        }
+
+        /// <summary>The waveforms of the campaign open on the Results tab: its runs, every signal its .raw files kept.</summary>
+        void ShowCampaignWaves()
+        {
+            var rs = resultsView.Data;
+            if (rs?.Folder == null) return;
+            string name = Path.GetFileName(rs.Folder.TrimEnd('\\', '/'));
+            var set = new RunSet
+            {
+                Variant = new CircuitVariant { Candidate = "", Asc = rs.Record.Schematic ?? "" },
+                Condition = new Condition { Name = name, Nominal = rs.Rows.Count <= 1 },
+                Dir = rs.Folder,
+                Case = new QualCase { Test = new QualTest { Name = name }, Category = "" },
+            };
+            var data = new StudyRunData { Study = "campaign " + name, Sets = new List<RunSet> { set } };
+            waveView.ShowStudy(data, set, new string[0]);
+            ShowResultsPane(waveView);
         }
 
         /// <summary>A study ended: it goes into the Results tab (replacing an earlier run of the same study), its verdicts shown.</summary>

@@ -48,6 +48,9 @@ namespace Spica.UI
         int active;
         bool filling, linking;
         StudyRunData data;
+        double curA = double.NaN, curB = double.NaN;     // the cursors (time), NaN = not placed
+        List<Trace> lastTraces = new List<Trace>();
+        readonly Label lblCursor;
         string focusCriterion;      // the criterion of the verdict opened: only its window is shaded
         readonly Dictionary<string, List<string>> namesByDir = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -73,24 +76,33 @@ namespace Spica.UI
             var lblRuns = new Label { Text = "&Runs:", AutoSize = true };
             cbRuns = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Win98.Font };
             cbRuns.SelectedIndexChanged += (s, e) => { if (!filling) Draw(); };
-            var lblSig = new Label { Text = "&Signals in the .raw (double-click: add to the pane):", AutoSize = false, Height = 28 };
+            var lblSig = new Label { Text = "&Signals in the .raw (double-click or Add: into the pane chosen; Ctrl/Shift for several):", AutoSize = false, Height = 28 };
             txtFilter = new TextBox { Font = Win98.Font, BorderStyle = BorderStyle.Fixed3D };
             txtFilter.TextChanged += (s, e) => FillSignals();
-            lbSignals = new ListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D };
-            lbSignals.DoubleClick += (s, e) => AddSignal(lbSignals.SelectedItem as string, false);
+            lbSignals = new ListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, SelectionMode = SelectionMode.MultiExtended };
+            lbSignals.DoubleClick += (s, e) => AddSignals(false);
             var btnAdd = new Win98Button { Text = "&Add", Width = 58 };
             var btnNew = new Win98Button { Text = "New &Pane", Width = 72 };
             var btnRemove = new Win98Button { Text = "Re&move Pane", Width = 86 };
             var btnClear = new Win98Button { Text = "&Clear Pane", Width = 76 };
             var btnLt = new Win98Button { Text = "Open in &LTspice", Width = 110 };
             var btnSave = new Win98Button { Text = "Sa&ve Image...", Width = 100 };
-            btnAdd.Click += (s, e) => AddSignal(lbSignals.SelectedItem as string, false);
-            btnNew.Click += (s, e) => AddSignal(lbSignals.SelectedItem as string, true);
+            btnAdd.Click += (s, e) => AddSignals(false);
+            btnNew.Click += (s, e) => AddSignals(true);
+            var btnTake = new Win98Button { Text = "Remove &Signal", Width = 100 };
+            btnTake.Click += (s, e) =>
+            {
+                if (active >= panes.Count) return;
+                foreach (var sig in lbSignals.SelectedItems.Cast<string>()) panes[active].Signals.RemoveAll(x => x.Equals(sig, StringComparison.OrdinalIgnoreCase));
+                Draw();
+            };
+            var btnCur = new Win98Button { Text = "Clear C&ursors", Width = 100 };
+            btnCur.Click += (s, e) => { curA = curB = double.NaN; ShowCursors(); };
             btnRemove.Click += (s, e) => { if (panes.Count > 1 && active < panes.Count) { panes.RemoveAt(active); active = Math.Max(0, active - 1); Draw(); } };
             btnClear.Click += (s, e) => { if (active < panes.Count) { panes[active].Signals.Clear(); Draw(); } };
             btnLt.Click += (s, e) => OpenInLtspice();
             btnSave.Click += (s, e) => SaveImage();
-            left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, btnAdd, btnNew, btnRemove, btnClear, btnLt, btnSave });
+            left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, btnAdd, btnNew, btnRemove, btnClear, btnLt, btnSave, btnTake, btnCur });
             left.Resize += (s, e) =>
             {
                 int w = left.Width - 10, h = left.Height;
@@ -99,19 +111,22 @@ namespace Spica.UI
                 cbRuns.SetBounds(42, lbSets.Bottom + 6, w - 40, 21);
                 lblSig.SetBounds(2, cbRuns.Bottom + 8, w, 28);
                 txtFilter.SetBounds(2, lblSig.Bottom, w, 20);
-                int bottomButtons = 3 * 27 + 4;
+                int bottomButtons = 4 * 27 + 4;
                 lbSignals.SetBounds(2, txtFilter.Bottom + 4, w, Math.Max(40, h - txtFilter.Bottom - 8 - bottomButtons));
                 int by = lbSignals.Bottom + 6;
                 btnAdd.Location = new Point(2, by); btnNew.Location = new Point(btnAdd.Right + 4, by); btnClear.Location = new Point(btnNew.Right + 4, by);
                 btnRemove.Location = new Point(2, by + 27); btnSave.Location = new Point(btnRemove.Right + 4, by + 27);
-                btnLt.Location = new Point(2, by + 54);
+                btnTake.Location = new Point(2, by + 54); btnCur.Location = new Point(btnTake.Right + 4, by + 54);
+                btnLt.Location = new Point(2, by + 81);
             };
 
             stack = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Win98.Face };
             stack.Resize += (s, e) => LayoutPanes();
             lblInfo = new Label { Dock = DockStyle.Bottom, Height = 34, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false };
+            lblCursor = new Label { Dock = DockStyle.Bottom, Height = 0, BackColor = Win98.InfoBack, BorderStyle = BorderStyle.FixedSingle, Font = Win98.MonoFont, UseMnemonic = false, Padding = new Padding(4, 2, 4, 2), Visible = false };
 
             Controls.Add(stack);
+            Controls.Add(lblCursor);
             Controls.Add(lblInfo);
             Controls.Add(left);
         }
@@ -160,6 +175,16 @@ namespace Spica.UI
         {
             bool sameCase = sets.All(x => x.Variant.Label == s.Variant.Label), sameCond = sets.All(x => x.Condition.Name == s.Condition.Name);
             return sameCase ? s.Condition.Name : sameCond ? s.Variant.Label : SetLabel(s);
+        }
+
+        void AddSignals(bool newPane)
+        {
+            var sel = lbSignals.SelectedItems.Cast<string>().ToList();
+            if (sel.Count == 0) return;
+            if (newPane || panes.Count == 0) { NewPane(); active = panes.Count - 1; }
+            var p = panes[Math.Min(active, panes.Count - 1)];
+            foreach (var sig in sel) if (!p.Signals.Contains(sig, StringComparer.OrdinalIgnoreCase)) p.Signals.Add(sig);
+            Draw();
         }
 
         void AddSignal(string sig, bool newPane)
@@ -303,6 +328,14 @@ namespace Spica.UI
                 int paneIndex = pi;
                 var ch = new Win98Chart { Title = pane.Signals.Count == 0 ? "(empty pane: double-click a signal on the left)" : string.Join(", ", pane.Signals), YLabel = "" };
                 ch.TitleColor = pi == active ? Win98.Navy : Color.FromArgb(80, 80, 80);
+                ch.MouseClick += (s, e) =>
+                {
+                    if (e.Button != MouseButtons.Left) return;
+                    double t = ((Win98Chart)s).DataX(e.Location);
+                    if (double.IsNaN(t)) return;
+                    if ((ModifierKeys & Keys.Shift) != 0) curB = t; else curA = t;
+                    ShowCursors();
+                };
                 ch.MouseDown += (s, e) => { if (active != paneIndex) { active = paneIndex; foreach (var q in panes) if (q.Chart != null) { q.Chart.TitleColor = q == panes[active] ? Win98.Navy : Color.FromArgb(80, 80, 80); q.Chart.Invalidate(); } } };
                 pane.Chart = ch;
                 stack.Controls.Add(ch);
@@ -355,10 +388,54 @@ namespace Spica.UI
                     p.Chart.XViewChanged += (s, e) => Follow((Win98Chart)s, stop);
                     if (stop > 0) p.Chart.FixedX = new KeyValuePair<double, double>(0, stop);
                 }
+            lastTraces = traces;
+            ShowCursors();
             LayoutPanes();
             lblInfo.Text = (problems.Count > 0 ? "! " + string.Join("   ! ", problems.Distinct().Take(3)) + "\n" : "") +
-                           "Click a pane to choose it; double-click a signal to add it there. Drag to zoom (every pane follows), double-click a pane to reset.";
+                           "Click a pane to choose it and place cursor A there (Shift+click: cursor B). Drag to zoom (every pane follows), double-click a pane to reset.";
             lblInfo.ForeColor = problems.Count > 0 ? Color.FromArgb(140, 0, 0) : Win98.Shadow;
+        }
+
+        /// <summary>The cursors on every pane, and what each signal reads there (and the difference B - A).</summary>
+        void ShowCursors()
+        {
+            foreach (var p in panes.Where(x => x.Chart != null))
+            {
+                p.Chart.Series.RemoveAll(x => x.Label == "cursor A" || x.Label == "cursor B");
+                if (!double.IsNaN(curA)) p.Chart.Series.Add(new ChartSeries { Kind = SeriesKind.VLine, Label = "cursor A", InLegend = false, Color = Color.FromArgb(200, 0, 0), X = new[] { curA } });
+                if (!double.IsNaN(curB)) p.Chart.Series.Add(new ChartSeries { Kind = SeriesKind.VLine, Label = "cursor B", InLegend = false, Color = Color.FromArgb(0, 90, 200), Dashed = true, X = new[] { curB } });
+                p.Chart.Invalidate();
+            }
+            if (double.IsNaN(curA) && double.IsNaN(curB)) { lblCursor.Visible = false; return; }
+            var sets = data == null ? new List<RunSet>() : Checked;
+            var lines = new List<string>();
+            string E(double v) => double.IsNaN(v) ? "-" : ErrorBudget.Eng(v);
+            lines.Add($"{"",-28} {"A at " + E(curA) + "s",16} {"B at " + E(curB) + "s",16} {"B - A",12}" + (!double.IsNaN(curA) && !double.IsNaN(curB) ? $"   Δt = {E(curB - curA)}s" : ""));
+            foreach (var p in panes)
+                foreach (var sig in p.Signals)
+                    foreach (var tr in lastTraces.Where(t => t.Y.ContainsKey(sig)).GroupBy(t => t.Set).Select(g => g.First()))
+                    {
+                        double a = At(tr, sig, curA), b = At(tr, sig, curB);
+                        string name = sig + (sets.Count > 1 ? " · " + Distinct(sets, tr.Set) : "");
+                        if (name.Length > 28) name = name.Substring(0, 27) + "…";
+                        lines.Add($"{name,-28} {E(a),16} {E(b),16} {(double.IsNaN(a) || double.IsNaN(b) ? "" : E(b - a)),12}");
+                    }
+            lblCursor.Text = string.Join("\n", lines.Take(10));
+            lblCursor.Height = Math.Min(10, lines.Count) * 13 + 8;
+            lblCursor.Visible = true;
+        }
+
+        /// <summary>A signal's value at a time, between the two samples around it.</summary>
+        static double At(Trace tr, string sig, double t)
+        {
+            if (double.IsNaN(t) || !tr.Y.TryGetValue(sig, out var y) || tr.X.Length == 0) return double.NaN;
+            int i = Array.BinarySearch(tr.X, t);
+            if (i >= 0) return y[i];
+            i = ~i;
+            if (i == 0) return y[0];
+            if (i >= tr.X.Length) return y[y.Length - 1];
+            double f = (t - tr.X[i - 1]) / (tr.X[i] - tr.X[i - 1]);
+            return y[i - 1] + f * (y[i] - y[i - 1]);
         }
 
         void Follow(Win98Chart from, double stop)

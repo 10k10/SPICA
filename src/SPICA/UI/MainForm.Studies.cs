@@ -38,34 +38,38 @@ namespace Spica.UI
             // --- the study bar: which study, and what to do with it ------------------------------
             var bar = new ToolStrip { Dock = DockStyle.Top, GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(2, 2, 2, 2), Font = Win98.Font };
             Win98Renderer.Apply(bar);
-            cbStudy = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, Font = Win98.Font };
+            cbStudy = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170, Font = Win98.Font, DropDownWidth = 300 };
             cbStudy.SelectedIndexChanged += (s, e) => { if (!fillingStudies) ShowStudy(); };
             ToolStripButton B(string text, Image icon, EventHandler click, string tip)
             {
-                var b = new ToolStripButton(text, icon, click) { ToolTipText = tip, DisplayStyle = icon == null ? ToolStripItemDisplayStyle.Text : ToolStripItemDisplayStyle.ImageAndText };
+                var b = new ToolStripButton(text, icon, click) { ToolTipText = tip, DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, ImageScaling = ToolStripItemImageScaling.None, Margin = new Padding(1, 1, 1, 2) };
                 bar.Items.Add(b);
                 return b;
             }
+            // the study: which one, and what to do with it
             bar.Items.Add(new ToolStripLabel("&Study:"));
             bar.Items.Add(new ToolStripControlHost(cbStudy));
             B("New", Win98.Icon("doc16"), (s, e) => NewStudy(), "A new study: blank, from a template, or from the classic tabs");
-            B("Rename", null, (s, e) => RenameStudy(), "Rename this study");
+            B("Rename", Glyphs.Pencil(), (s, e) => RenameStudy(), "Rename this study");
             B("Delete", Win98.Icon("stop16"), (s, e) => DeleteStudy(), "Delete this study from the setup");
             bar.Items.Add(new ToolStripSeparator());
+            // the graph
             B("Validate", Win98.Icon("check16"), (s, e) => ValidateStudy(true), "Check the study: every block set up, every input wired, the types right, no loop");
-            B("Fit", StudyCanvas.MagnifierIcon(), (s, e) => studyCanvas.FitAll(), "Show the whole study (Space, or double-click the empty canvas)");
+            B("Fit", Glyphs.Magnifier(), (s, e) => studyCanvas.FitAll(), "Show the whole study (Space, or double-click the empty canvas)");
             bar.Items.Add(new ToolStripSeparator());
-            B("Add to Queue", Win98.Icon("run16"), (s, e) => RunStudy(), "Run this study: its campaigns join the queue on this PC  (F5)");
-            bar.Items.Add(new ToolStripSeparator());
-            var legend = new ToolStripLabel { AutoSize = false, Width = 470, Height = 18 };
+            // running it
+            var run = B("Add to Queue", Glyphs.PlayQueue(), (s, e) => RunStudy(), "Run this study: its campaigns join the queue on this PC  (F5)");
+            run.Font = Win98.BoldFont;
+            // the wire colours, at the right end
+            var legend = new ToolStripLabel { AutoSize = false, Width = 430, Height = 18, Alignment = ToolStripItemAlignment.Right };
             legend.Paint += (s, e) =>
             {
                 int x = 4;
                 foreach (var kv in StudyCanvas.TypeColor)
                 {
-                    using (var pen = new Pen(kv.Value, 3)) e.Graphics.DrawLine(pen, x, 9, x + 14, 9);
-                    TextRenderer.DrawText(e.Graphics, kv.Key.ToString(), Win98.Font, new Point(x + 17, 2), Color.Black);
-                    x += 22 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width;
+                    using (var pen = new Pen(kv.Value, 3)) e.Graphics.DrawLine(pen, x, 9, x + 12, 9);
+                    TextRenderer.DrawText(e.Graphics, kv.Key.ToString(), Win98.Font, new Point(x + 14, 2), Color.FromArgb(64, 64, 64));
+                    x += 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width;
                 }
             };
             legend.ToolTipText = "Wire colours: a wire only joins ports of the same type";
@@ -85,7 +89,7 @@ namespace Spica.UI
             images.Images.Add("folder", Win98.Icon("folder16"));
             tvBlocks = new TreeView { Font = Win98.Font, ImageList = images, BorderStyle = BorderStyle.Fixed3D, HideSelection = false, ShowLines = true, ItemHeight = 18 };
             tvBlocks.AfterSelect += (s, e) => ShowBlockInfo(e.Node?.Tag as BlockKind);
-            tvBlocks.NodeMouseDoubleClick += (s, e) => { if (e.Node?.Tag is BlockKind k && CurrentStudy != null) { studyCanvas.AddBlock(k.Name); SetStatus($"{k.Title} added: double-click it to set it up, and wire its ports."); } };
+            tvBlocks.NodeMouseDoubleClick += (s, e) => { if (e.Node?.Tag is BlockKind k && CurrentStudy != null) { studyCanvas.AddBlock(k.Name); SetStatus($"{k.Title} added: set it up on the right, and wire its ports."); } };
             tvBlocks.ItemDrag += (s, e) => { if (e.Item is TreeNode n && n.Tag is BlockKind k) tvBlocks.DoDragDrop(k.Name, DragDropEffects.Copy); };
             lblBlockInfo = new Label { BackColor = Win98.InfoBack, BorderStyle = BorderStyle.FixedSingle, Padding = new Padding(4), UseMnemonic = false, Font = Win98.Font };
             left.Controls.AddRange(new Control[] { txtBlockSearch, tvBlocks, lblBlockInfo });
@@ -101,15 +105,17 @@ namespace Spica.UI
             studyCanvas = new StudyCanvas { Dock = DockStyle.Fill, Caption = BlockCaption, Problems = BlockProblems, Runs = k => runnableKinds.Contains(k) };
             studyCanvas.StudyChanged += (s, e) => StudyEdited();
             studyCanvas.Message += m => SetStatus(m);
-            studyCanvas.BlockOpened += b => OpenBlockConfig(b);
+            studyCanvas.BlockOpened += b => { studyCanvas.Select(b); ShowInspector(b); inspectorBody.Focus(); };
+            studyCanvas.SelectionChanged += (s, e) => ShowInspector(studyCanvas.Selected);
             var well = new Win98Well(studyCanvas) { Dock = DockStyle.Fill };
             lblStudyHint = new Label
             {
                 Dock = DockStyle.Bottom, Height = 18, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false,
-                Text = "Double-click a block to set it up (red: something missing).  Drag from an output to an input of the same colour.  Right-click a port for a block that fits.  Space: fit.  Del: remove.",
+                Text = "Click a block to set it up on the right (red: something missing).  Drag from an output to an input of the same colour.  Right-click a port for a block that fits.  Space: fit.  Del: remove.",
             };
 
             p.Controls.Add(well);
+            p.Controls.Add(BuildInspector());
             p.Controls.Add(lblStudyHint);
             p.Controls.Add(Gap(DockStyle.Left));
             p.Controls.Add(left);
@@ -148,7 +154,7 @@ namespace Spica.UI
         void ShowBlockInfo(BlockKind k)
         {
             lblBlockInfo.Text = k == null
-                ? "Choose a block to read what it does.\n\nDouble-click it, or drag it onto the canvas, to add it to the study; then double-click it there to set it up."
+                ? "Choose a block to read what it does.\n\nDouble-click it, or drag it onto the canvas, to add it to the study; then click it there to set it up on the right."
                 : $"{k.Title}\n{k.Summary}\n\nTakes: {Types(k.Inputs)}\nGives: {Types(k.Outputs)}" + (runnableKinds.Contains(k.Name) ? "" : "\n\nDoes not run yet in this version: a study skips it.");
         }
 
@@ -384,25 +390,88 @@ namespace Spica.UI
             }
         }
 
-        /// <summary>Double-click on a block: its settings in a dialog; OK keeps them, Cancel leaves the block as it was.</summary>
-        void OpenBlockConfig(Block b)
+        // ------------------------------------------------------------------ the inspector (right side)
+
+        Panel inspector, inspectorBody;
+        Label inspectorTitle, inspectorMissing;
+        PictureBox inspectorIcon;
+        Block inspected;
+        /// <summary>Called by the inspector's fields after each change: marks the setup, redraws, refreshes what is missing.</summary>
+        Action inspectorChanged = () => { };
+
+        /// <summary>The inspector: on the right, only while a block is selected; its settings apply at once.</summary>
+        Panel BuildInspector()
         {
+            inspector = new Panel { Dock = DockStyle.Right, Width = 350, BackColor = Win98.Face, Visible = false, Padding = new Padding(4, 0, 0, 0) };
+            var frame = new Panel { Dock = DockStyle.Fill, BackColor = Win98.Face };
+            frame.Paint += (s, e) => Win98.Etched(e.Graphics, new Rectangle(0, 0, frame.Width, frame.Height));
+            var head = new Panel { Dock = DockStyle.Top, Height = 26, BackColor = Win98.Navy };
+            inspectorIcon = new PictureBox { Location = new Point(5, 5), Size = new Size(16, 16), BackColor = Win98.Navy };
+            inspectorTitle = new Label { Location = new Point(25, 6), AutoSize = false, Height = 16, ForeColor = Color.White, BackColor = Win98.Navy, Font = Win98.BoldFont, UseMnemonic = false, AutoEllipsis = true };
+            var close = new Win98Button { Text = "×", Size = new Size(20, 18), Font = Win98.BoldFont };
+            close.Click += (s, e) => studyCanvas.Select(null);
+            head.Controls.AddRange(new Control[] { inspectorIcon, inspectorTitle, close });
+            head.Resize += (s, e) => { close.Location = new Point(head.Width - 24, 4); inspectorTitle.Width = close.Left - 30; };
+            inspectorMissing = new Label { Dock = DockStyle.Top, AutoSize = false, Height = 0, BackColor = Color.FromArgb(255, 235, 235), ForeColor = Color.FromArgb(150, 0, 0), Padding = new Padding(6, 4, 6, 4), UseMnemonic = false, Visible = false };
+            inspectorBody = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Win98.Face };
+            frame.Controls.Add(inspectorBody);
+            frame.Controls.Add(inspectorMissing);
+            frame.Controls.Add(head);
+            inspector.Controls.Add(frame);
+            return inspector;
+        }
+
+        /// <summary>Shows the block selected in the inspector (or hides it when nothing is selected).</summary>
+        void ShowInspector(Block b)
+        {
+            inspected = b;
             var st = CurrentStudy;
-            if (st == null || b == null) return;
-            var work = b.Clone();
-            using (var f = new BlockConfigForm($"{b.Spec?.Title ?? b.Kind} (block {b.Id})"))
+            if (b == null || st == null) { inspector.Visible = false; return; }
+            inspectorIcon.Image = StudyCanvas.KindIcon(b.Kind);
+            inspectorTitle.Text = $"{b.Spec?.Title ?? b.Kind}   (block {b.Id})";
+            inspectorChanged = () => { MarkDirty(); studyCanvas.Invalidate(); UpdateMissing(); };
+            inspector.Visible = true;
+            Action rebuild = null;
+            rebuild = () => BuildBlockEditor(inspectorBody, b, st, rebuild);
+            rebuild();
+            UpdateMissing();
+        }
+
+        void UpdateMissing()
+        {
+            var m = inspected == null ? new List<string>() : BlockProblems(inspected);
+            inspectorMissing.Visible = m.Count > 0;
+            if (m.Count == 0) return;
+            inspectorMissing.Text = "Missing before it can run:\n" + string.Join("\n", m.Select(x => "- " + x));
+            inspectorMissing.Height = TextRenderer.MeasureText(inspectorMissing.Text, Win98.Font, new Size(inspector.Width - 24, 0), TextFormatFlags.WordBreak).Height + 10;
+        }
+
+        /// <summary>What each setting is called in the inspector, when its key is too terse.</summary>
+        static readonly Dictionary<string, string> PropLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Rser"] = "Source R", ["R"] = "Resistance", ["KeepRaw"] = "Keep .raw", ["Meas"] = ".meas lines", ["Save"] = "Save signals",
+            ["Temperatures"] = "Temperatures", ["Pessimistic"] = "Pessimistic σ", ["Sigma"] = "Design σ", ["File"] = "File", ["Signal"] = "Signal",
+        };
+
+        /// <summary>The unit shown after a short number field.</summary>
+        static readonly Dictionary<string, string> PropUnits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SupplyWaveform.Rser"] = "Ω", ["Fault.R"] = "Ω", ["Fault.Start"] = "s", ["Fault.Duration"] = "s", ["MonteCarlo.Runs"] = "runs",
+            ["MonteCarlo.Seed"] = "(0 = new)", ["Nominal.Temperature"] = "°C", ["ErrorBudget.Sigma"] = "σ", ["WorstCase.Sigma"] = "σ",
+        };
+
+        /// <summary>The width of a field, by what it holds: a number is short, a net or a category medium, a path or a list the whole row.</summary>
+        static int FieldWidth(string kindKey, int full)
+        {
+            if (PropUnits.ContainsKey(kindKey)) return 80;
+            switch (kindKey)
             {
-                Action rebuild = null;
-                rebuild = () => BuildBlockEditor(f.Body, work, st, rebuild);
-                rebuild();
-                if (f.ShowDialog(this) != DialogResult.OK) { studyCanvas.Invalidate(); return; }
+                case "SupplyWaveform.Category": return 70;
+                case "SupplyWaveform.Net": case "Fault.From": case "Fault.To": case "Susceptibility.Net": return 130;
+                case "MonteCarlo.Temperature": return 150;
+                case "WorstCase.Direction": case "WorstCase.Method": return 110;
+                default: return full;
             }
-            b.Props.Clear();
-            b.Props.AddRange(work.Props);
-            MarkDirty();
-            studyCanvas.Invalidate();
-            var left = BlockProblems(b);
-            SetStatus(left.Count == 0 ? $"{b.Spec?.Title ?? b.Kind} is set up." : $"{b.Spec?.Title ?? b.Kind} still misses: " + string.Join("; ", left));
         }
 
         /// <summary>What each setting means, shown under its field (the explanations of the classic Setup tab).</summary>
@@ -447,17 +516,22 @@ namespace Spica.UI
         static readonly HashSet<string> HiddenProps = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         { "MonteCarlo.Stop", "Simulate.Where", "Report.Sections" };
 
-        /// <summary>The configurator's fields for a block (on a copy of it), in order, each with what it means; some kinds
-        /// have more (a waveform preview, the schematic's contents, the setup's criteria or errors).</summary>
+        /// <summary>
+        /// The inspector's fields for a block, in order: a label on the left, the field sized to what it holds (a number
+        /// short, with its unit; a net medium; a path or a list the whole row), what it means under it. Some kinds have
+        /// more: a waveform preview, the schematic's contents, the setup's criteria or errors. Changes apply at once.
+        /// </summary>
         void BuildBlockEditor(Panel host, Block b, Study st, Action rebuild)
         {
             host.SuspendLayout();
+            int scroll = host.VerticalScroll.Value;
             foreach (Control c in host.Controls.Cast<Control>().ToList()) c.Dispose();
             host.Controls.Clear();
-            int y = 4, w = host.ClientSize.Width - 12 - SystemInformation.VerticalScrollBarWidth;
+            const int LW = 86;                                   // the label column
+            int y = 6, w = host.ClientSize.Width - 14 - SystemInformation.VerticalScrollBarWidth, fx = 6 + LW, fwFull = w - LW;
             Label Text(string t, Font f = null, Color? col = null, int indent = 0)
             {
-                var l = new Label { Text = t, Location = new Point(4 + indent, y), Width = w - indent, AutoSize = false, Font = f ?? Win98.Font, ForeColor = col ?? Color.Black, UseMnemonic = false };
+                var l = new Label { Text = t, Location = new Point(6 + indent, y), Width = w - indent, AutoSize = false, Font = f ?? Win98.Font, ForeColor = col ?? Color.Black, UseMnemonic = false };
                 l.Height = TextRenderer.MeasureText(t, l.Font, new Size(w - indent - 28, 0), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 2;
                 host.Controls.Add(l);
                 y += l.Height + 2;
@@ -465,23 +539,30 @@ namespace Spica.UI
             }
             void Section(string t)
             {
-                y += 6;
-                Text(t, Win98.BoldFont);
-                var line = new Panel { Location = new Point(4, y), Size = new Size(w, 2), BackColor = Win98.Face };
+                y += 8;
+                Text(t, Win98.BoldFont, Win98.Navy);
+                var line = new Panel { Location = new Point(6, y), Size = new Size(w, 2), BackColor = Win98.Face };
                 line.Paint += (s, e) => Win98.EtchedHLine(e.Graphics, 0, line.Width, 0);
                 host.Controls.Add(line);
                 y += 6;
             }
-            void Hint(string key) { if (PropHints.TryGetValue(b.Kind + "." + key, out var h)) { Text(h, null, Win98.Shadow); y += 2; } }
+            void Hint(string key, bool underField)
+            {
+                if (!PropHints.TryGetValue(b.Kind + "." + key, out var h)) return;
+                Text(h, null, Win98.Shadow, underField ? LW : 0);
+                y += 4;
+            }
+            Label RowLabel(string key)
+            {
+                var l = new Label { Text = (PropLabels.TryGetValue(key, out var n) ? n : key) + ":", Location = new Point(6, y + 3), Width = LW - 4, AutoEllipsis = true, UseMnemonic = false };
+                host.Controls.Add(l);
+                return l;
+            }
 
             var k = b.Spec;
-            host.Controls.Add(new PictureBox { Image = StudyCanvas.KindIcon(b.Kind), Location = new Point(4, y), Size = new Size(16, 16) });
-            var head = Text(k?.Title ?? b.Kind, Win98.BoldFont);
-            head.Left = 24; head.Width = w - 20;
             if (k != null) Text(k.Summary, null, Win98.Shadow);
             if (!runnableKinds.Contains(b.Kind)) Text("This block does not run yet in this version: a study skips it, and what it feeds.", null, Color.FromArgb(140, 90, 0));
 
-            // what the schematic holds, before anything runs
             if (b.Kind == BlockKind.Schematic) y = SchematicInfo(host, y, w, b, Section, Text);
 
             Section("Settings");
@@ -489,10 +570,10 @@ namespace Spica.UI
             for (int idx = 0; idx < b.Props.Count; idx++)
             {
                 int index = idx;
-                string key = b.Props[idx].Key, val = b.Props[idx].Value;
-                if (HiddenProps.Contains(b.Kind + "." + key)) continue;
+                string key = b.Props[idx].Key, val = b.Props[idx].Value, kk = b.Kind + "." + key;
+                if (HiddenProps.Contains(kk)) continue;
                 any = true;
-                void SetVal(string v) => b.Props[index] = new KeyValuePair<string, string>(key, v ?? "");
+                void SetVal(string v) { b.Props[index] = new KeyValuePair<string, string>(key, v ?? ""); inspectorChanged(); }
 
                 if (b.Kind == BlockKind.Limits && key == "Criteria") { y = CriteriaEditor(host, y, w, b, index); continue; }
                 if (b.Kind == BlockKind.ErrorBudget && key == "Errors") { y = ErrorsEditor(host, y, w, b, index); continue; }
@@ -500,7 +581,7 @@ namespace Spica.UI
                 // a choice between a few ways: buttons, each with what it does
                 if ((b.Kind == BlockKind.Combine && key == "Mode") || (b.Kind == BlockKind.Report && key == "Style"))
                 {
-                    Text(key + ":");
+                    Text((PropLabels.TryGetValue(key, out var nm) ? nm : key) + ":");
                     var opts = b.Kind == BlockKind.Combine
                         ? new[] { ("product", "Product: every condition of one input with every one of the others (Monte Carlo × corners = N units at each temperature)."),
                                   ("union", "Union: the conditions of every input, side by side (corners, plus the worst case found).") }
@@ -508,7 +589,7 @@ namespace Spica.UI
                                   ("Concise", "Concise: the verdict grids only, one per criterion.") };
                     foreach (var (v, d) in opts)
                     {
-                        var rb = new Win98RadioButton { Text = d, Location = new Point(8, y), Width = w - 8, Height = 32, Checked = val.Equals(v, StringComparison.OrdinalIgnoreCase) };
+                        var rb = new Win98RadioButton { Text = d, Location = new Point(14, y), Width = w - 14, Height = 32, Checked = val.Equals(v, StringComparison.OrdinalIgnoreCase) };
                         string vv = v;
                         rb.CheckedChanged += (s, e) => { if (rb.Checked) SetVal(vv); };
                         host.Controls.Add(rb);
@@ -517,63 +598,66 @@ namespace Spica.UI
                     continue;
                 }
 
-                Text(key + ":");
                 if (BoolProps.Contains(key))
                 {
-                    var cb = new Win98CheckBox { Text = "yes", Checked = val == "1", Location = new Point(4, y - 2), AutoSize = true };
+                    RowLabel(key);
+                    var cb = new Win98CheckBox { Text = "yes", Checked = val == "1", Location = new Point(fx, y + 1), AutoSize = true };
                     cb.CheckedChanged += (s, e) => SetVal(cb.Checked ? "1" : "0");
                     host.Controls.Add(cb);
-                    y += 22;
-                    Hint(key);
+                    y += 24;
+                    Hint(key, true);
                     continue;
                 }
                 if (b.Kind == BlockKind.Measure && key == "Meas")
                 {
-                    // one .meas per line here, kept as "a | b" in the setup
-                    var tm = new Win98TextField { Location = new Point(4, y), Width = w, Height = 70, Text = string.Join("\r\n", val.Split('|').Select(x => x.Trim()).Where(x => x.Length > 0)) };
+                    Text(PropLabels[key] + ":");
+                    var tm = new Win98TextField { Location = new Point(6, y), Width = w, Height = 76, Text = string.Join("\r\n", val.Split('|').Select(x => x.Trim()).Where(x => x.Length > 0)) };
                     tm.Box.Multiline = true; tm.Box.AcceptsReturn = true; tm.Box.ScrollBars = ScrollBars.Vertical; tm.Box.Font = Win98.MonoFont;
                     tm.Box.TextChanged += (s, e) => SetVal(string.Join(" | ", tm.Text.Replace("\r", "").Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0)));
                     host.Controls.Add(tm);
-                    y += 76;
-                    Hint(key);
+                    y += 82;
+                    Hint(key, false);
                     continue;
                 }
                 var choices = PropChoices(b, key, out bool multi);
                 bool browse = b.Kind == BlockKind.Schematic && key == "File" || b.Kind == BlockKind.PartsDatabase && key == "Adapter" || b.Kind == BlockKind.Derating && key == "Rules";
-                int fw = multi || browse ? w - 30 : w;
                 if (multi && choices != null && choices.Count > 0)
                 {
-                    // several at once: tick them in the list (what is set but not in the list stays, at the end)
+                    // several at once: tick them in a list across the row (what is set but not offered stays, at the end)
+                    Text((PropLabels.TryGetValue(key, out var nm) ? nm : key) + ":");
                     bool spaced = key == "Save" || key == "Signals";
                     var now = (spaced ? val.Split(new[] { '|', ' ' }, StringSplitOptions.RemoveEmptyEntries) : val.Split('|')).Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                     var items = choices.Concat(now.Where(x => !choices.Contains(x, StringComparer.OrdinalIgnoreCase))).ToList();
-                    var list = new CheckedListBox { Location = new Point(4, y), Size = new Size(w, Math.Min(150, 18 + 16 * items.Count)), CheckOnClick = true, Font = Win98.Font, IntegralHeight = false, HorizontalScrollbar = true };
+                    var list = new CheckedListBox { Location = new Point(6, y), Size = new Size(w, Math.Min(160, 20 + 16 * items.Count)), CheckOnClick = true, Font = Win98.Font, IntegralHeight = false, HorizontalScrollbar = true };
                     foreach (var it in items) list.Items.Add(it, now.Contains(it, StringComparer.OrdinalIgnoreCase));
                     list.ItemCheck += (s, e) => host.BeginInvoke(new Action(() => SetVal(string.Join(spaced ? " " : " | ", list.CheckedItems.Cast<string>()))));
                     host.Controls.Add(list);
                     y += list.Height + 4;
-                    Hint(key);
+                    Hint(key, false);
                     if (b.Kind == BlockKind.SupplyWaveform && key == "Tests") y = WavePreview(host, y, w, b, list);
                     continue;
                 }
+
+                RowLabel(key);
+                int fw = Math.Min(FieldWidth(kk, fwFull), fwFull - (browse || multi ? 28 : 0));
                 if (choices != null && !multi)
                 {
-                    var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Location = new Point(4, y), Width = fw, Font = Win98.Font };
+                    var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Location = new Point(fx, y), Width = fw, Font = Win98.Font };
                     combo.Items.AddRange(choices.Cast<object>().ToArray());
                     combo.Text = val;
                     combo.TextChanged += (s, e) => SetVal(combo.Text);
-                    // a library or a category changes the lists after it
-                    if (b.Kind == BlockKind.SupplyWaveform && (key == "Library" || key == "Category")) combo.SelectionChangeCommitted += (s, e) => host.BeginInvoke(new Action(() => { SetVal(combo.SelectedItem as string ?? combo.Text); rebuild?.Invoke(); }));
+                    if (b.Kind == BlockKind.SupplyWaveform && (key == "Library" || key == "Category"))
+                        combo.SelectionChangeCommitted += (s, e) => host.BeginInvoke(new Action(() => { SetVal(combo.SelectedItem as string ?? combo.Text); rebuild?.Invoke(); }));
                     host.Controls.Add(combo);
                 }
                 else
                 {
-                    var tf = new Win98TextField { Location = new Point(4, y), Width = fw, Text = val };
+                    var tf = new Win98TextField { Location = new Point(fx, y), Width = fw, Text = val };
                     tf.Box.TextChanged += (s, e) => SetVal(tf.Text);
                     host.Controls.Add(tf);
                     if (multi || browse)
                     {
-                        var more = new Win98Button { Text = "...", Location = new Point(fw + 8, y - 1), Size = new Size(24, 22) };
+                        var more = new Win98Button { Text = "...", Location = new Point(fx + fw + 4, y - 1), Size = new Size(24, 22) };
                         more.Click += (s, e) =>
                         {
                             string got = multi ? PickSeveral(key, choices ?? new List<string>(), tf.Text) : BrowseFor(b, key, tf.Text);
@@ -582,25 +666,23 @@ namespace Spica.UI
                         host.Controls.Add(more);
                     }
                 }
+                if (PropUnits.TryGetValue(kk, out var unit))
+                    host.Controls.Add(new Label { Text = unit, Location = new Point(fx + fw + 4, y + 3), AutoSize = true, ForeColor = Color.FromArgb(64, 64, 64) });
                 y += 26;
-                Hint(key);
+                Hint(key, true);
             }
 
-            // the folder the study's campaigns go to belongs to the setup, so it is set where the simulation is
             if (b.Kind == BlockKind.Simulate)
             {
                 any = true;
-                Text("Output folder:");
-                var tf = new Win98TextField { Location = new Point(4, y), Width = w - 30, Text = txtOut.Text };
-                tf.Box.TextChanged += (s, e) => { txtOut.Text = tf.Text; MarkDirty(); };
-                var more = new Win98Button { Text = "...", Location = new Point(w - 22, y - 1), Size = new Size(24, 22) };
-                more.Click += (s, e) =>
-                {
-                    using (var d = new FolderBrowserDialog { SelectedPath = tf.Text }) if (d.ShowDialog(this) == DialogResult.OK) tf.Text = d.SelectedPath;
-                };
+                RowLabel("Output folder");
+                var tf = new Win98TextField { Location = new Point(fx, y), Width = fwFull - 28, Text = txtOut.Text };
+                tf.Box.TextChanged += (s, e) => { txtOut.Text = tf.Text; inspectorChanged(); };
+                var more = new Win98Button { Text = "...", Location = new Point(fx + fwFull - 24, y - 1), Size = new Size(24, 22) };
+                more.Click += (s, e) => { using (var d = new FolderBrowserDialog { SelectedPath = tf.Text }) if (d.ShowDialog(this) == DialogResult.OK) tf.Text = d.SelectedPath; };
                 host.Controls.Add(tf); host.Controls.Add(more);
                 y += 26;
-                Text("Every study of this setup puts its campaigns under <folder>\\studies\\<study>. Empty: beside the schematic. Keep it short: LTspice cannot open files past 260 characters of path.", null, Win98.Shadow);
+                Text("Every study of this setup puts its campaigns under <folder>\\studies\\<study>. Empty: beside the schematic. Keep it short: LTspice cannot open files past 260 characters of path.", null, Win98.Shadow, LW);
                 Section("This PC");
                 Text($"LTspice instances and threads: as set in Tools > Options ({(settings.AutoParallel ? "automatic: the scheduler finds the best number" : "fixed")}). " +
                      "The campaigns of a study run one after the other in the queue.", null, Win98.Shadow);
@@ -613,22 +695,17 @@ namespace Spica.UI
                 foreach (var i in k.Inputs)
                 {
                     var from = st.Upstream(b, i.Name).Select(x => x.Spec?.Title ?? x.Kind).ToList();
-                    Text($"in  {i.Name} ({i.Type}): " + (from.Count == 0 ? (i.Optional ? "-" : "not wired") : string.Join(", ", from)), null, from.Count == 0 && !i.Optional ? Color.FromArgb(160, 0, 0) : Color.Black);
+                    Text($"in   {i.Name} ({i.Type}): " + (from.Count == 0 ? (i.Optional ? "-" : "not wired") : string.Join(", ", from)), null, from.Count == 0 && !i.Optional ? Color.FromArgb(160, 0, 0) : Color.Black);
                 }
                 foreach (var o in k.Outputs)
                 {
                     var to = st.Wires.Where(x => x.From == b.Id && x.FromPort == o.Name).Select(x => st[x.To]).Where(x => x != null).Select(x => x.Spec?.Title ?? x.Kind).ToList();
-                    Text($"out {o.Name} ({o.Type}): " + (to.Count == 0 ? "-" : string.Join(", ", to)));
+                    Text($"out  {o.Name} ({o.Type}): " + (to.Count == 0 ? "-" : string.Join(", ", to)));
                 }
             }
-            var missing = BlockProblems(b);
-            if (missing.Count > 0)
-            {
-                Section("Missing");
-                foreach (var m in missing) Text("- " + m, null, Color.FromArgb(160, 0, 0));
-            }
-            host.Controls.Add(new Label { Location = new Point(4, y), Size = new Size(1, 8) });   // room at the end of the scroll
+            host.Controls.Add(new Label { Location = new Point(6, y), Size = new Size(1, 10) });
             host.ResumeLayout();
+            if (scroll > 0) host.AutoScrollPosition = new Point(0, scroll);
         }
 
         /// <summary>Schematic: what the circuit holds (nets, .meas, currents, tolerances), and a button to open it in LTspice.</summary>
@@ -701,6 +778,7 @@ namespace Spica.UI
             {
                 picked = new HashSet<string>(list.CheckedItems.Cast<ErrItem>().Select(x => x.E.Name), StringComparer.OrdinalIgnoreCase);
                 b.Props[index] = new KeyValuePair<string, string>("Errors", string.Join(" | ", project.Errors.Where(e => picked.Contains(e.Name)).Select(e => e.Name)));
+                inspectorChanged();
             }
             list.ItemCheck += (s, e) => host.BeginInvoke(new Action(Store));
             Fill();
@@ -787,6 +865,7 @@ namespace Spica.UI
             {
                 picked = new HashSet<string>(list.CheckedItems.Cast<CritItem>().Select(x => x.C.Name), StringComparer.OrdinalIgnoreCase);
                 b.Props[index] = new KeyValuePair<string, string>("Criteria", string.Join(" | ", project.QualCriteria.Where(c => picked.Contains(c.Name)).Select(c => c.Name)));
+                inspectorChanged();
             }
             list.ItemCheck += (s, e) => host.BeginInvoke(new Action(Store));
             Fill();

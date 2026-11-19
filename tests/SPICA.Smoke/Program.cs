@@ -334,7 +334,28 @@ static class Program
                         wvt.GetMethod("AddSignal", flags).Invoke(wv, new object[] { lb.SelectedItem, true });
                         Pump(30);
                         Check(wv.PaneCount == 3, $"a signal added in a new pane: {wv.PaneCount} panes");
+                        // the cursors: A and B, the values of every signal there and B - A
+                        wvt.GetField("curA", flags).SetValue(wv, 0.04);
+                        wvt.GetField("curB", flags).SetValue(wv, 0.2);
+                        wvt.GetMethod("ShowCursors", flags).Invoke(wv, null);
+                        var lc = (System.Windows.Forms.Label)wvt.GetField("lblCursor", flags).GetValue(wv);
+                        Console.WriteLine(lc.Text);
+                        Check(lc.Visible && lc.Text.Contains("V(bulk)") && lc.Text.Contains("27.2"), "the cursors read the signals");
                         Shot(form, "overlay");
+                        // a plain campaign's waveforms: open the campaign, then its Waveforms page
+                        var dir = verdicts.First().Run.Dir;
+                        mf.GetMethod("OpenResultsFolder", flags).Invoke(form, new object[] { dir });
+                        Pump(40);
+                        mf.GetMethod("ShowCampaignWaves", flags).Invoke(form, null);
+                        Pump(20);
+                        var sets2 = (System.Windows.Forms.CheckedListBox)wvt.GetField("lbSets", flags).GetValue(wv);
+                        var lb2 = (System.Windows.Forms.ListBox)wvt.GetField("lbSignals", flags).GetValue(wv);
+                        Check(sets2.Items.Count == 1 && lb2.Items.Count >= 2, $"a campaign's waveforms: {sets2.Items.Count} set, {lb2.Items.Count} signals");
+                        lb2.SelectedIndex = 0;
+                        wvt.GetMethod("AddSignals", flags).Invoke(wv, new object[] { false });
+                        Pump(20);
+                        Check(wv.SeriesCount >= 1, "a signal of the campaign is drawn");
+                        Shot(form, "campaign_waves");
                     });
                 });
                 steps.Enqueue(() =>
@@ -426,6 +447,18 @@ static class Program
                     var lp = (System.Collections.Generic.List<string>)mf.GetMethod("BlockProblems", flags).Invoke(form, new object[] { limits });
                     Check(lp.Any(), "Limits without criteria is flagged: " + string.Join("; ", lp));
                     Shot(form, "red");
+                    // the inspector: shown while a block is selected, hidden without one
+                    var insp = (System.Windows.Forms.Panel)Get("inspector");
+                    Check(insp.Visible, "the inspector shows the block selected");
+                    Shot(form, "inspector");
+                    canvas.Select(project.Studies[0].Blocks.First(b => b.Kind == "Corners"));
+                    Shot(form, "inspector_corners");
+                    canvas.Select(null);
+                    Pump(5);
+                    Check(!insp.Visible, "and hides without one");
+                    // zoomed out: the titles stay readable
+                    canvas.FitAll();
+                    Shot(form, "far");
                     // the configurators of the main kinds (shown without waiting, for the pictures)
                     project.QualCriteria.Add(new QualCriterion { Name = "holdup", Signal = "V(bulk)", Lo = 18, Requirement = "REQ-PWR-012" });
                     project.QualCriteria.Add(new QualCriterion { Name = "recovered", Signal = "V(bulk)", Lo = 26, Hi = 28, From = QualAnchor.EventEnd, FromOffset = 0.05 });

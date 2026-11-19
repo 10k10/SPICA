@@ -158,7 +158,8 @@ namespace Spica.UI
             var r = study.Blocks.Select(Bounds).Aggregate(Rectangle.Union);
             r.Inflate(30, 30);
             // never so small that the text cannot be read: a wide study then starts at its left edge, and pans
-            zoom = Math.Max(0.75f, Math.Min(1f, Math.Min(Width / (float)r.Width, Height / (float)r.Height)));
+            // zoomed out the blocks keep a readable title (see DrawBlock), so a study can be fitted further out
+            zoom = Math.Max(0.5f, Math.Min(1f, Math.Min(Width / (float)r.Width, Height / (float)r.Height)));
             float sx = Width - r.Width * zoom, sy = Height - r.Height * zoom;
             pan = new PointF(-r.X * zoom + Math.Max(0, sx / 2), -r.Y * zoom + Math.Max(0, Math.Min(sy / 2, 40)));
             Invalidate();
@@ -185,6 +186,9 @@ namespace Spica.UI
         }
 
         static int Snap(float v) => (int)Math.Round(v / 8f) * 8;
+
+        /// <summary>Zoomed out far enough that the small text cannot be read: blocks show their title large, nothing else.</summary>
+        bool Far => zoom < 0.85f;
 
         static Color Blend(Color a, Color b, double t) =>
             Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
@@ -320,11 +324,14 @@ namespace Spica.UI
             string text = NetText(from);
             if (text.Length == 0) return;
             var mid = Bezier(Curve(a, b), 0.5f);
-            var sz = g.MeasureString(text, Win98.Font);
-            var r = new RectangleF(mid.X - sz.Width / 2 - 2, mid.Y - sz.Height / 2, sz.Width + 4, sz.Height);
-            using (var bg = new SolidBrush(Win98.InfoBack)) g.FillRectangle(bg, r);
-            using (var pen = new Pen(TypeColor[PortType.Stimulus])) g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height);
-            using (var br = new SolidBrush(Color.FromArgb(11, 79, 92))) g.DrawString(text, Win98.Font, br, r.X + 2, r.Y);
+            using (var font = Far ? new Font(Win98.Font.FontFamily, 7.5f / zoom) : (Font)Win98.Font.Clone())
+            {
+                var sz = g.MeasureString(text, font);
+                var r = new RectangleF(mid.X - sz.Width / 2 - 2, mid.Y - sz.Height / 2, sz.Width + 4, sz.Height);
+                using (var bg = new SolidBrush(Win98.InfoBack)) g.FillRectangle(bg, r);
+                using (var pen = new Pen(TypeColor[PortType.Stimulus])) g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height);
+                using (var br = new SolidBrush(Color.FromArgb(11, 79, 92))) g.DrawString(text, font, br, r.X + 2, r.Y);
+            }
         }
 
         public static string NetText(Block stim)
@@ -359,7 +366,7 @@ namespace Spica.UI
 
             var oldIm = g.InterpolationMode;
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.DrawImage(KindIcon(b.Kind), r.X + 2, r.Y + 1, 16, 16);
+            if (!Far) g.DrawImage(KindIcon(b.Kind), r.X + 2, r.Y + 1, 16, 16);
             g.InterpolationMode = oldIm;
             if (bad)
             {
@@ -368,6 +375,36 @@ namespace Spica.UI
                 using (var rb = new SolidBrush(Color.FromArgb(220, 0, 0))) g.FillEllipse(rb, dot);
                 using (var wp = new Pen(Color.White, 1.5f)) g.DrawEllipse(wp, dot);
                 using (var wb = new SolidBrush(Color.White)) g.DrawString("!", Win98.BoldFont, wb, dot.X + 5, dot.Y + 1);
+            }
+            // Zoomed out, a block shows its title at a size that can be read on the screen, over the title bar and the
+            // line under it; the caption and the port names come back when zoomed in.
+            if (Far)
+            {
+                using (var tf = new Font(Win98.BoldFont.FontFamily, 8.5f / zoom, FontStyle.Bold))
+                using (var white = new SolidBrush(Color.White))
+                using (var dark = new SolidBrush(Color.FromArgb(32, 32, 32)))
+                {
+                    var fmt = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap, LineAlignment = StringAlignment.Center };
+                    g.DrawString(k?.Title ?? b.Kind, tf, white, new RectangleF(r.X + 3, r.Y, r.Width - 6, Head + 2), fmt);
+                    string capFar = Caption?.Invoke(b) ?? "";
+                    using (var cf = new Font(Win98.Font.FontFamily, 7.5f / zoom))
+                        g.DrawString(capFar, cf, dark, new RectangleF(r.X + 3, r.Y + Head + 1, r.Width - 6, BlockHeight(b) - Head - 2), new StringFormat { Trimming = StringTrimming.EllipsisWord });
+                }
+                if (States.TryGetValue(b.Id, out var stFar))
+                {
+                    // the run state as a coloured dot on the corner
+                    var col = stFar == BlockState.Done ? Color.FromArgb(0, 150, 0) : stFar == BlockState.Cached ? Color.FromArgb(0, 120, 200) : stFar == BlockState.Running ? Color.FromArgb(0, 0, 160)
+                            : stFar == BlockState.Error ? Color.FromArgb(200, 0, 0) : Color.Gray;
+                    float dd = 7 / zoom;
+                    using (var db = new SolidBrush(col)) g.FillEllipse(db, r.Right - dd - 3, r.Bottom - dd - 3, dd, dd);
+                }
+                if (k != null)
+                    using (var edgeFar = new Pen(Color.Black))
+                    {
+                        for (int i = 0; i < k.Inputs.Count; i++) { var p = PortPoint(b, true, i); using (var f = new SolidBrush(TypeColor[k.Inputs[i].Type])) g.FillEllipse(f, p.X - 6, p.Y - 6, 12, 12); g.DrawEllipse(edgeFar, p.X - 6, p.Y - 6, 12, 12); }
+                        for (int i = 0; i < k.Outputs.Count; i++) { var p = PortPoint(b, false, i); using (var f = new SolidBrush(TypeColor[k.Outputs[i].Type])) g.FillEllipse(f, p.X - 6, p.Y - 6, 12, 12); g.DrawEllipse(edgeFar, p.X - 6, p.Y - 6, 12, 12); }
+                    }
+                return;
             }
             using (var white = new SolidBrush(Color.White))
             {

@@ -170,6 +170,9 @@ namespace Spica.UI
         float MapX(double x) => (float)(plot.Left + (x - x0) / (x1 - x0) * plot.Width);
         float MapY(double y) => (float)(plot.Bottom - (y - y0) / (y1 - y0) * plot.Height);
         double InvX(int px) => x0 + (px - plot.Left) * (x1 - x0) / plot.Width;
+
+        /// <summary>The x value under a point of the control (for cursors), NaN outside the plot.</summary>
+        public double DataX(Point p) => plot.Contains(p) ? InvX(p.X) : double.NaN;
         double InvY(int py) => y0 + (plot.Bottom - py) * (y1 - y0) / plot.Height;
 
         void DrawAxes(Graphics g, Rectangle bounds)
