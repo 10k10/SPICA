@@ -477,7 +477,10 @@ namespace Spica.UI
             string[] pre = { "f", "p", "n", "µ", "m", "", "k", "M", "G", "T" };
             int e3 = Math.Max(-5, Math.Min(4, (int)Math.Floor(Math.Log10(big) / 3)));
             double unit = Math.Pow(1000, e3);
-            int dec = Math.Max(0, Math.Min(12, (int)Math.Ceiling(-Math.Log10(step / unit) - 1e-9)));
+            // as many decimals as the step has (2.5 needs one, 0.25 two): fewer would round 2.5 to 3
+            double st = step / unit;
+            int dec = 0;
+            while (dec < 12 && Math.Abs(st * Math.Pow(10, dec) - Math.Round(st * Math.Pow(10, dec))) > 1e-6 * Math.Max(1, st * Math.Pow(10, dec))) dec++;
             return (v / unit).ToString("F" + dec, CultureInfo.InvariantCulture) + pre[e3 + 5];
         }
 
