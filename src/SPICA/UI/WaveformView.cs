@@ -74,7 +74,7 @@ namespace Spica.UI
         /// <summary>The panes, the traces or the runs changed (the owner keeps them with the study).</summary>
         public event Action ViewChanged;
         /// <summary>How the panes look (the owner keeps it in the settings).</summary>
-        public PlotTheme Theme = PlotTheme.All[0];      // Engineering
+        public PlotTheme Theme = PlotTheme.All[0];      // Pale Yellow
         public event Action ThemeChanged;
         double stop;                                    // the end of the simulation: the time axis runs 0 .. stop
         (double A, double B)? shownX;                    // the time range zoomed to, kept when the panes are drawn again

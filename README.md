@@ -67,7 +67,7 @@ waveforms, in the manner of LTspice:
 - under the panes, every trace's value at the cursors and the difference, and its average, RMS, min, max and
   peak-to-peak between the cursors (or over the time shown); with both cursors, Δt and 1/Δt;
 - several temperatures of an analysis are drawn in their own colours;
-- right-click a pane, Style: Engineering (the default), Paper, Amber, Recorder, Sepia, Graphite, Slate, LTspice,
+- right-click a pane, Style: Pale Yellow (the default), Engineering, Paper, Amber, Recorder, Sepia, Graphite, Slate, LTspice,
   Oscilloscope or Blueprint (kept for next time).
 
 The project (`.spica`) keeps each study's last run and how its waveforms were shown: opened, it shows its results,

@@ -41,6 +41,13 @@ namespace Spica.UI
         {
             new PlotTheme
             {
+                Name = "Pale Yellow", Description = "Pale yellow plot, grey grid with a fine one between: the old waveform viewers, QSPICE",
+                Back = C(236, 233, 216), PlotBack = C(255, 255, 225), Grid = C(200, 200, 180), MinorGrid = C(236, 236, 212), Minor = true,
+                Frame = C(70, 70, 60), Text = C(30, 30, 25), Muted = C(110, 110, 100), Cursor = C(40, 40, 30), Chosen = C(0, 0, 128),
+                Palette = new[] { C(0, 0, 200), C(200, 0, 0), C(0, 120, 0), C(160, 0, 160), C(210, 100, 0), C(0, 115, 125), C(110, 60, 20), C(80, 0, 190) },
+            },
+            new PlotTheme
+            {
                 Name = "Engineering", Description = "Grey window, white plot, blue grid with a fine one between: graph paper",
                 Back = C(212, 208, 200), PlotBack = Color.White, Grid = C(150, 170, 215), MinorGrid = C(222, 230, 245), Minor = true,
                 Frame = C(40, 40, 40), Text = Color.Black, Muted = C(90, 90, 90), Cursor = C(40, 40, 40), Chosen = C(0, 0, 128),
