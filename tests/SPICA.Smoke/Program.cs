@@ -28,7 +28,13 @@ static class Program
         if (args.Length > 2 && args[0] == "--studies") return Window(args[1], args[2], Studies);
         if (args.Length > 2 && args[0] == "--studyrun") return Window(args[1], args[2], StudyRun);
         if (args.Length > 0 && args[0] == "--hittest") return HitTest();
-        if (args.Length > 2 && args[0] == "--savesel") return Window(args[1], args[2], SaveSel);
+        if (args.Length > 2 && args[0] == "--savesel")
+        {
+            // from nothing: no campaign, no view kept from an earlier check (the window opens the project with what it finds)
+            string spq = Path.Combine(Path.GetTempPath(), "spq");
+            if (Directory.Exists(spq)) Directory.Delete(spq, true);
+            return Window(args[1], args[2], SaveSel);
+        }
         if (args.Length > 1 && args[0] == "--opentime")
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -336,13 +342,14 @@ static class Program
             w.Shot(w.Form, "queue");
             w.Tab = 2;
             var wv = (Spica.UI.WaveformView)w.Get("waveView");
-            var sets = w.Wave<CheckedListBox>("lbSets");
+            var tree = w.Wave<TreeView>("tvRuns");
+            var sets = tree.Nodes.Cast<TreeNode>().SelectMany(n => n.Nodes.Cast<TreeNode>()).ToList();
             var signals = w.Wave<ListBox>("lbSignals").Items.Cast<string>().ToList();
-            Check(wv.Visible && sets.Items.Count == 3, "three analyses to look at: " + string.Join(", ", sets.Items.Cast<object>()));
+            Check(wv.Visible && sets.Count == 3, "three analyses to look at, under their study: " + string.Join(", ", sets.Select(n => n.Text)));
             Check(signals.Contains("V(bulk)") && signals.Contains("V(in)"), "the .raw holds every signal: " + string.Join(" ", signals));
             Check(wv.Plotted.Contains("V(bulk)") && wv.SeriesCount >= 2, $"the first look plots what the .meas use: {string.Join(", ", wv.Plotted)}; {wv.SeriesCount} traces");
             w.Shot(w.Form, "nominal");
-            for (int i = 0; i < sets.Items.Count; i++) sets.SetItemChecked(i, sets.Items[i].ToString().StartsWith("Worst"));
+            foreach (var n in sets) n.Checked = n.Text.StartsWith("Worst");
             w.Pump(30);
             var runs = w.Wave<ComboBox>("cbRuns");
             Check(runs.SelectedItem?.ToString().StartsWith("All") == true && wv.SeriesCount == 5 * wv.Plotted.Count, $"the worst case: all its runs drawn ({wv.SeriesCount} traces)");
@@ -469,6 +476,16 @@ static class Program
             w.Pump(5);
             Check(w.Plots()[lastPane].Traces.Any(t => t.Label == "2*V(out)") && !w.Plots()[0].Traces.Any(t => t.Label == "2*V(out)"), "2*V(out) dragged from the first pane to the last: it moved");
             w.Shot(w.Form, "moved");
+            // the project opened again: its last run and its panes, as they were left
+            var before = wv.PaneList.Select(x => string.Join("|", x)).ToList();
+            w.Pump(40);                      // the view is kept a moment after the last change
+            ((SpicaProject)w.Get("project")).Dirty = false;
+            w.Call("OpenFile", ((SpicaProject)w.Get("project")).Schematic);
+            w.Pump(20);
+            var after = wv.PaneList.Select(x => string.Join("|", x)).ToList();
+            var ini = System.IO.Path.Combine((string)w.Call("StudyFolder", ((SpicaProject)w.Get("project")).Studies[0]), "results.ini");
+            Check(System.IO.File.Exists(ini) && wv.Visible && before.SequenceEqual(after) && w.Plots().Sum(pl => pl.Traces.Count) > 0,
+                  $"opened again: the results are there, the panes as they were ({string.Join(" / ", after)})");
             // the Add Trace window: its label clear of the field
             var shot = new System.Windows.Forms.Timer { Interval = 300 };
             shot.Tick += (s2, e2) =>
@@ -484,6 +501,19 @@ static class Program
             };
             shot.Start();
             typeof(Spica.UI.MainForm).Assembly.GetType("Spica.UI.Win98Prompt").GetMethod("Ask").Invoke(null, new object[] { w.Form, "Add Trace", "&Expression:", "", "e.g.  2*V(out)    V(out)-V(in)    V(a,b)    abs(I(R1))" });
+            // every style of pane, with the cursors on: pictures to choose from
+            var p0b = w.Plots()[0];
+            var tr = p0b.Traces.First(t => t.Label != null);
+            w.ClickLabel(0, tr); w.ClickLabel(0, tr);
+            foreach (var th in Spica.UI.PlotTheme.All)
+            {
+                wv.Theme = th;
+                typeof(Spica.UI.WaveformView).GetMethod("Draw", Flags).Invoke(wv, null);
+                w.Pump(5);
+                Check(w.Plots().All(pl => pl.Theme == th), $"style {th.Name}: every pane drawn in it");
+                w.Shot(w.Form, "style_" + th.Name);
+            }
+            wv.Theme = Spica.UI.PlotTheme.All[0];
             Console.WriteLine(bad == 0 ? "SAVE SELECTION: all ok" : $"SAVE SELECTION: {bad} wrong");
             w.Shot(w.Form, "all");
             close();
@@ -500,7 +530,8 @@ static class Program
         form.Shown += (s, e) =>
         {
             var set = new RunSet { Condition = new Condition { Name = "campaign" }, Dir = dir };
-            wv.ShowStudy(new Spica.UI.StudyRunData { Sets = new List<RunSet> { set } });
+            var run = new Spica.UI.StudyRunData { Study = "campaign", Sets = new List<RunSet> { set } };
+            wv.ShowRuns(new[] { run }, run);
             foreach (var sig in signals)
             {
                 wv.Plot(new[] { sig });

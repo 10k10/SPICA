@@ -26,6 +26,59 @@ namespace Spica.UI
         public Color Color = Color.Black;
     }
 
+    /// <summary>How a pane looks: its backgrounds, grid, text, the cursors, and the colours of its traces.</summary>
+    public sealed class PlotTheme
+    {
+        public string Name, Description;
+        public Color Back, PlotBack, Grid, MinorGrid, Frame, Text, Muted, Cursor, Chosen;
+        public bool Minor;                  // a lighter grid between the lines of the main one
+        public float Width = 1.6f;          // of the traces
+        public Color[] Palette;
+
+        static Color C(int r, int g, int b) => Color.FromArgb(r, g, b);
+
+        public static readonly PlotTheme[] All =
+        {
+            new PlotTheme
+            {
+                Name = "Paper", Description = "White, a light grid: for printing and reports",
+                Back = Color.White, PlotBack = Color.White, Grid = C(222, 222, 222), Frame = Color.Black, Text = Color.Black, Muted = C(110, 110, 110),
+                Cursor = C(40, 40, 40), Chosen = C(0, 0, 128),
+                Palette = new[] { C(0, 0, 220), C(210, 0, 0), C(0, 145, 0), C(190, 0, 190), C(230, 115, 0), C(0, 140, 150), C(120, 70, 20), C(100, 0, 210) },
+            },
+            new PlotTheme
+            {
+                Name = "Engineering", Description = "Grey window, white plot, blue grid with a fine one between: graph paper",
+                Back = C(212, 208, 200), PlotBack = Color.White, Grid = C(150, 170, 215), MinorGrid = C(222, 230, 245), Minor = true,
+                Frame = C(40, 40, 40), Text = Color.Black, Muted = C(90, 90, 90), Cursor = C(40, 40, 40), Chosen = C(0, 0, 128),
+                Palette = new[] { C(0, 0, 200), C(200, 0, 0), C(0, 130, 0), C(170, 0, 170), C(220, 110, 0), C(0, 125, 135), C(110, 60, 20), C(90, 0, 200) },
+            },
+            new PlotTheme
+            {
+                Name = "LTspice", Description = "Black, grey grid, bright traces: as LTspice draws them",
+                Back = C(24, 24, 24), PlotBack = Color.Black, Grid = C(70, 70, 70), Frame = C(150, 150, 150), Text = C(215, 215, 215), Muted = C(150, 150, 150),
+                Cursor = C(235, 235, 235), Chosen = C(255, 220, 0),
+                Palette = new[] { C(0, 230, 0), C(90, 150, 255), C(255, 70, 70), C(0, 220, 220), C(255, 90, 255), C(255, 230, 0), C(255, 150, 40), C(230, 230, 230) },
+            },
+            new PlotTheme
+            {
+                Name = "Oscilloscope", Description = "Dark green screen, divisions with a fine grid, phosphor traces",
+                Back = C(18, 24, 20), PlotBack = C(6, 20, 12), Grid = C(40, 95, 60), MinorGrid = C(20, 48, 30), Minor = true, Width = 1.8f,
+                Frame = C(70, 140, 90), Text = C(160, 220, 170), Muted = C(100, 160, 115), Cursor = C(230, 255, 230), Chosen = C(255, 220, 0),
+                Palette = new[] { C(120, 255, 120), C(255, 230, 90), C(90, 220, 255), C(255, 110, 220), C(255, 160, 70), C(235, 235, 235), C(170, 140, 255), C(255, 90, 90) },
+            },
+            new PlotTheme
+            {
+                Name = "Blueprint", Description = "Deep blue, a fine grid, light traces: easy on the eyes for long sessions",
+                Back = C(14, 36, 72), PlotBack = C(18, 46, 92), Grid = C(62, 104, 156), MinorGrid = C(32, 68, 120), Minor = true,
+                Frame = C(140, 170, 210), Text = C(215, 228, 245), Muted = C(150, 175, 210), Cursor = C(255, 255, 255), Chosen = C(255, 210, 80),
+                Palette = new[] { C(255, 255, 255), C(255, 210, 80), C(120, 220, 255), C(255, 125, 125), C(140, 255, 170), C(255, 160, 255), C(255, 170, 90), C(190, 190, 255) },
+            },
+        };
+
+        public static PlotTheme Find(string name) => All.FirstOrDefault(t => t.Name.Equals(name ?? "", StringComparison.OrdinalIgnoreCase)) ?? All[0];
+    }
+
     /// <summary>
     /// A waveform pane in the manner of LTspice: the traces' names in their colours along the top (no title), white
     /// plot, dotted grid. Drag a box to zoom (flat: time only, narrow: value only), wheel to zoom, middle-drag to pan,
@@ -33,15 +86,11 @@ namespace Spica.UI
     /// </summary>
     public sealed class WavePlot : Control
     {
-        public static readonly Color Navy = Color.FromArgb(0, 0, 128), Teal = Color.FromArgb(0, 128, 128), Purple = Color.FromArgb(128, 0, 128),
-            Grid = Color.FromArgb(222, 222, 222);
+        public static readonly Color Navy = Color.FromArgb(0, 0, 128), Teal = Color.FromArgb(0, 128, 128), Purple = Color.FromArgb(128, 0, 128);
 
-        /// <summary>The colours of the traces, in order: strong and far apart on white.</summary>
-        public static readonly Color[] Palette =
-        {
-            Color.FromArgb(0, 0, 220), Color.FromArgb(210, 0, 0), Color.FromArgb(0, 145, 0), Color.FromArgb(190, 0, 190),
-            Color.FromArgb(230, 115, 0), Color.FromArgb(0, 140, 150), Color.FromArgb(120, 70, 20), Color.FromArgb(100, 0, 210),
-        };
+        /// <summary>How the pane looks.</summary>
+        public PlotTheme Theme = PlotTheme.All[0];
+        static readonly Font AxisFont = new Font(Win98.Font.FontFamily, 9.75f, FontStyle.Bold);
 
         public readonly List<PlotTrace> Traces = new List<PlotTrace>();
         public readonly List<PlotCursor> Cursors = new List<PlotCursor>();
@@ -126,28 +175,30 @@ namespace Spica.UI
             try { Render(e.Graphics, ClientRectangle, true); }
             catch (Exception ex)
             {
-                e.Graphics.FillRectangle(Brushes.White, ClientRectangle);
+                using (var b = new SolidBrush(Theme.Back)) e.Graphics.FillRectangle(b, ClientRectangle);
                 TextRenderer.DrawText(e.Graphics, "This pane could not be drawn (" + ex.Message + "): back to the whole simulation.", Font, ClientRectangle,
-                    Win98.Shadow, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                    Theme.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
                 if (view.HasValue) BeginInvoke(new Action(ResetZoom));
             }
-            if (Chosen) using (var p = new Pen(Navy, 3)) e.Graphics.DrawRectangle(p, 1, 1, Width - 3, Height - 3);
+            if (Chosen) using (var p = new Pen(Theme.Chosen, 3)) e.Graphics.DrawRectangle(p, 1, 1, Width - 3, Height - 3);
         }
 
         void Render(Graphics g, Rectangle bounds, bool screen)
         {
             g.SmoothingMode = SmoothingMode.None;
-            g.FillRectangle(Brushes.White, bounds);
+            var th = Theme;
+            using (var b = new SolidBrush(th.Back)) g.FillRectangle(b, bounds);
             if (!Traces.Any(t => t.X.Length > 0))
             {
                 labels.Clear();
-                TextRenderer.DrawText(g, EmptyText, Font, bounds, Win98.Shadow, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                TextRenderer.DrawText(g, EmptyText, Font, bounds, th.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
                 return;
             }
             ComputeRange();
             int top = bounds.Top + 6 + LayoutLabels(bounds, bounds.Top + 4);
-            int bottom = bounds.Bottom - (XLabel.Length > 0 ? 38 : 24);
-            plot = Rectangle.FromLTRB(bounds.Left + 62, top, Math.Max(bounds.Left + 72, bounds.Right - 14), Math.Max(top + 10, bottom));
+            int bottom = bounds.Bottom - (XLabel.Length > 0 ? 42 : 24);
+            plot = Rectangle.FromLTRB(bounds.Left + 66, top, Math.Max(bounds.Left + 76, bounds.Right - 14), Math.Max(top + 10, bottom));
+            using (var b = new SolidBrush(th.PlotBack)) g.FillRectangle(b, plot);
 
             DrawAxes(g, bounds);
             var clip = g.Clip;
@@ -157,25 +208,25 @@ namespace Spica.UI
             g.SmoothingMode = SmoothingMode.None;
             foreach (var c in Cursors) DrawCursor(g, c);
             g.Clip = clip;
-            g.DrawRectangle(Pens.Black, plot);
+            using (var fp = new Pen(th.Frame)) g.DrawRectangle(fp, plot);
             foreach (var l in labels)
                 TextRenderer.DrawText(g, l.Value.Label, Win98.BoldFont, l.Key, l.Value.Color, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             foreach (var c in Cursors.Where(c => Ok(c.X) && c.X >= x0 && c.X <= x1))
             {
                 // the cursor's number above the plot, on its line
                 var r = new Rectangle((int)MapX(c.X) - 6, plot.Top - 13, 12, 12);
-                using (var b = new SolidBrush(c.Color)) g.FillRectangle(b, r);
-                TextRenderer.DrawText(g, c.Name, Font, r, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                using (var b = new SolidBrush(th.Cursor)) g.FillRectangle(b, r);
+                TextRenderer.DrawText(g, c.Name, Font, r, th.PlotBack, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             if (!screen) return;
 
             if (dragFrom.HasValue && dragBox.Width > 0)
-                using (var p = new Pen(Color.Black) { DashStyle = DashStyle.Dot }) g.DrawRectangle(p, dragBox.X, dragBox.Y, dragBox.Width, Math.Max(1, dragBox.Height));
+                using (var p = new Pen(th.Text) { DashStyle = DashStyle.Dot }) g.DrawRectangle(p, dragBox.X, dragBox.Y, dragBox.Width, Math.Max(1, dragBox.Height));
             if (view.HasValue)
             {
                 const string t = "zoomed - double-click to reset";
                 var sz = TextRenderer.MeasureText(t, Font);
-                TextRenderer.DrawText(g, t, Font, new Point(plot.Right - sz.Width - 4, plot.Bottom - sz.Height - 3), Win98.Shadow);
+                TextRenderer.DrawText(g, t, Font, new Point(plot.Right - sz.Width - 4, plot.Bottom - sz.Height - 3), th.Muted);
             }
             if (mouse.HasValue && plot.Contains(mouse.Value) && dragging == null)
             {
@@ -232,6 +283,18 @@ namespace Spica.UI
 
         static bool Ok(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 
+        /// <summary>The simulation's typical time step: the median spacing of the first trace's points (0: unknown).</summary>
+        double TimeStep()
+        {
+            var t = Traces.FirstOrDefault(x => x.X.Length > 2);
+            if (t == null) return 0;
+            var d = new List<double>(t.X.Length);
+            for (int i = 1; i < t.X.Length; i++) if (t.X[i] > t.X[i - 1]) d.Add(t.X[i] - t.X[i - 1]);
+            if (d.Count == 0) return 0;
+            d.Sort();
+            return d[d.Count / 2];
+        }
+
         /// <summary>The range of the values drawn (null: none).</summary>
         (double Lo, double Hi)? DataY()
         {
@@ -246,38 +309,47 @@ namespace Spica.UI
 
         void DrawAxes(Graphics g, Rectangle bounds)
         {
-            using (var grid = new Pen(Grid))
+            var th = Theme;
+            var xt = Ticks(x0, x1, Math.Max(2, plot.Width / 80)).ToList();
+            var yt = Ticks(y0, y1, Math.Max(2, plot.Height / 30)).ToList();
+            if (th.Minor)
+                using (var minor = new Pen(th.MinorGrid))
+                {
+                    // five divisions between the main lines, also before the first and after the last
+                    if (xt.Count > 1) for (double v = xt[0] - (xt[1] - xt[0]); v <= x1; v += (xt[1] - xt[0]) / 5) if (v >= x0) { float x = MapX(v); g.DrawLine(minor, x, plot.Top, x, plot.Bottom); }
+                    if (yt.Count > 1) for (double v = yt[0] - (yt[1] - yt[0]); v <= y1; v += (yt[1] - yt[0]) / 5) if (v >= y0) { float y = MapY(v); g.DrawLine(minor, plot.Left, y, plot.Right, y); }
+                }
+            using (var grid = new Pen(th.Grid))
+            using (var tick = new Pen(th.Frame))
             {
-                var xt = Ticks(x0, x1, Math.Max(2, plot.Width / 80)).ToList();
                 foreach (var v in xt)
                 {
                     float x = MapX(v);
                     g.DrawLine(grid, x, plot.Top, x, plot.Bottom);
-                    g.DrawLine(Pens.Black, x, plot.Bottom, x, plot.Bottom + 4);
+                    g.DrawLine(tick, x, plot.Bottom, x, plot.Bottom + 4);
                     string s = TickText(v, xt);
                     var sz = TextRenderer.MeasureText(s, Font);
-                    TextRenderer.DrawText(g, s, Font, new Point((int)x - sz.Width / 2, plot.Bottom + 5), Color.Black);
+                    TextRenderer.DrawText(g, s, Font, new Point((int)x - sz.Width / 2, plot.Bottom + 5), th.Text);
                 }
-                var yt = Ticks(y0, y1, Math.Max(2, plot.Height / 30)).ToList();
                 foreach (var v in yt)
                 {
                     float y = MapY(v);
                     g.DrawLine(grid, plot.Left, y, plot.Right, y);
-                    g.DrawLine(Pens.Black, plot.Left - 4, y, plot.Left, y);
+                    g.DrawLine(tick, plot.Left - 4, y, plot.Left, y);
                     string s = TickText(v, yt);
                     var sz = TextRenderer.MeasureText(s, Font);
-                    TextRenderer.DrawText(g, s, Font, new Point(plot.Left - 6 - sz.Width, (int)y - sz.Height / 2), Color.Black);
+                    TextRenderer.DrawText(g, s, Font, new Point(plot.Left - 6 - sz.Width, (int)y - sz.Height / 2), th.Text);
                 }
             }
             if (XLabel.Length > 0)
-                TextRenderer.DrawText(g, XLabel, Font, new Rectangle(plot.Left, plot.Bottom + 20, plot.Width, 16), Color.Black, TextFormatFlags.HorizontalCenter);
+                TextRenderer.DrawText(g, XLabel, AxisFont, new Rectangle(plot.Left, plot.Bottom + 21, plot.Width, 18), th.Text, TextFormatFlags.HorizontalCenter);
             if (YLabel.Length > 0)
             {
                 var st = g.Save();
-                g.TranslateTransform(bounds.Left + 4, plot.Top + plot.Height / 2f);
+                g.TranslateTransform(bounds.Left + 3, plot.Top + plot.Height / 2f);
                 g.RotateTransform(-90);
-                var sz = g.MeasureString(YLabel, Font);
-                g.DrawString(YLabel, Font, Brushes.Black, -sz.Width / 2, 0);
+                var sz = g.MeasureString(YLabel, AxisFont);
+                using (var b = new SolidBrush(th.Text)) g.DrawString(YLabel, AxisFont, b, -sz.Width / 2, 0);
                 g.Restore(st);
             }
         }
@@ -299,7 +371,7 @@ namespace Spica.UI
             int lo = Array.BinarySearch(t.X, 0, n, x0);
             int start = Math.Max(0, (lo < 0 ? ~lo : lo) - 1);
             var pts = new List<PointF>();
-            using (var p = new Pen(t.Color, 1.6f) { LineJoin = LineJoin.Round })
+            using (var p = new Pen(t.Color, Theme.Width) { LineJoin = LineJoin.Round })
             {
                 void Flush() { if (pts.Count > 1) g.DrawLines(p, pts.ToArray()); pts.Clear(); }
                 for (int i = start; i + 1 < n; i++)
@@ -339,11 +411,11 @@ namespace Spica.UI
         {
             if (!Ok(c.X) || c.X < x0 || c.X > x1) return;
             float x = MapX(c.X);
-            using (var p = new Pen(c.Color, 1) { DashStyle = DashStyle.Dash }) g.DrawLine(p, x, plot.Top, x, plot.Bottom);
+            using (var p = new Pen(Theme.Cursor, 1) { DashStyle = c.Name == "1" ? DashStyle.Dash : DashStyle.Dot }) g.DrawLine(p, x, plot.Top, x, plot.Bottom);
             if (!Ok(c.Y) || c.Y < y0 || c.Y > y1) return;
             float y = MapY(c.Y);
-            using (var p = new Pen(c.Color, 1) { DashStyle = DashStyle.Dash }) g.DrawLine(p, plot.Left, y, plot.Right, y);
-            using (var p = new Pen(c.Color, 2)) g.DrawRectangle(p, x - 4, y - 4, 8, 8);
+            using (var p = new Pen(Theme.Cursor, 1) { DashStyle = c.Name == "1" ? DashStyle.Dash : DashStyle.Dot }) g.DrawLine(p, plot.Left, y, plot.Right, y);
+            using (var p = new Pen(Theme.Cursor, 2)) g.DrawRectangle(p, x - 4, y - 4, 8, 8);
         }
 
         static IEnumerable<double> Ticks(double a, double b, int maxTicks)
@@ -508,7 +580,7 @@ namespace Spica.UI
         void SetView(double xa, double xb, double ya, double yb)
         {
             if (!(xb > xa) || !(yb > ya) || double.IsInfinity(xb - xa) || double.IsInfinity(yb - ya)) return;
-            double minX = limits.HasValue ? (limits.Value.Value - limits.Value.Key) * 1e-9 : 1e-15;
+            double minX = Math.Max(limits.HasValue ? (limits.Value.Value - limits.Value.Key) * 1e-9 : 1e-15, 10 * TimeStep());
             if (xb - xa < minX) { double m = (xa + xb) / 2; xa = m - minX / 2; xb = m + minX / 2; }
             double minY = Math.Max(1e-15, Math.Max(Math.Abs(ya), Math.Abs(yb)) * 1e-9);
             if (yb - ya < minY) { double m = (ya + yb) / 2; ya = m - minY / 2; yb = m + minY / 2; }

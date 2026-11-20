@@ -10,10 +10,15 @@ using Spica.Core.Graph;
 
 namespace Spica.UI
 {
-    /// <summary>A study that ran: its campaigns, and what did not finish.</summary>
+    /// <summary>A study that ran: its campaigns, what did not finish, and how its waveforms were last shown.</summary>
     public sealed class StudyRunData
     {
         public string Study = "";
+        /// <summary>The study's results folder (where this run and its view are kept); null for a campaign looked at alone.</summary>
+        public string Folder;
+        /// <summary>The panes and their traces, and the runs chosen, as last shown (null: never shown).</summary>
+        public List<List<string>> Panes;
+        public string Runs;
         public DateTime Ended = DateTime.Now;
         public List<RunSet> Sets = new List<RunSet>();
         public List<string> Problems = new List<string>();
@@ -23,8 +28,9 @@ namespace Spica.UI
 
     /// <summary>
     /// Results > a study: its waveforms, in the manner of LTspice.
-    /// - Left: the analyses (tick several to overlay them), the runs, and the signals of the .raw files: a click on a
-    ///   signal plots it in the pane chosen (navy frame; a click on a pane chooses it).
+    /// - Left, top to bottom: the studies that ran with their analyses (tick several to overlay them, also from
+    ///   different studies), the runs, and the signals of the .raw files: a click on a signal plots it in the pane
+    ///   chosen (framed; a click on a pane chooses it), or drag it onto a pane.
     /// - Right: the panes, on one time axis. A right-click on a pane adds a trace by expression (2*V(out), V(a,b)),
     ///   panes above or below, deletes it; a click on a trace's name puts a cursor on it (1, then 2, then none), a
     ///   right-click on the name moves the cursors, edits or deletes the trace. The cursors are dragged.
@@ -50,7 +56,7 @@ namespace Spica.UI
             public bool On => Pane >= 0;
         }
 
-        readonly CheckedListBox lbSets;
+        readonly TreeView tvRuns;
         readonly ComboBox cbRuns;
         readonly TextBox txtFilter;
         readonly ListBox lbSignals;
@@ -62,7 +68,14 @@ namespace Spica.UI
         readonly CursorAt cur2 = new CursorAt { Name = "2", Color = Color.FromArgb(110, 110, 110) };
         int active;
         bool filling, linking;
-        StudyRunData data;
+        List<StudyRunData> runs = new List<StudyRunData>();
+        /// <summary>The study whose view is shown (its panes are kept with it).</summary>
+        public StudyRunData Shown { get; private set; }
+        /// <summary>The panes, the traces or the runs changed (the owner keeps them with the study).</summary>
+        public event Action ViewChanged;
+        /// <summary>How the panes look (the owner keeps it in the settings).</summary>
+        public PlotTheme Theme = PlotTheme.All[0];
+        public event Action ThemeChanged;
         double stop;                                    // the end of the simulation: the time axis runs 0 .. stop
         (double A, double B)? shownX;                    // the time range zoomed to, kept when the panes are drawn again
         List<Trace> traces = new List<Trace>();
@@ -74,7 +87,7 @@ namespace Spica.UI
         // what is dragged: a signal from the list, or a trace's name from a pane ("pane|expression")
         const string SignalPrefix = "spica-signal:", TracePrefix = "spica-trace:";
         bool dragCancelled;
-        static Color[] Palette => WavePlot.Palette;
+        Color[] Palette => Theme.Palette;
 
         public WaveformView()
         {
@@ -82,13 +95,26 @@ namespace Spica.UI
             Dock = DockStyle.Fill;
 
             var left = new Panel { Dock = DockStyle.Left, Width = 250, BackColor = Win98.Face, Padding = new Padding(0, 0, 6, 0) };
-            var lblSets = new Label { Text = "Analyses (tick several to overlay):", Location = new Point(2, 2), AutoSize = true };
-            lbSets = new CheckedListBox { CheckOnClick = true, Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, HorizontalScrollbar = true };
-            lbSets.ItemCheck += (s, e) => { if (!filling) BeginInvoke(new Action(() => { FillRuns(); FillSignals(); Draw(); })); };
+            var lblSets = new Label { Text = "Studies run (tick analyses to overlay):", Location = new Point(2, 2), AutoSize = true };
+            var images = new ImageList { ImageSize = new Size(16, 16), ColorDepth = ColorDepth.Depth32Bit };
+            foreach (var n in new[] { "app16", "chart16" }) images.Images.Add(n, Win98.Icon(n));
+            tvRuns = new TreeView { Font = Win98.Font, CheckBoxes = true, ImageList = images, BorderStyle = BorderStyle.Fixed3D, HideSelection = false, ShowLines = true, ItemHeight = 18 };
+            // a study ticked or cleared ticks or clears its analyses; any change draws again
+            tvRuns.AfterCheck += (s, e) =>
+            {
+                if (filling) return;
+                if (e.Node.Tag is StudyRunData)
+                {
+                    filling = true;
+                    foreach (TreeNode c in e.Node.Nodes) c.Checked = e.Node.Checked;
+                    filling = false;
+                }
+                BeginInvoke(new Action(() => { FillRuns(); FillSignals(); Draw(); }));
+            };
             var lblRuns = new Label { Text = "&Runs:", AutoSize = true };
             cbRuns = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Win98.Font };
             cbRuns.SelectedIndexChanged += (s, e) => { if (!filling) Draw(); };
-            var lblSig = new Label { Text = "&Signals: click one to plot it in the pane chosen (navy frame), or drag it onto a pane.", AutoSize = false, Height = 28 };
+            var lblSig = new Label { Text = "&Signals: click one to plot it in the pane chosen (framed), or drag it onto a pane.", AutoSize = false, Height = 28 };
             txtFilter = new TextBox { Font = Win98.Font, BorderStyle = BorderStyle.Fixed3D };
             txtFilter.TextChanged += (s, e) => FillSignals();
             lbSignals = new ListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D };
@@ -117,13 +143,13 @@ namespace Spica.UI
                 AutoSize = false, Height = 70, ForeColor = Win98.Shadow, UseMnemonic = false,
                 Text = "Right-click a pane: a trace by expression (2*V(out), V(a,b)), panes above and below.\nClick a trace's name: cursor 1, then 2. Drag a name to another pane, or out to delete it.",
             };
-            left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, lblHow });
+            left.Controls.AddRange(new Control[] { lblSets, tvRuns, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, lblHow });
             left.Resize += (s, e) =>
             {
                 int w = left.Width - 10, h = left.Height;
-                lbSets.SetBounds(2, 18, w, Math.Max(60, h / 5));
-                lblRuns.Location = new Point(2, lbSets.Bottom + 9);
-                cbRuns.SetBounds(42, lbSets.Bottom + 6, w - 40, 21);
+                tvRuns.SetBounds(2, 18, w, Math.Max(90, h * 30 / 100));
+                lblRuns.Location = new Point(2, tvRuns.Bottom + 9);
+                cbRuns.SetBounds(42, tvRuns.Bottom + 6, w - 40, 21);
                 lblSig.SetBounds(2, cbRuns.Bottom + 8, w, 28);
                 txtFilter.SetBounds(2, lblSig.Bottom, w, 20);
                 lblHow.SetBounds(2, h - 70, w, 70);
@@ -150,26 +176,54 @@ namespace Spica.UI
 
         // ------------------------------------------------------------------ what is shown
 
-        List<RunSet> Checked => data == null ? new List<RunSet>() : lbSets.CheckedIndices.Cast<int>().Select(i => data.Sets.Where(s => s.Dir != null).ElementAt(i)).ToList();
+        /// <summary>The analyses ticked, in the tree's order.</summary>
+        List<RunSet> Checked => tvRuns.Nodes.Cast<TreeNode>().SelectMany(n => n.Nodes.Cast<TreeNode>()).Where(n => n.Checked).Select(n => (RunSet)n.Tag).ToList();
+
+        /// <summary>The study each analysis ticked belongs to.</summary>
+        StudyRunData StudyOf(RunSet s) => runs.FirstOrDefault(r => r.Sets.Contains(s));
 
         /// <summary>
-        /// Shows a study's campaigns, <paramref name="focus"/> ticked (or the first). The panes and their traces stay as
-        /// they were, so a study run again shows the same plots.
+        /// The studies that ran, <paramref name="focus"/>'s <paramref name="set"/> ticked (or its first analysis), alone.
+        /// The panes come from how <paramref name="focus"/> was last shown; never shown, they stay as they are.
         /// </summary>
-        public void ShowStudy(StudyRunData d, RunSet focus = null)
+        public void ShowRuns(IList<StudyRunData> all, StudyRunData focus, RunSet set = null)
         {
-            data = d;
+            runs = all.ToList();
+            Shown = focus;
             filling = true;
-            lbSets.Items.Clear();
-            var sets = d.Sets.Where(s => s.Dir != null).ToList();
-            foreach (var s in sets) lbSets.Items.Add(s.Label, s == focus || (focus == null && s == sets.FirstOrDefault()));
+            tvRuns.BeginUpdate();
+            tvRuns.Nodes.Clear();
+            foreach (var r in runs)
+            {
+                var sn = new TreeNode($"{r.Study}  ({r.Ended:dd/MM HH:mm})") { Tag = r, ImageKey = "app16", SelectedImageKey = "app16" };
+                var sets = r.Sets.Where(s => s.Dir != null).ToList();
+                foreach (var s in sets)
+                    sn.Nodes.Add(new TreeNode(s.Label + (s.Cached ? "  (earlier run)" : "")) { Tag = s, ImageKey = "chart16", SelectedImageKey = "chart16",
+                                                                                             Checked = r == focus && (s == set || (set == null && s == sets.FirstOrDefault())) });
+                sn.Checked = sn.Nodes.Count > 0 && sn.Nodes.Cast<TreeNode>().All(n => n.Checked);
+                tvRuns.Nodes.Add(sn);
+                sn.Expand();
+            }
+            tvRuns.EndUpdate();
             filling = false;
+            if (focus?.Panes != null && focus.Panes.Count > 0)
+            {
+                panes.Clear();
+                foreach (var exprs in focus.Panes) { var p = new Pane(); p.Exprs.AddRange(exprs); panes.Add(p); }
+                active = panes.Count - 1;
+                cur1.Pane = cur2.Pane = -1;
+            }
             if (panes.Count == 0) panes.Add(new Pane());
             active = Math.Min(active, panes.Count - 1);
             FillRuns();
+            if (focus?.Runs != null && cbRuns.Items.Contains(focus.Runs)) { filling = true; cbRuns.SelectedItem = focus.Runs; filling = false; }
             FillSignals();
             Draw();
         }
+
+        /// <summary>The panes and their traces as they are now.</summary>
+        public List<List<string>> PaneList => panes.Select(p => p.Exprs.ToList()).ToList();
+        public string RunsChosen => cbRuns.SelectedItem as string;
 
         /// <summary>Puts signals on the panes, one pane each (the first look at a study).</summary>
         public void Plot(IEnumerable<string> signals)
@@ -352,10 +406,13 @@ namespace Spica.UI
 
         void Draw()
         {
-            if (data == null) return;
+            if (runs.Count == 0) return;
             Cursor = Cursors.WaitCursor;
             try { DrawCore(); }
             finally { Cursor = Cursors.Default; }
+            // what is shown is kept with its study
+            if (Shown != null) { Shown.Panes = PaneList; Shown.Runs = RunsChosen; }
+            ViewChanged?.Invoke();
         }
 
         static string TempText(double t) => double.IsNaN(t) ? "" : t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " °C";
@@ -373,12 +430,14 @@ namespace Spica.UI
             traces = sets.Count == 0 || needs.Count == 0 ? new List<Trace>() : Load(sets, needs);
             stop = traces.Where(t => t.X.Length > 0).Select(t => t.X[t.X.Length - 1]).DefaultIfEmpty(stop).Max();
             bool manySets = sets.Count > 1;
+            bool manyStudies = sets.Select(StudyOf).Distinct().Count() > 1;
+            string SetName(RunSet s) => (manyStudies ? StudyOf(s)?.Study + " " : "") + s.Label;
 
             for (int pi = 0; pi < panes.Count; pi++)
             {
                 var pane = panes[pi];
                 int paneIndex = pi;
-                var plot = new WavePlot { EmptyText = "Empty pane: click a signal on the left to plot it here.", Chosen = pi == active && panes.Count > 1 };
+                var plot = new WavePlot { Theme = Theme, EmptyText = "Empty pane: click a signal on the left to plot it here.", Chosen = pi == active && panes.Count > 1 };
                 plot.MouseDown += (s, e) => Choose(paneIndex);
                 plot.MenuRequested += at => PaneMenu(paneIndex, at);
                 plot.LabelClicked += (t, e) => LabelClicked(paneIndex, t, e);
@@ -407,7 +466,7 @@ namespace Spica.UI
                         {
                             var col = Palette[colour++ % Palette.Length];
                             int n = g.Count();
-                            string label = expr + (manySets ? " · " + sets[k].Label : "") + (temps ? " · " + TempText(g.Key) : "") + (n > 1 ? $" ({n} runs)" : "");
+                            string label = expr + (manySets ? " · " + SetName(sets[k]) : "") + (temps ? " · " + TempText(g.Key) : "") + (n > 1 ? $" ({n} runs)" : "");
                             bool first = true;
                             foreach (var x in g)
                             {
@@ -518,6 +577,13 @@ namespace Spica.UI
             m.Items.Add("Add Pane Be&low", null, (s, e) => { panes.Insert(pane + 1, new Pane()); active = pane + 1; Draw(); });
             m.Items.Add(new ToolStripMenuItem("&Delete Pane", null, (s, e) => { panes.RemoveAt(pane); if (panes.Count == 0) panes.Add(new Pane()); active = Math.Min(pane, panes.Count - 1); Draw(); }) { Enabled = panes.Count > 1 || panes[pane].Exprs.Count > 0 });
             m.Items.Add(new ToolStripSeparator());
+            var style = new ToolStripMenuItem("S&tyle");
+            foreach (var t in PlotTheme.All)
+            {
+                var th = t;
+                style.DropDownItems.Add(new ToolStripMenuItem($"{th.Name}:  {th.Description}", null, (s, e) => { Theme = th; ThemeChanged?.Invoke(); Draw(); }) { Checked = th == Theme });
+            }
+            m.Items.Add(style);
             m.Items.Add("&Reset Zoom", null, (s, e) => ResetZoom());
             m.Items.Add("&Copy Image", null, (s, e) => { using (var b = Snapshot()) if (b != null) Clipboard.SetImage(b); });
             m.Items.Add("&Save Image as PNG...", null, (s, e) => SaveImage());
@@ -643,7 +709,10 @@ namespace Spica.UI
                     double v1 = cur1.On ? At(t, cur1.X) : double.NaN, v2 = cur2.On ? At(t, cur2.X) : double.NaN;
                     Window(t, a, b, out double avg, out double rms, out double min, out double max);
                     lvMeasure.Items.Add(new ListViewItem(new[] { t.Label, F(v1), F(v2), double.IsNaN(v1) || double.IsNaN(v2) ? "" : F(v2 - v1), F(avg), F(rms), F(min), F(max), F(max - min) }));
-                    measureColors.Add(t.Color);
+                    // on the white table, a light colour (the dark styles) goes darker so that it can be read
+                    var c = t.Color;
+                    double lum = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255;
+                    measureColors.Add(lum > 0.55 ? Color.FromArgb((int)(c.R * 0.55), (int)(c.G * 0.55), (int)(c.B * 0.55)) : c);
                 }
             lvMeasure.EndUpdate();
         }

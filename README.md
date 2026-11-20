@@ -51,10 +51,10 @@ the results on disk at once. Change a block and only what it feeds runs again (t
 
 ## Results
 
-The studies that ran, each with its analyses, are on the left. On the right, the waveforms, in the manner of
-LTspice:
+On the left, top to bottom: the studies that ran with their analyses, the runs, the signals. On the right, the
+waveforms, in the manner of LTspice:
 
-- tick one or several analyses to overlay them; choose one run, or all of them;
+- tick one or several analyses to overlay them (also from different studies); choose one run, or all of them;
 - click a signal in the list to plot it in the pane chosen (the one with the navy frame; click a pane to choose
   it), or drag it onto a pane;
 - drag a trace's name to another pane to move it there, or out of the panes to delete it (Esc cancels);
@@ -66,7 +66,12 @@ LTspice:
   zooms, the middle button pans, a double-click or Reset Zoom shows the whole simulation again;
 - under the panes, every trace's value at the cursors and the difference, and its average, RMS, min, max and
   peak-to-peak between the cursors (or over the time shown); with both cursors, Δt and 1/Δt;
-- several temperatures of an analysis are drawn in their own colours.
+- several temperatures of an analysis are drawn in their own colours;
+- right-click a pane, Style: Paper, Engineering, LTspice, Oscilloscope or Blueprint (kept for next time).
+
+Each study keeps its last run and how its waveforms were shown (`results.ini` in its results folder): the project
+opens with its results, the panes as they were left. The time can be zoomed in down to ten time steps of the
+simulation.
 
 The Folder button on the toolbar opens the study's campaigns on disk.
 

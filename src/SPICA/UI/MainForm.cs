@@ -293,6 +293,7 @@ namespace Spica.UI
             settings.Save();
             UpdateTitle();
             ShowStudies();
+            LoadRuns();
             if (isProject && p.Schematic.Length > 0 && !File.Exists(p.Schematic))
                 Win98MessageBox.Show(this, "The schematic of this project was not found:\n" + p.Schematic + "\n\nChoose it in its Schematic block.", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
             if (File.Exists(p.Schematic)) _ = LoadNetlist(p.Schematic);

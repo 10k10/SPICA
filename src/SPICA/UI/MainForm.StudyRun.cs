@@ -125,12 +125,13 @@ namespace Spica.UI
             UpdateCommandState();
         }
 
-        /// <summary>A study ended: its campaigns go to the Results tab (in place of an earlier run of the same study).</summary>
+        /// <summary>A study ended: its campaigns go to the Results tab (in place of an earlier run of the same study, whose plots it keeps).</summary>
         void StudyEnded(Study st, List<string> failed)
         {
+            var earlier = studyRuns.FirstOrDefault(x => x.Study == st.Name);
             var run = new StudyRunData
             {
-                Study = st.Name, Problems = failed,
+                Study = st.Name, Problems = failed, Folder = StudyFolder(st), Panes = earlier?.Panes, Runs = earlier?.Runs,
                 Saved = st.Blocks.Where(b => b.Kind == BlockKind.Simulate).SelectMany(SaveList).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 Sets = studyRunner.Results.Values.SelectMany(x => x.Values).OfType<List<RunSet>>().SelectMany(x => x).Distinct().ToList(),
             };
@@ -142,7 +143,6 @@ namespace Spica.UI
             {
                 studyRuns.RemoveAll(x => x.Study == st.Name);
                 studyRuns.Insert(0, run);
-                while (studyRuns.Count > 12) studyRuns.RemoveAt(studyRuns.Count - 1);
                 ShowRun(run, null);
             }
             if (failed.Count > 0)
@@ -152,73 +152,37 @@ namespace Spica.UI
 
         // ------------------------------------------------------------------ the Results tab
 
-        TreeView tvResults;
         WaveformView waveView;
         Label lblNoResults;
         readonly List<StudyRunData> studyRuns = new List<StudyRunData>();
-        bool fillingResults;
+        Timer saveViewSoon;
 
-        /// <summary>The Results tab: the studies that ran (each with its analyses) on the left, their waveforms on the right.</summary>
+        /// <summary>The Results tab: the waveforms of the studies that ran (the studies, their analyses and the signals are on its left).</summary>
         void BuildResultsPage()
         {
-            var left = new Win98GroupBox { Text = "Studies run", Dock = DockStyle.Left, Width = 220 };
-            var images = new ImageList { ImageSize = new Size(16, 16), ColorDepth = ColorDepth.Depth32Bit };
-            foreach (var n in new[] { "app16", "chart16" }) images.Images.Add(n, Win98.Icon(n));
-            tvResults = new TreeView { Font = Win98.Font, ImageList = images, BorderStyle = BorderStyle.Fixed3D, HideSelection = false, ShowLines = true, ItemHeight = 18 };
-            tvResults.AfterSelect += (s, e) =>
-            {
-                if (fillingResults) return;
-                if (e.Node?.Tag is StudyRunData r) ShowRun(r, null);
-                else if (e.Node?.Tag is RunSet set && e.Node.Parent?.Tag is StudyRunData pr) ShowRun(pr, set);
-            };
-            left.Controls.Add(tvResults);
-            left.Resize += (s, e) => tvResults.SetBounds(8, 20, left.Width - 16, left.Height - 28);
-
-            waveView = new WaveformView();
+            waveView = new WaveformView { Theme = PlotTheme.Find(settings.PlotStyle), Visible = false };
+            waveView.ThemeChanged += () => { settings.PlotStyle = waveView.Theme.Name; settings.Save(); };
+            // what is shown is kept with its study, a moment after the last change
+            saveViewSoon = new Timer { Interval = 600 };
+            saveViewSoon.Tick += (s, e) => { saveViewSoon.Stop(); SaveRun(waveView.Shown); };
+            waveView.ViewChanged += () => { saveViewSoon.Stop(); saveViewSoon.Start(); };
             lblNoResults = new Label
             {
                 Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false,
-                Text = "No results yet.\n\nRun a study (Run, F5): when it ends, its waveforms open here.\nWhat ran before comes back at once when the study runs again unchanged.",
+                Text = "No results yet.\n\nRun a study (Run, F5): when it ends, its waveforms open here, and they are here again when the project is opened.",
             };
             pageResults.Controls.Add(waveView);
             pageResults.Controls.Add(lblNoResults);
-            pageResults.Controls.Add(Gap(DockStyle.Left));
-            pageResults.Controls.Add(left);
-            waveView.Visible = false;
-        }
-
-        void FillResultsTree(StudyRunData select, RunSet selectSet)
-        {
-            fillingResults = true;
-            tvResults.BeginUpdate();
-            tvResults.Nodes.Clear();
-            TreeNode pick = null;
-            foreach (var r in studyRuns)
-            {
-                var sn = new TreeNode($"{r.Study}  ({r.Ended:HH:mm})") { Tag = r, ImageKey = "app16", SelectedImageKey = "app16" };
-                foreach (var s in r.Sets.Where(x => x.Dir != null))
-                {
-                    var n = new TreeNode(s.Label + (s.Cached ? "  (earlier run)" : "")) { Tag = s, ImageKey = "chart16", SelectedImageKey = "chart16" };
-                    sn.Nodes.Add(n);
-                    if (r == select && s == selectSet) pick = n;
-                }
-                tvResults.Nodes.Add(sn);
-                sn.Expand();
-                if (r == select && pick == null) pick = sn;
-            }
-            tvResults.EndUpdate();
-            tvResults.SelectedNode = pick;
-            fillingResults = false;
         }
 
         /// <summary>A study's waveforms on the Results tab, <paramref name="set"/> ticked (or its first analysis).</summary>
-        void ShowRun(StudyRunData r, RunSet set)
+        void ShowRun(StudyRunData r, RunSet set, bool open = true)
         {
-            FillResultsTree(r, set);
             lblNoResults.Visible = false;
             waveView.Visible = true;
-            bool first = waveView.Plotted.Count == 0;
-            waveView.ShowStudy(r, set);
+            var all = studyRuns.Contains(r) ? studyRuns : studyRuns.Concat(new[] { r }).ToList();
+            bool first = r.Panes == null && waveView.Plotted.Count == 0;
+            waveView.ShowRuns(all, r, set);
             // the first look, one pane each (at most four): the signals the Simulate saves, else the ones the .meas read, else the first nets
             if (first)
             {
@@ -227,7 +191,70 @@ namespace Spica.UI
                          : nl == null ? new List<string>() : nl.RequiredSignals.Concat(nl.Nodes.Select(n => $"V({n})")).ToList();
                 waveView.Plot(sigs.Distinct(StringComparer.OrdinalIgnoreCase).Take(4));
             }
-            tabs.SelectedIndex = TabResults;
+            if (open) tabs.SelectedIndex = TabResults;
+        }
+
+        const string RunFile = "results.ini";
+        static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        /// <summary>
+        /// A study's last run and how its waveforms were shown, in its results folder (results.ini): written when it ends
+        /// and when its plots change, read when the project opens.
+        /// </summary>
+        void SaveRun(StudyRunData r)
+        {
+            if (r?.Folder == null) return;
+            try
+            {
+                var sb = new System.Text.StringBuilder("; SPICA: the last run of this study, and how its waveforms were shown\r\n");
+                sb.Append("Ended=").Append(r.Ended.ToString("yyyy-MM-dd HH:mm:ss", Inv)).Append("\r\n");
+                foreach (var s in r.Sets.Where(x => x.Dir != null)) sb.Append($"Set={s.Label}|{(s.Cached ? 1 : 0)}|{s.Dir}\r\n");
+                foreach (var p in r.Problems) sb.Append("Problem=").Append(p.Replace("\r", " ").Replace("\n", " ")).Append("\r\n");
+                foreach (var p in r.Panes ?? new List<List<string>>()) sb.Append("Pane=").Append(string.Join("|", p)).Append("\r\n");
+                if (r.Runs != null) sb.Append("Runs=").Append(r.Runs).Append("\r\n");
+                Directory.CreateDirectory(r.Folder);
+                File.WriteAllText(Path.Combine(r.Folder, RunFile), sb.ToString());
+            }
+            catch { }
+        }
+
+        /// <summary>The last run of each study of the project, as it was left (the campaigns still on disk); the newest shown.</summary>
+        void LoadRuns()
+        {
+            studyRuns.Clear();
+            foreach (var st in project.Studies)
+            {
+                string folder = StudyFolder(st);
+                string file = folder == null ? null : Path.Combine(folder, RunFile);
+                if (file == null || !File.Exists(file)) continue;
+                var r = new StudyRunData { Study = st.Name, Folder = folder };
+                try
+                {
+                    foreach (var line in File.ReadAllLines(file))
+                    {
+                        int eq = line.IndexOf('=');
+                        if (line.StartsWith(";") || eq < 0) continue;
+                        string key = line.Substring(0, eq), val = line.Substring(eq + 1);
+                        switch (key)
+                        {
+                            case "Ended": if (DateTime.TryParseExact(val, "yyyy-MM-dd HH:mm:ss", Inv, System.Globalization.DateTimeStyles.None, out var t)) r.Ended = t; break;
+                            case "Set":
+                                var p = val.Split(new[] { '|' }, 3);
+                                if (p.Length == 3 && File.Exists(Path.Combine(p[2], "results.csv")))
+                                    r.Sets.Add(new RunSet { Condition = new Condition { Name = p[0] }, Cached = p[1] == "1", Dir = p[2] });
+                                break;
+                            case "Problem": r.Problems.Add(val); break;
+                            case "Pane": (r.Panes ?? (r.Panes = new List<List<string>>())).Add(val.Split('|').Where(x => x.Length > 0).ToList()); break;
+                            case "Runs": r.Runs = val; break;
+                        }
+                    }
+                }
+                catch { continue; }
+                if (r.Sets.Count > 0) studyRuns.Add(r);
+            }
+            studyRuns.Sort((a, b) => b.Ended.CompareTo(a.Ended));
+            if (studyRuns.Count > 0) ShowRun(studyRuns[0], null, false);
+            else { waveView.Visible = false; lblNoResults.Visible = true; }
         }
 
         /// <summary>A campaign of the queue on the Results tab: as one analysis of its own, as far as it has run.</summary>

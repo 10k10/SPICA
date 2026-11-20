@@ -87,6 +87,8 @@ namespace Spica.Core
         public string LtspicePath { get => Get("LtspicePath"); set => Set("LtspicePath", value); }
         /// <summary>Where the studies' campaigns go; empty = beside the project (or the schematic), in &lt;name&gt;_SPICA.</summary>
         public string ResultsFolder { get => Get("ResultsFolder"); set => Set("ResultsFolder", value); }
+        /// <summary>How the waveform panes look (a PlotTheme's name).</summary>
+        public string PlotStyle { get => Get("PlotStyle"); set => Set("PlotStyle", value); }
         /// <summary>Where the main window was when it last closed: "x,y,w,h" (empty: never), and whether it was maximized.</summary>
         public string WindowBounds { get => Get("WindowBounds"); set => Set("WindowBounds", value); }
         public bool WindowMaximized { get => GetBool("WindowMaximized", false); set => Set("WindowMaximized", value); }
