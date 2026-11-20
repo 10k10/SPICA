@@ -502,6 +502,11 @@ static class Program
             var after = wv.PaneList.Select(x => string.Join("|", x)).ToList();
             Check(wv.Visible && before.SequenceEqual(after) && w.Plots().Sum(pl => pl.Traces.Count) > 0 && !((SpicaProject)w.Get("project")).Dirty,
                   $"opened again: the results are there, the panes as they were, nothing to save ({string.Join(" / ", after)})");
+            Check(!((ToolStripButton)w.Get("tbSave")).Enabled, "nothing to save: Save is off");
+            // volts and amperes in one pane: the amperes on a right axis, as LTspice does; every pane's time axis lines up
+            var mixed = w.Plots().First(pl => pl.Traces.Any(t => (string)t.Tag == "I(Cout)") && pl.Traces.Any(t => (string)t.Tag == "V(out)"));
+            Check(mixed.YLabel == "V" && mixed.RightLabel == "A" && mixed.Traces.Where(t => t.Right).All(t => ((string)t.Tag).StartsWith("I(")) && w.Plots().All(pl => pl.RightRoom),
+                  $"V and A in one pane: V on the left, A on the right ({mixed.YLabel} / {mixed.RightLabel}); every pane keeps the room");
             System.IO.File.Delete(saved);
             // the Add Trace window: its label clear of the field
             var shot = new System.Windows.Forms.Timer { Interval = 300 };

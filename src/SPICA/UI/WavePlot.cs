@@ -16,6 +16,8 @@ namespace Spica.UI
         public Color Color = WavePlot.Navy;
         public double[] X = new double[0], Y = new double[0];
         public object Tag;
+        /// <summary>On the right axis (the second quantity of a pane: currents beside voltages), with its own scale.</summary>
+        public bool Right;
     }
 
     /// <summary>A cursor: a vertical line at X, with a cross where it meets the trace it is on (Y; NaN: the line only).</summary>
@@ -24,6 +26,7 @@ namespace Spica.UI
         public string Name = "1";
         public double X = double.NaN, Y = double.NaN;
         public Color Color = Color.Black;
+        public bool Right;                  // Y is on the right axis
     }
 
     /// <summary>How a pane looks: its backgrounds, grid, text, the cursors, and the colours of its traces.</summary>
@@ -137,6 +140,10 @@ namespace Spica.UI
         public readonly List<PlotTrace> Traces = new List<PlotTrace>();
         public readonly List<PlotCursor> Cursors = new List<PlotCursor>();
         public string XLabel = "", YLabel = "", EmptyText = "";
+        /// <summary>The unit of the right axis (empty: none). Its traces have <see cref="PlotTrace.Right"/>.</summary>
+        public string RightLabel = "";
+        /// <summary>Room kept on the right for a second axis: set alike on every pane of a stack, so their time axes line up.</summary>
+        public bool RightRoom;
         /// <summary>The pane chosen: a navy frame on the screen (not in pictures).</summary>
         public bool Chosen;
 
@@ -153,6 +160,8 @@ namespace Spica.UI
 
         Rectangle plot;
         double x0, x1, y0, y1;
+        double r0, r1;                      // the right axis's values (when some trace is on it)
+        bool HasRight => Traces.Any(t => t.Right);
         Point? mouse, dragFrom, panFrom, labelDown;
         PlotTrace labelPressed;
         /// <summary>The whole simulation: the time can be zoomed into it, never out of it.</summary>
@@ -246,8 +255,8 @@ namespace Spica.UI
             int top = bounds.Top + 6 + LayoutLabels(bounds, bounds.Top + 4);
             int bottom = bounds.Bottom - (XLabel.Length > 0 ? 42 : 24);
             // room for the unit at the left of the numbers, in every pane alike: their time axes line up
-            int left = bounds.Left + 78;
-            plot = Rectangle.FromLTRB(left, top, Math.Max(left + 10, bounds.Right - 14), Math.Max(top + 10, bottom));
+            int left = bounds.Left + 78, right = bounds.Right - (HasRight || RightRoom ? 78 : 14);
+            plot = Rectangle.FromLTRB(left, top, Math.Max(left + 10, right), Math.Max(top + 10, bottom));
             using (var b = new SolidBrush(th.PlotBack)) g.FillRectangle(b, plot);
 
             DrawAxes(g, bounds);
@@ -314,21 +323,36 @@ namespace Spica.UI
 
         void ComputeRange()
         {
-            double xa = double.PositiveInfinity, xb = double.NegativeInfinity, ya = double.PositiveInfinity, yb = double.NegativeInfinity;
+            double xa = double.PositiveInfinity, xb = double.NegativeInfinity;
             foreach (var t in Traces)
-                for (int i = 0; i < Math.Min(t.X.Length, t.Y.Length); i++)
-                {
+                for (int i = 0; i < t.X.Length; i++)
                     if (Ok(t.X[i])) { xa = Math.Min(xa, t.X[i]); xb = Math.Max(xb, t.X[i]); }
-                    if (Ok(t.Y[i])) { ya = Math.Min(ya, t.Y[i]); yb = Math.Max(yb, t.Y[i]); }
-                }
             if (double.IsInfinity(xa)) { xa = 0; xb = 1; }
-            if (double.IsInfinity(ya)) { ya = 0; yb = 1; }
             if (!(xb > xa)) { double d = Math.Abs(xa) * 0.1 + 1e-12; xa -= d; xb += d; }
+            x0 = xa; x1 = xb;
+            (y0, y1) = AutoY(false);
+            (r0, r1) = AutoY(true);
+            if (fixedX.HasValue) { x0 = fixedX.Value.Key; x1 = fixedX.Value.Value; }
+            if (view.HasValue)
+            {
+                // the right axis follows the left one: the same part of its range
+                double a = y0, b = y1;
+                (x0, x1, y0, y1) = view.Value;
+                double f0 = (y0 - a) / (b - a), f1 = (y1 - a) / (b - a), rs = r1 - r0;
+                (r0, r1) = (r0 + f0 * rs, r0 + f1 * rs);
+            }
+        }
+
+        /// <summary>The values of one axis's traces, with a little room above and below.</summary>
+        (double, double) AutoY(bool right)
+        {
+            double ya = double.PositiveInfinity, yb = double.NegativeInfinity;
+            foreach (var t in Traces.Where(t => t.Right == right))
+                foreach (var v in t.Y) if (Ok(v)) { ya = Math.Min(ya, v); yb = Math.Max(yb, v); }
+            if (double.IsInfinity(ya)) { ya = 0; yb = 1; }
             if (!(yb > ya)) { double d = Math.Abs(ya) * 0.1 + 1e-12; ya -= d; yb += d; }
             double py = (yb - ya) * 0.06;
-            x0 = xa; x1 = xb; y0 = ya - py; y1 = yb + py;
-            if (fixedX.HasValue) { x0 = fixedX.Value.Key; x1 = fixedX.Value.Value; }
-            if (view.HasValue) (x0, x1, y0, y1) = view.Value;
+            return (ya - py, yb + py);
         }
 
         static bool Ok(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
@@ -354,6 +378,7 @@ namespace Spica.UI
         }
         float MapX(double x) => (float)(plot.Left + (x - x0) / (x1 - x0) * plot.Width);
         float MapY(double y) => (float)(plot.Bottom - (y - y0) / (y1 - y0) * plot.Height);
+        float MapR(double y) => (float)(plot.Bottom - (y - r0) / (r1 - r0) * plot.Height);
         double InvX(int px) => x0 + (px - plot.Left) * (x1 - x0) / plot.Width;
         double InvY(int py) => y0 + (plot.Bottom - py) * (y1 - y0) / plot.Height;
 
@@ -362,6 +387,7 @@ namespace Spica.UI
             var th = Theme;
             var xt = Ticks(x0, x1, Math.Max(2, plot.Width / 80)).ToList();
             var yt = Ticks(y0, y1, Math.Max(2, plot.Height / 30)).ToList();
+            int leftW = 0, rightW = 0;           // the widest numbers of each axis: the units go just outside them
             if (th.Minor)
                 using (var minor = new Pen(th.MinorGrid))
                 {
@@ -388,16 +414,36 @@ namespace Spica.UI
                     g.DrawLine(tick, plot.Left - 4, y, plot.Left, y);
                     string s = TickText(v, yt);
                     var sz = TextRenderer.MeasureText(s, Font);
+                    leftW = Math.Max(leftW, sz.Width);
                     TextRenderer.DrawText(g, s, Font, new Point(plot.Left - 6 - sz.Width, (int)y - sz.Height / 2), th.Text);
+                }
+                if (HasRight)
+                {
+                    // the right axis: its ticks and numbers only (the grid is the left axis's)
+                    var rt = Ticks(r0, r1, Math.Max(2, plot.Height / 30)).ToList();
+                    foreach (var v in rt)
+                    {
+                        float y = MapR(v);
+                        g.DrawLine(tick, plot.Right, y, plot.Right + 4, y);
+                        string s = TickText(v, rt);
+                        var sz = TextRenderer.MeasureText(s, Font);
+                        rightW = Math.Max(rightW, sz.Width);
+                        TextRenderer.DrawText(g, s, Font, new Point(plot.Right + 6, (int)y - sz.Height / 2), th.Text);
+                    }
                 }
             }
             if (XLabel.Length > 0)
                 TextRenderer.DrawText(g, XLabel, AxisFont, new Rectangle(plot.Left, plot.Bottom + 21, plot.Width, 18), th.Text, TextFormatFlags.HorizontalCenter);
-            // the unit of the values, level, at the left edge, halfway up the plot
+            // each axis's unit, level, halfway up, just outside its numbers
             if (YLabel.Length > 0)
             {
                 var sz = TextRenderer.MeasureText(YLabel, AxisFont);
-                TextRenderer.DrawText(g, YLabel, AxisFont, new Point(bounds.Left + 4, plot.Top + (plot.Height - sz.Height) / 2), th.Text);
+                TextRenderer.DrawText(g, YLabel, AxisFont, new Point(Math.Max(bounds.Left + 2, plot.Left - 10 - leftW - sz.Width), plot.Top + (plot.Height - sz.Height) / 2), th.Text);
+            }
+            if (HasRight && RightLabel.Length > 0)
+            {
+                var sz = TextRenderer.MeasureText(RightLabel, AxisFont);
+                TextRenderer.DrawText(g, RightLabel, AxisFont, new Point(Math.Min(bounds.Right - sz.Width - 2, plot.Right + 10 + rightW), plot.Top + (plot.Height - sz.Height) / 2), th.Text);
             }
         }
 
@@ -410,9 +456,10 @@ namespace Spica.UI
         {
             int n = Math.Min(t.X.Length, t.Y.Length);
             if (n < 2) return;
-            double sx = plot.Width / (x1 - x0), sy = plot.Height / (y1 - y0);
+            double yLo = t.Right ? r0 : y0, yHi = t.Right ? r1 : y1;
+            double sx = plot.Width / (x1 - x0), sy = plot.Height / (yHi - yLo);
             double PX(double x) => plot.Left + (x - x0) * sx;
-            double PY(double y) => plot.Bottom - (y - y0) * sy;
+            double PY(double y) => plot.Bottom - (y - yLo) * sy;
             double l = plot.Left - 4, r = plot.Right + 4, top = plot.Top - 4, bot = plot.Bottom + 4;
             // the first segment that can reach the time shown (the time only grows)
             int lo = Array.BinarySearch(t.X, 0, n, x0);
@@ -459,8 +506,9 @@ namespace Spica.UI
             if (!Ok(c.X) || c.X < x0 || c.X > x1) return;
             float x = MapX(c.X);
             using (var p = new Pen(Theme.Cursor, 1) { DashStyle = c.Name == "1" ? DashStyle.Dash : DashStyle.Dot }) g.DrawLine(p, x, plot.Top, x, plot.Bottom);
-            if (!Ok(c.Y) || c.Y < y0 || c.Y > y1) return;
-            float y = MapY(c.Y);
+            double lo = c.Right ? r0 : y0, hi = c.Right ? r1 : y1;
+            if (!Ok(c.Y) || c.Y < lo || c.Y > hi) return;
+            float y = c.Right ? MapR(c.Y) : MapY(c.Y);
             using (var p = new Pen(Theme.Cursor, 1) { DashStyle = c.Name == "1" ? DashStyle.Dash : DashStyle.Dot }) g.DrawLine(p, plot.Left, y, plot.Right, y);
             using (var p = new Pen(Theme.Cursor, 2)) g.DrawRectangle(p, x - 4, y - 4, 8, 8);
         }

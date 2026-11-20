@@ -244,6 +244,7 @@ namespace Spica.UI
         {
             project.Dirty = true;
             UpdateTitle();
+            UpdateCommandState();
         }
 
         void UpdateTitle()
@@ -294,6 +295,7 @@ namespace Spica.UI
             UpdateTitle();
             ShowStudies();
             LoadRuns();
+            UpdateCommandState();
             if (isProject && p.Schematic.Length > 0 && !File.Exists(p.Schematic))
                 Win98MessageBox.Show(this, "The schematic of this project was not found:\n" + p.Schematic + "\n\nChoose it in its Schematic block.", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
             if (File.Exists(p.Schematic)) _ = LoadNetlist(p.Schematic);
@@ -362,6 +364,7 @@ namespace Spica.UI
                 settings.Save();
                 SetStatus("Project saved: " + path);
                 UpdateTitle();
+                UpdateCommandState();
                 return true;
             }
             catch (Exception ex)
@@ -460,7 +463,9 @@ namespace Spica.UI
         {
             if (tbRun == null || studyCanvas == null) return;
             bool hasProject = project.Studies.Count > 0 || project.Schematic.Length > 0;
-            tbSave.Enabled = miSave.Enabled = miSaveAs.Enabled = hasProject;
+            // Save only when there is something to save (a project never saved can always be)
+            tbSave.Enabled = miSave.Enabled = hasProject && (project.Dirty || project.FilePath == null);
+            miSaveAs.Enabled = hasProject;
             // Run says what is missing when pressed; it is off only with no study, or one running
             tbRun.Enabled = miRun.Enabled = CurrentStudy != null && !StudyRunning;
             tbStop.Enabled = miStop.Enabled = StudyRunning;

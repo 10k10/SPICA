@@ -428,6 +428,13 @@ namespace Spica.UI
             ViewChanged?.Invoke();
         }
 
+        /// <summary>The unit of a trace: V when it reads only voltages (V(out), 2*V(out), V(a,b)), A when only currents, else none.</summary>
+        static string UnitOf(string expr)
+        {
+            var kinds = SignalRef.Matches(expr).Cast<Match>().Select(m => char.ToUpperInvariant(m.Groups[1].Value[0])).Distinct().ToList();
+            return kinds.Count != 1 ? "" : kinds[0] == 'V' ? "V" : kinds[0] == 'I' ? "A" : "";
+        }
+
         static string TempText(double t) => double.IsNaN(t) ? "" : t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " °C";
 
         void DrawCore()
@@ -489,10 +496,18 @@ namespace Spica.UI
                         }
                     }
                 }
-                plot.YLabel = pane.Exprs.Count > 0 && pane.Exprs.All(x => x.StartsWith("I(", StringComparison.OrdinalIgnoreCase)) ? "A"
-                            : pane.Exprs.Count > 0 && pane.Exprs.All(x => x.StartsWith("V(", StringComparison.OrdinalIgnoreCase)) ? "V" : "";
+                // the axes, as LTspice does: one quantity, one axis with its unit; two (volts and amperes), the second on
+                // a right axis with its own scale; more, one axis and no unit
+                var units = pane.Exprs.Select(UnitOf).Distinct().ToList();
+                if (units.Count == 2)
+                    foreach (var t in plot.Traces) t.Right = UnitOf((string)t.Tag) == units[1];
+                plot.YLabel = units.Count <= 2 && units.Count > 0 ? units[0] : "";
+                plot.RightLabel = units.Count == 2 ? units[1] : "";
             }
             if (panes.Count > 0 && panes.Last().Plot != null) panes.Last().Plot.XLabel = "time (s)";
+            // a second axis in any pane: every pane keeps its room, so that the time axes line up
+            bool right = panes.Any(x => x.Plot != null && x.Plot.Traces.Any(t => t.Right));
+            foreach (var x in panes.Where(x => x.Plot != null)) x.Plot.RightRoom = right;
             foreach (var p in panes.Where(x => x.Plot != null))
             {
                 if (stop > 0) p.Plot.FixX(0, stop);
@@ -688,7 +703,7 @@ namespace Spica.UI
                 if (p == null) continue;
                 p.Cursors.Clear();
                 foreach (var c in new[] { cur1, cur2 }.Where(x => x.On))
-                    p.Cursors.Add(new PlotCursor { Name = c.Name, Color = c.Color, X = c.X, Y = c.Pane == i ? At(TraceOf(c), c.X) : double.NaN });
+                    p.Cursors.Add(new PlotCursor { Name = c.Name, Color = c.Color, X = c.X, Y = c.Pane == i ? At(TraceOf(c), c.X) : double.NaN, Right = c.Pane == i && TraceOf(c)?.Right == true });
                 p.Invalidate();
             }
             Measure();
