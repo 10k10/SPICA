@@ -245,7 +245,9 @@ namespace Spica.UI
             ComputeRange();
             int top = bounds.Top + 6 + LayoutLabels(bounds, bounds.Top + 4);
             int bottom = bounds.Bottom - (XLabel.Length > 0 ? 42 : 24);
-            plot = Rectangle.FromLTRB(bounds.Left + 66, top, Math.Max(bounds.Left + 76, bounds.Right - 14), Math.Max(top + 10, bottom));
+            // room for the unit at the left of the numbers, in every pane alike: their time axes line up
+            int left = bounds.Left + 78;
+            plot = Rectangle.FromLTRB(left, top, Math.Max(left + 10, bounds.Right - 14), Math.Max(top + 10, bottom));
             using (var b = new SolidBrush(th.PlotBack)) g.FillRectangle(b, plot);
 
             DrawAxes(g, bounds);
@@ -294,12 +296,12 @@ namespace Spica.UI
             var items = Traces.Where(t => !string.IsNullOrEmpty(t.Label)).ToList();
             if (items.Count == 0) return 0;
             var widths = items.Select(t => TextRenderer.MeasureText(t.Label, Win98.BoldFont, Size.Empty, TextFormatFlags.NoPrefix).Width + 18).ToList();
-            int max = Math.Max(60, bounds.Width - 70), i = 0, rows = 0;
+            int max = Math.Max(60, bounds.Width - 82), i = 0, rows = 0;
             while (i < items.Count)
             {
                 int j = i, w = 0;
                 while (j < items.Count && (j == i || w + widths[j] <= max)) w += widths[j++];
-                int x = bounds.Left + 62 + Math.Max(0, (bounds.Width - 76 - w) / 2);
+                int x = bounds.Left + 78 + Math.Max(0, (bounds.Width - 92 - w) / 2);
                 for (; i < j; i++)
                 {
                     labels.Add(new KeyValuePair<Rectangle, PlotTrace>(new Rectangle(x, y + rows * 16, widths[i] - 8, 16), items[i]));
@@ -391,11 +393,11 @@ namespace Spica.UI
             }
             if (XLabel.Length > 0)
                 TextRenderer.DrawText(g, XLabel, AxisFont, new Rectangle(plot.Left, plot.Bottom + 21, plot.Width, 18), th.Text, TextFormatFlags.HorizontalCenter);
-            // the unit of the values, level, above their axis
+            // the unit of the values, level, at the left edge, halfway up the plot
             if (YLabel.Length > 0)
             {
                 var sz = TextRenderer.MeasureText(YLabel, AxisFont);
-                TextRenderer.DrawText(g, YLabel, AxisFont, new Point(plot.Left - 6 - sz.Width, plot.Top - sz.Height - 2), th.Text);
+                TextRenderer.DrawText(g, YLabel, AxisFont, new Point(bounds.Left + 4, plot.Top + (plot.Height - sz.Height) / 2), th.Text);
             }
         }
 
