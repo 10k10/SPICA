@@ -241,7 +241,9 @@ namespace Spica.UI
             if (st == null) return;
             string name = Win98Prompt.Ask(this, "Rename Study", "&Name:", st.Name);
             if (name == null) return;
+            string old = st.Name;
             st.Name = UniqueStudyName(name, st);
+            foreach (var v in project.Views.Where(x => x.Study == old)) v.Study = st.Name;
             fillingStudies = true;
             cbStudy.Items[cbStudy.SelectedIndex] = st.Name;
             fillingStudies = false;
@@ -255,6 +257,7 @@ namespace Spica.UI
             if (st == null) return;
             if (Win98MessageBox.Show(this, $"Delete the study \"{st.Name}\" from the project?\n(Its results stay on disk.)", "SPICA", MessageBoxButtons.YesNo, Win98Icon.Question) != DialogResult.Yes) return;
             project.Studies.Remove(st);
+            project.Views.RemoveAll(x => x.Study == st.Name);
             MarkDirty();
             ShowStudies();
         }

@@ -67,10 +67,12 @@ waveforms, in the manner of LTspice:
 - under the panes, every trace's value at the cursors and the difference, and its average, RMS, min, max and
   peak-to-peak between the cursors (or over the time shown); with both cursors, Δt and 1/Δt;
 - several temperatures of an analysis are drawn in their own colours;
-- right-click a pane, Style: Paper, Engineering, LTspice, Oscilloscope or Blueprint (kept for next time).
+- right-click a pane, Style: Engineering (the default), Paper, Amber, Recorder, Sepia, Graphite, Slate, LTspice,
+  Oscilloscope or Blueprint (kept for next time).
 
-Each study keeps its last run and how its waveforms were shown (`results.ini` in its results folder): the project
-opens with its results, the panes as they were left. The time can be zoomed in down to ten time steps of the
+The project (`.spica`) keeps each study's last run and how its waveforms were shown: opened, it shows its results,
+the panes as they were left. An analysis marked *reused* was not simulated again: the same netlist and analysis had
+run before (at the time it gives), and its results were taken from disk. The time can be zoomed in down to ten time steps of the
 simulation.
 
 The Folder button on the toolbar opens the study's campaigns on disk.

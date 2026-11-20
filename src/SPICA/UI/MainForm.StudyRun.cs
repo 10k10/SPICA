@@ -144,6 +144,7 @@ namespace Spica.UI
                 studyRuns.RemoveAll(x => x.Study == st.Name);
                 studyRuns.Insert(0, run);
                 ShowRun(run, null);
+                KeepRun(run);
             }
             if (failed.Count > 0)
                 Win98MessageBox.Show(this, $"The study \"{st.Name}\" ended with problems:\n\n" + string.Join("\n", failed.Take(10).Select(x => "- " + x)),
@@ -155,17 +156,14 @@ namespace Spica.UI
         WaveformView waveView;
         Label lblNoResults;
         readonly List<StudyRunData> studyRuns = new List<StudyRunData>();
-        Timer saveViewSoon;
 
         /// <summary>The Results tab: the waveforms of the studies that ran (the studies, their analyses and the signals are on its left).</summary>
         void BuildResultsPage()
         {
             waveView = new WaveformView { Theme = PlotTheme.Find(settings.PlotStyle), Visible = false };
             waveView.ThemeChanged += () => { settings.PlotStyle = waveView.Theme.Name; settings.Save(); };
-            // what is shown is kept with its study, a moment after the last change
-            saveViewSoon = new Timer { Interval = 600 };
-            saveViewSoon.Tick += (s, e) => { saveViewSoon.Stop(); SaveRun(waveView.Shown); };
-            waveView.ViewChanged += () => { saveViewSoon.Stop(); saveViewSoon.Start(); };
+            // what is shown belongs to the project: a change of panes, traces or runs is a change of the project
+            waveView.ViewChanged += () => KeepRun(waveView.Shown);
             lblNoResults = new Label
             {
                 Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false,
@@ -194,62 +192,31 @@ namespace Spica.UI
             if (open) tabs.SelectedIndex = TabResults;
         }
 
-        const string RunFile = "results.ini";
-        static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
-
-        /// <summary>
-        /// A study's last run and how its waveforms were shown, in its results folder (results.ini): written when it ends
-        /// and when its plots change, read when the project opens.
-        /// </summary>
-        void SaveRun(StudyRunData r)
+        /// <summary>A study's run and view into the project (it is then unsaved, when that changed something).</summary>
+        void KeepRun(StudyRunData r)
         {
-            if (r?.Folder == null) return;
-            try
-            {
-                var sb = new System.Text.StringBuilder("; SPICA: the last run of this study, and how its waveforms were shown\r\n");
-                sb.Append("Ended=").Append(r.Ended.ToString("yyyy-MM-dd HH:mm:ss", Inv)).Append("\r\n");
-                foreach (var s in r.Sets.Where(x => x.Dir != null)) sb.Append($"Set={s.Label}|{(s.Cached ? 1 : 0)}|{s.Dir}\r\n");
-                foreach (var p in r.Problems) sb.Append("Problem=").Append(p.Replace("\r", " ").Replace("\n", " ")).Append("\r\n");
-                foreach (var p in r.Panes ?? new List<List<string>>()) sb.Append("Pane=").Append(string.Join("|", p)).Append("\r\n");
-                if (r.Runs != null) sb.Append("Runs=").Append(r.Runs).Append("\r\n");
-                Directory.CreateDirectory(r.Folder);
-                File.WriteAllText(Path.Combine(r.Folder, RunFile), sb.ToString());
-            }
-            catch { }
+            if (r?.Folder == null || closing) return;
+            var v = new StudyView { Study = r.Study, Ended = r.Ended, Panes = r.Panes, Runs = r.Runs };
+            foreach (var s in r.Sets.Where(x => x.Dir != null)) v.Sets.Add((s.Label, s.Cached, s.Dir));
+            v.Problems.AddRange(r.Problems);
+            int i = project.Views.FindIndex(x => x.Study == r.Study);
+            if (i >= 0 && project.Views[i].Key == v.Key) return;
+            if (i >= 0) project.Views[i] = v; else project.Views.Add(v);
+            MarkDirty();
         }
 
-        /// <summary>The last run of each study of the project, as it was left (the campaigns still on disk); the newest shown.</summary>
+        /// <summary>The last run of each study of the project, as it was left (its campaigns still on disk); the newest shown.</summary>
         void LoadRuns()
         {
             studyRuns.Clear();
-            foreach (var st in project.Studies)
+            foreach (var v in project.Views)
             {
-                string folder = StudyFolder(st);
-                string file = folder == null ? null : Path.Combine(folder, RunFile);
-                if (file == null || !File.Exists(file)) continue;
-                var r = new StudyRunData { Study = st.Name, Folder = folder };
-                try
-                {
-                    foreach (var line in File.ReadAllLines(file))
-                    {
-                        int eq = line.IndexOf('=');
-                        if (line.StartsWith(";") || eq < 0) continue;
-                        string key = line.Substring(0, eq), val = line.Substring(eq + 1);
-                        switch (key)
-                        {
-                            case "Ended": if (DateTime.TryParseExact(val, "yyyy-MM-dd HH:mm:ss", Inv, System.Globalization.DateTimeStyles.None, out var t)) r.Ended = t; break;
-                            case "Set":
-                                var p = val.Split(new[] { '|' }, 3);
-                                if (p.Length == 3 && File.Exists(Path.Combine(p[2], "results.csv")))
-                                    r.Sets.Add(new RunSet { Condition = new Condition { Name = p[0] }, Cached = p[1] == "1", Dir = p[2] });
-                                break;
-                            case "Problem": r.Problems.Add(val); break;
-                            case "Pane": (r.Panes ?? (r.Panes = new List<List<string>>())).Add(val.Split('|').Where(x => x.Length > 0).ToList()); break;
-                            case "Runs": r.Runs = val; break;
-                        }
-                    }
-                }
-                catch { continue; }
+                var st = project.Studies.FirstOrDefault(x => x.Name == v.Study);
+                if (st == null) continue;
+                var r = new StudyRunData { Study = v.Study, Folder = StudyFolder(st), Ended = v.Ended, Panes = v.Panes, Runs = v.Runs };
+                foreach (var s in v.Sets.Where(x => File.Exists(Path.Combine(x.Dir, "results.csv"))))
+                    r.Sets.Add(new RunSet { Condition = new Condition { Name = s.Label }, Cached = s.Cached, Dir = s.Dir });
+                r.Problems.AddRange(v.Problems);
                 if (r.Sets.Count > 0) studyRuns.Add(r);
             }
             studyRuns.Sort((a, b) => b.Ended.CompareTo(a.Ended));

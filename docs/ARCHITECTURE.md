@@ -67,6 +67,9 @@ At=320,100
 Save=
 ```
 
+After the studies, a `[Results <study>]` section keeps each study's last run and its view: `Ended`, one `Set=label|
+reused|folder` per campaign (relative to the project when beside it), `Pane=trace|trace...` per pane, `Runs`.
+
 `Kind` and `At` are the block's own keys; every other key is a property. A property may hold several lines
 (`\n`). A project of an older version opens: its schematic and its studies are read, its other sections are
 skipped, and a block of a kind this version does not have stays in the study, marked unknown, until removed.

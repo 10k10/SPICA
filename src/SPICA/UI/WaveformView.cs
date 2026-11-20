@@ -74,7 +74,7 @@ namespace Spica.UI
         /// <summary>The panes, the traces or the runs changed (the owner keeps them with the study).</summary>
         public event Action ViewChanged;
         /// <summary>How the panes look (the owner keeps it in the settings).</summary>
-        public PlotTheme Theme = PlotTheme.All[0];
+        public PlotTheme Theme = PlotTheme.All[0];      // Engineering
         public event Action ThemeChanged;
         double stop;                                    // the end of the simulation: the time axis runs 0 .. stop
         (double A, double B)? shownX;                    // the time range zoomed to, kept when the panes are drawn again
@@ -198,7 +198,7 @@ namespace Spica.UI
                 var sn = new TreeNode($"{r.Study}  ({r.Ended:dd/MM HH:mm})") { Tag = r, ImageKey = "app16", SelectedImageKey = "app16" };
                 var sets = r.Sets.Where(s => s.Dir != null).ToList();
                 foreach (var s in sets)
-                    sn.Nodes.Add(new TreeNode(s.Label + (s.Cached ? "  (earlier run)" : "")) { Tag = s, ImageKey = "chart16", SelectedImageKey = "chart16",
+                    sn.Nodes.Add(new TreeNode(s.Label + Reused(s)) { Tag = s, ImageKey = "chart16", SelectedImageKey = "chart16",
                                                                                              Checked = r == focus && (s == set || (set == null && s == sets.FirstOrDefault())) });
                 sn.Checked = sn.Nodes.Count > 0 && sn.Nodes.Cast<TreeNode>().All(n => n.Checked);
                 tvRuns.Nodes.Add(sn);
@@ -219,6 +219,19 @@ namespace Spica.UI
             if (focus?.Runs != null && cbRuns.Items.Contains(focus.Runs)) { filling = true; cbRuns.SelectedItem = focus.Runs; filling = false; }
             FillSignals();
             Draw();
+        }
+
+        /// <summary>
+        /// Not simulated this time: the same netlist and analysis had run before, and its results were taken from disk.
+        /// Says when it really ran (the campaign folder is named by its start).
+        /// </summary>
+        static string Reused(RunSet s)
+        {
+            if (!s.Cached) return "";
+            var name = System.IO.Path.GetFileName((s.Dir ?? "").TrimEnd('\\', '/'));
+            return DateTime.TryParseExact(name.Length >= 15 ? name.Substring(0, 15) : name, "yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture,
+                       System.Globalization.DateTimeStyles.None, out var t)
+                ? $"  (reused from {t:dd/MM HH:mm})" : "  (reused)";
         }
 
         /// <summary>The panes and their traces as they are now.</summary>

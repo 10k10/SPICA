@@ -403,6 +403,9 @@ static class Program
             var stack0 = (Panel)typeof(Spica.UI.WaveformView).GetField("stack", Flags).GetValue(wv);
             Check(stack0.Controls.Count == 3, $"one plot per pane, nothing left over underneath: {stack0.Controls.Count}");
             Check(names.Count == 5, "listed: the saved ones and the ones the .meas read: " + string.Join(" ", names));
+            // the measurements are there at once, before any zoom
+            var meas0 = w.Wave<Spica.UI.Win98ListView>("lvMeasure");
+            Check(meas0.Items.Count > 0 && meas0.Items.Cast<ListViewItem>().All(x => x.SubItems[4].Text != "-"), "the measurements are there at once: average " + (meas0.Items.Count > 0 ? meas0.Items[0].SubItems[4].Text : "none"));
             Check(w.Plots().All(pl => pl.Traces.All(t => t.Label == null || !t.Label.Contains(","))), "a pane names its traces once, in their colours (no title)");
             // a click on a signal plots it in the pane chosen (the last one), in view
             wv.Add("V(p)");
@@ -462,6 +465,17 @@ static class Program
             typeof(Spica.UI.WaveformView).GetMethod("ResetZoom", Flags).Invoke(wv, null);
             for (int z = 0; z < 6; z++) wheel.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.None, 0, pl0.Width / 2, pl0.Height / 2, 120) });
             w.Pump(3);
+            // a box started in the left margin (on the value axis) zooms too
+            typeof(Spica.UI.WaveformView).GetMethod("ResetZoom", Flags).Invoke(wv, null);
+            w.Pump(3);
+            var down = typeof(Control).GetMethod("OnMouseDown", Flags); var move = typeof(Control).GetMethod("OnMouseMove", Flags); var up = typeof(Control).GetMethod("OnMouseUp", Flags);
+            down.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.Left, 1, 10, pl0.Height / 2, 0) });
+            move.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.Left, 0, pl0.Width / 2, pl0.Height / 2 + 2, 0) });
+            up.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.Left, 1, pl0.Width / 2, pl0.Height / 2 + 2, 0) });
+            w.Pump(3);
+            Check(pl0.ViewX0 < 1e-9 && pl0.ViewX1 < 0.25, $"a box dragged from the left margin zooms from the start of the time: {pl0.ViewX0:G3} .. {pl0.ViewX1:G3} s");
+            for (int z = 0; z < 6; z++) wheel.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.None, 0, pl0.Width / 2, pl0.Height / 2, 120) });
+            w.Pump(3);
             bool zoomed = pl0.ViewX1 - pl0.ViewX0 < 0.2;
             typeof(Spica.UI.WaveformView).GetMethod("ResetZoom", Flags).Invoke(wv, null);
             w.Pump(3);
@@ -476,16 +490,19 @@ static class Program
             w.Pump(5);
             Check(w.Plots()[lastPane].Traces.Any(t => t.Label == "2*V(out)") && !w.Plots()[0].Traces.Any(t => t.Label == "2*V(out)"), "2*V(out) dragged from the first pane to the last: it moved");
             w.Shot(w.Form, "moved");
-            // the project opened again: its last run and its panes, as they were left
+            // the project saved and opened again: its last run and its panes, as they were left
             var before = wv.PaneList.Select(x => string.Join("|", x)).ToList();
-            w.Pump(40);                      // the view is kept a moment after the last change
-            ((SpicaProject)w.Get("project")).Dirty = false;
-            w.Call("OpenFile", ((SpicaProject)w.Get("project")).Schematic);
+            var proj = (SpicaProject)w.Get("project");
+            Check(proj.Dirty && proj.Views.Count == 1, "the run and the panes belong to the project: it is unsaved");
+            string saved = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(proj.Schematic), "saved_by_smoke.spica");
+            proj.Save(saved);
+            Check(System.IO.File.ReadAllText(saved).Contains("[Results linear_psu]") && System.IO.File.ReadAllText(saved).Contains("Pane=V(out)|V(p)"), "saved: the .spica holds the results and the panes");
+            w.Call("OpenFile", saved);
             w.Pump(20);
             var after = wv.PaneList.Select(x => string.Join("|", x)).ToList();
-            var ini = System.IO.Path.Combine((string)w.Call("StudyFolder", ((SpicaProject)w.Get("project")).Studies[0]), "results.ini");
-            Check(System.IO.File.Exists(ini) && wv.Visible && before.SequenceEqual(after) && w.Plots().Sum(pl => pl.Traces.Count) > 0,
-                  $"opened again: the results are there, the panes as they were ({string.Join(" / ", after)})");
+            Check(wv.Visible && before.SequenceEqual(after) && w.Plots().Sum(pl => pl.Traces.Count) > 0 && !((SpicaProject)w.Get("project")).Dirty,
+                  $"opened again: the results are there, the panes as they were, nothing to save ({string.Join(" / ", after)})");
+            System.IO.File.Delete(saved);
             // the Add Trace window: its label clear of the field
             var shot = new System.Windows.Forms.Timer { Interval = 300 };
             shot.Tick += (s2, e2) =>

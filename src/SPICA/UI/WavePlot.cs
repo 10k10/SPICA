@@ -41,6 +41,13 @@ namespace Spica.UI
         {
             new PlotTheme
             {
+                Name = "Engineering", Description = "Grey window, white plot, blue grid with a fine one between: graph paper",
+                Back = C(212, 208, 200), PlotBack = Color.White, Grid = C(150, 170, 215), MinorGrid = C(222, 230, 245), Minor = true,
+                Frame = C(40, 40, 40), Text = Color.Black, Muted = C(90, 90, 90), Cursor = C(40, 40, 40), Chosen = C(0, 0, 128),
+                Palette = new[] { C(0, 0, 200), C(200, 0, 0), C(0, 130, 0), C(170, 0, 170), C(220, 110, 0), C(0, 125, 135), C(110, 60, 20), C(90, 0, 200) },
+            },
+            new PlotTheme
+            {
                 Name = "Paper", Description = "White, a light grid: for printing and reports",
                 Back = Color.White, PlotBack = Color.White, Grid = C(222, 222, 222), Frame = Color.Black, Text = Color.Black, Muted = C(110, 110, 110),
                 Cursor = C(40, 40, 40), Chosen = C(0, 0, 128),
@@ -48,10 +55,38 @@ namespace Spica.UI
             },
             new PlotTheme
             {
-                Name = "Engineering", Description = "Grey window, white plot, blue grid with a fine one between: graph paper",
-                Back = C(212, 208, 200), PlotBack = Color.White, Grid = C(150, 170, 215), MinorGrid = C(222, 230, 245), Minor = true,
-                Frame = C(40, 40, 40), Text = Color.Black, Muted = C(90, 90, 90), Cursor = C(40, 40, 40), Chosen = C(0, 0, 128),
-                Palette = new[] { C(0, 0, 200), C(200, 0, 0), C(0, 130, 0), C(170, 0, 170), C(220, 110, 0), C(0, 125, 135), C(110, 60, 20), C(90, 0, 200) },
+                Name = "Amber", Description = "Yellowed paper, amber grid: an old plotter sheet",
+                Back = C(222, 214, 190), PlotBack = C(253, 246, 222), Grid = C(214, 168, 96), MinorGrid = C(240, 226, 192), Minor = true,
+                Frame = C(90, 70, 40), Text = C(60, 45, 20), Muted = C(120, 100, 70), Cursor = C(60, 45, 20), Chosen = C(150, 80, 0),
+                Palette = new[] { C(20, 50, 160), C(180, 30, 20), C(20, 110, 40), C(130, 40, 140), C(200, 100, 0), C(0, 110, 120), C(100, 60, 20), C(70, 20, 160) },
+            },
+            new PlotTheme
+            {
+                Name = "Recorder", Description = "Cream chart paper, green grid: a strip-chart recorder",
+                Back = C(214, 214, 196), PlotBack = C(250, 248, 230), Grid = C(122, 176, 128), MinorGrid = C(214, 232, 208), Minor = true,
+                Frame = C(50, 80, 55), Text = C(30, 50, 35), Muted = C(90, 110, 95), Cursor = C(30, 50, 35), Chosen = C(0, 100, 30),
+                Palette = new[] { C(160, 0, 40), C(20, 40, 170), C(110, 60, 0), C(120, 0, 140), C(0, 110, 130), C(200, 90, 0), C(30, 30, 30), C(80, 120, 0) },
+            },
+            new PlotTheme
+            {
+                Name = "Sepia", Description = "Warm beige, brown grid: soft, for long sessions",
+                Back = C(214, 204, 186), PlotBack = C(244, 236, 220), Grid = C(190, 160, 128), MinorGrid = C(230, 218, 198), Minor = true,
+                Frame = C(90, 65, 45), Text = C(70, 50, 35), Muted = C(120, 100, 85), Cursor = C(70, 50, 35), Chosen = C(140, 60, 20),
+                Palette = new[] { C(40, 60, 140), C(160, 40, 30), C(40, 110, 60), C(120, 50, 120), C(190, 110, 20), C(20, 110, 120), C(90, 60, 30), C(60, 40, 150) },
+            },
+            new PlotTheme
+            {
+                Name = "Graphite", Description = "Light grey plot, grey grid: quiet, the traces stand out",
+                Back = C(196, 196, 196), PlotBack = C(232, 232, 232), Grid = C(160, 160, 160), MinorGrid = C(214, 214, 214), Minor = true,
+                Frame = C(60, 60, 60), Text = C(20, 20, 20), Muted = C(90, 90, 90), Cursor = C(20, 20, 20), Chosen = C(0, 0, 128),
+                Palette = new[] { C(0, 0, 210), C(200, 0, 0), C(0, 125, 0), C(170, 0, 170), C(215, 105, 0), C(0, 120, 130), C(100, 60, 20), C(80, 0, 190) },
+            },
+            new PlotTheme
+            {
+                Name = "Slate", Description = "Dark grey, grey grid, bright traces: dark without black",
+                Back = C(48, 52, 58), PlotBack = C(62, 66, 74), Grid = C(98, 104, 114), MinorGrid = C(74, 79, 88), Minor = true,
+                Frame = C(150, 156, 166), Text = C(220, 224, 230), Muted = C(160, 166, 176), Cursor = C(240, 240, 240), Chosen = C(255, 210, 80),
+                Palette = new[] { C(110, 200, 255), C(255, 130, 110), C(140, 230, 120), C(255, 200, 80), C(230, 140, 255), C(110, 230, 220), C(255, 170, 60), C(235, 235, 235) },
             },
             new PlotTheme
             {
@@ -129,8 +164,8 @@ namespace Spica.UI
         }
 
         public bool IsZoomed => view.HasValue;
-        public double ViewX0 => x0;
-        public double ViewX1 => x1;
+        public double ViewX0 { get { ComputeRange(); return x0; } }
+        public double ViewX1 { get { ComputeRange(); return x1; } }
 
         /// <summary>The time range of another pane (null: back to the data), keeping this pane's own value zoom.</summary>
         public void LinkX(double? a, double? b)
@@ -483,7 +518,10 @@ namespace Spica.UI
                 var t = LabelAt(e.Location);
                 if (t != null) { labelPressed = t; labelDown = e.Location; return; }
                 dragging = CursorAt(e.Location);
-                if (dragging == null && plot.Contains(e.Location)) { dragFrom = e.Location; dragBox = Rectangle.Empty; }
+                // a zoom box may start in the margins too (the axes, the space around): it is held inside the plot
+                if (dragging == null && plot.Width > 0)
+                    dragFrom = new Point(Math.Max(plot.Left, Math.Min(plot.Right, e.X)), Math.Max(plot.Top, Math.Min(plot.Bottom, e.Y)));
+                dragBox = Rectangle.Empty;
             }
             else if (e.Button == MouseButtons.Middle && plot.Contains(e.Location))
             {
