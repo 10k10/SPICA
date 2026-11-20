@@ -47,6 +47,18 @@ namespace Spica.UI
         Win98TabControl tabs;
         Win98TabPage pageSetup, pageQueue, pageResults;
         ToolStripButton tbOpen, tbAdd, tbRemote, tbStop, tbFolder, tbReport, tbListener, tbSave;
+        /// <summary>Toolbar items shown only on some tabs, and when.</summary>
+        readonly List<(ToolStripItem Item, Func<bool> When)> toolbarContext = new List<(ToolStripItem, Func<bool>)>();
+        const string RunTip = "Run the study shown on the Workbench on this PC: its campaigns join the queue\n(the classic Setup tab's campaign, when that tab is open)  (F5)";
+
+        /// <summary>The toolbar for the tab shown: its own buttons in, the other tabs' out.</summary>
+        void UpdateToolbarContext()
+        {
+            if (toolbar == null) return;
+            toolbar.SuspendLayout();
+            foreach (var (item, when) in toolbarContext) item.Visible = when();
+            toolbar.ResumeLayout();
+        }
         ToolStripMenuItem miOpen, miAdd, miRemote, miStop, miRecent, miExport, miReport, miFolder, miSave, miSaveAs;
         ListenerForm listenerForm;
 
@@ -104,6 +116,7 @@ namespace Spica.UI
             BuildResultsPage();
             BuildStudiesPage();
             BuildResultsNavigator();
+            UpdateToolbarContext();
 
             Controls.Add(tabs);
             Controls.Add(status);
@@ -239,9 +252,10 @@ namespace Spica.UI
                 AutoSize = true,
             };
             Win98Renderer.Apply(toolbar);
-            ToolStripButton Btn(string text, string icon, EventHandler click, string tip, int width = 64)
+            ToolStripButton Btn(string text, string icon, EventHandler click, string tip, int width = 64) => BtnImg(text, Win98.Icon(icon), click, tip, width);
+            ToolStripButton BtnImg(string text, Image image, EventHandler click, string tip, int width = 64)
             {
-                var b = new ToolStripButton(text, Win98.Icon(icon), click)
+                var b = new ToolStripButton(text, image, click)
                 {
                     DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
                     TextImageRelation = TextImageRelation.ImageAboveText,
@@ -254,19 +268,36 @@ namespace Spica.UI
                 toolbar.Items.Add(b);
                 return b;
             }
+            // the buttons every page has: open, save, run, stop, options, help; the others come with their tab
+            ToolStripSeparator Sep() { var x = new ToolStripSeparator(); toolbar.Items.Add(x); return x; }
+            void Only(Func<bool> when, params ToolStripItem[] items) { foreach (var it in items) toolbarContext.Add((it, when)); }
+            bool OnWorkbench() => tabs != null && tabs.SelectedIndex == TabStudies;
             tbOpen = Btn("Open", "open32", (s, e) => BrowseSchematic(), "Open an LTspice schematic (.asc) or a SPICA setup (.spica)  (Ctrl+O)");
-            tbSave = Btn("Save", "save32", (s, e) => SaveSetup(false), "Save the setup (.spica): runs, temperatures, signals, spec limits, TF, error budget, report  (Ctrl+S)");
-            toolbar.Items.Add(new ToolStripSeparator());
-            tbAdd = Btn("Run", "run32", (s, e) => AddToQueue(), "Run the study shown on the Workbench on this PC: its campaigns join the queue\n(the classic Setup tab's campaign, when that tab is open)  (F5)", 70);
+            tbSave = Btn("Save", "save32", (s, e) => SaveSetup(false), "Save the setup (.spica): its studies, criteria, errors and settings  (Ctrl+S)");
+            Sep();
+            // the Workbench: the study and its graph
+            Only(OnWorkbench,
+                BtnImg("New Study", Glyphs.Big(Win98.Icon("doc16")), (s, e) => NewStudy(), "A new study: blank, from a template, or from the classic tabs", 70),
+                BtnImg("Rename", Glyphs.Big(Glyphs.Pencil()), (s, e) => RenameStudy(), "Rename the study shown"),
+                Btn("Delete", "stop32", (s, e) => DeleteStudy(), "Delete the study shown from the setup"),
+                Sep(),
+                BtnImg("Validate", Glyphs.Big(Win98.Icon("check16")), (s, e) => ValidateStudy(true), "Check the study: every block set up, every input wired, the types right, no loop"),
+                BtnImg("Fit", Glyphs.Big(Glyphs.Magnifier()), (s, e) => studyCanvas?.FitAll(), "Show the whole study (Space, or double-click the empty canvas)"),
+                Sep());
+            tbAdd = Btn("Run", "run32", (s, e) => AddToQueue(), RunTip, 64);
             tbRemote = Btn("Run Remote", "remote32", (s, e) => RunRemote(), "Send the campaign of the classic Setup tab (View menu) to the remote PC (the shared folder in Tools > Options):\nits listener runs it there, and the Queue tab follows it here  (F6)", 76);
-            tbStop = Btn("Stop", "stop32", (s, e) => StopCampaign(), "Stop the running campaign; finished runs are kept  (Shift+F5)");
-            toolbar.Items.Add(new ToolStripSeparator());
+            Only(() => tabs != null && tabs.SelectedIndex == TabSetup, tbRemote);
+            tbStop = Btn("Stop", "stop32", (s, e) => StopCampaign(), "Stop the running study or campaign; finished runs are kept  (Shift+F5)");
+            Sep();
+            // the Queue: the listener
             tbListener = Btn("Listener", "listener32", (s, e) => ShowListener(), "Watch a folder and run every campaign put there  (Ctrl+L)");
-            toolbar.Items.Add(new ToolStripSeparator());
-            Btn("Results", "results32", (s, e) => OpenResults(), "Open the results of an earlier campaign  (Ctrl+R)");
-            tbReport = Btn("Report", "chart32", (s, e) => ExportReport(), "Write the HTML report of the results shown  (Ctrl+P)");
-            tbFolder = Btn("Folder", "folder32", (s, e) => OpenOutputFolder(), "Open the folder of the campaign shown in Results");
-            toolbar.Items.Add(new ToolStripSeparator());
+            Only(() => tabs != null && tabs.SelectedIndex == TabQueue, tbListener, Sep());
+            // the Results: earlier campaigns, the report, the folder
+            Only(() => tabs != null && tabs.SelectedIndex == TabResults,
+                Btn("Results", "results32", (s, e) => OpenResults(), "Open the results of an earlier campaign  (Ctrl+R)"),
+                tbReport = Btn("Report", "chart32", (s, e) => ExportReport(), "Write the HTML report of the results shown  (Ctrl+P)"),
+                tbFolder = Btn("Folder", "folder32", (s, e) => OpenOutputFolder(), "Open the folder of the campaign shown in Results"),
+                Sep());
             Btn("Options", "options32", (s, e) => ShowOptions(), "Where LTspice is and how many instances run on this PC");
             Btn("Help", "help32", (s, e) => ShowAbout(), "About SPICA");
 
@@ -287,6 +318,7 @@ namespace Spica.UI
             ApplyTabs();
             tabs.SelectedIndexChanged += (s, e) =>
             {
+                UpdateToolbarContext();
                 UpdateCommandState();
                 if (tabs.SelectedIndex != TabResults) return;
                 // nothing shown yet: the campaign on the monitor is what the user means
@@ -897,7 +929,10 @@ namespace Spica.UI
             if (tbAdd == null || resultsView == null || btnReload == null) return;
             bool has = netlist != null, slave = Slave;
             // a PC that listens runs what others send: nothing is opened or started by hand there
-            tbAdd.Enabled = miAdd.Enabled = has && !slave;
+            // a study runs only when it can: every block set up and wired, a simulation in it; the button says why not
+            string blocker = tabs.SelectedIndex == TabSetup ? null : StudyBlocker();
+            tbAdd.Enabled = miAdd.Enabled = has && !slave && blocker == null;
+            tbAdd.ToolTipText = blocker == null ? RunTip : "Cannot run yet: " + blocker;
             // a study runs on this PC in this version: Run Remote sends the classic Setup tab's campaign
             tbRemote.Enabled = miRemote.Enabled = has && !slave && tabs.SelectedIndex == TabSetup;
             tbOpen.Enabled = miOpen.Enabled = miRecent.Enabled = !slave;

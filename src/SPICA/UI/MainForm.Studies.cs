@@ -40,49 +40,20 @@ namespace Spica.UI
             var probe = StudyExecutors.Register(new StudyRunner(), null);
             runnableKinds = new HashSet<string>(BlockKind.All.Where(k => probe.Has(k.Name)).Select(k => k.Name), StringComparer.OrdinalIgnoreCase);
 
-            // --- the study bar: which study, and what to do with it ------------------------------
-            var bar = new ToolStrip { Dock = DockStyle.Top, GripStyle = ToolStripGripStyle.Hidden, Padding = new Padding(2, 2, 2, 2), Font = Win98.Font };
-            Win98Renderer.Apply(bar);
-            cbStudy = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170, Font = Win98.Font, DropDownWidth = 300 };
+            // --- the study shown: a box over the tree, as wide as the column; the list opens as wide as its names
+            cbStudy = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Win98.Font };
             cbStudy.SelectedIndexChanged += (s, e) => { if (!fillingStudies) ShowStudy(); };
-            ToolStripButton B(string text, Image icon, EventHandler click, string tip)
-            {
-                var b = new ToolStripButton(text, icon, click) { ToolTipText = tip, DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, ImageScaling = ToolStripItemImageScaling.None, Margin = new Padding(1, 1, 1, 2) };
-                bar.Items.Add(b);
-                return b;
-            }
-            // the study: which one, and what to do with it
-            bar.Items.Add(new ToolStripLabel("&Study:"));
-            bar.Items.Add(new ToolStripControlHost(cbStudy));
-            B("New", Win98.Icon("doc16"), (s, e) => NewStudy(), "A new study: blank, from a template, or from the classic tabs");
-            B("Rename", Glyphs.Pencil(), (s, e) => RenameStudy(), "Rename this study");
-            B("Delete", Win98.Icon("stop16"), (s, e) => DeleteStudy(), "Delete this study from the setup");
-            bar.Items.Add(new ToolStripSeparator());
-            // the graph
-            B("Validate", Win98.Icon("check16"), (s, e) => ValidateStudy(true), "Check the study: every block set up, every input wired, the types right, no loop");
-            B("Fit", Glyphs.Magnifier(), (s, e) => studyCanvas.FitAll(), "Show the whole study (Space, or double-click the empty canvas)");
-            bar.Items.Add(new ToolStripSeparator());
-            // running it
-            B("Add to Queue", Glyphs.Play(), (s, e) => RunStudy(), "Run this study: its campaigns join the queue on this PC  (F5)");
-            // the wire colours, at the right end
-            var legend = new ToolStripLabel { AutoSize = false, Width = 430, Height = 18, Alignment = ToolStripItemAlignment.Right };
-            legend.Paint += (s, e) =>
-            {
-                int x = 4;
-                foreach (var kv in StudyCanvas.TypeColor)
-                {
-                    using (var pen = new Pen(kv.Value, 3)) e.Graphics.DrawLine(pen, x, 9, x + 12, 9);
-                    TextRenderer.DrawText(e.Graphics, kv.Key.ToString(), Win98.Font, new Point(x + 14, 2), Color.FromArgb(64, 64, 64));
-                    x += 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width;
-                }
-            };
-            legend.ToolTipText = "Wire colours: a wire only joins ports of the same type";
-            bar.Items.Add(legend);
-            Win98Renderer.StyleDropDowns(bar.Items);
+            cbStudy.DropDown += (s, e) =>
+                cbStudy.DropDownWidth = Math.Max(cbStudy.Width, cbStudy.Items.Cast<object>().Select(x => TextRenderer.MeasureText(x.ToString(), cbStudy.Font).Width + 24).DefaultIfEmpty(0).Max());
 
             // --- left: the block library --------------------------------------------------------
             // --- left: the study as a tree (by step, each block with its state), the block library under it
             var leftCol = new Panel { Dock = DockStyle.Left, Width = 250, BackColor = Win98.Face };
+            var studyRow = new Panel { Dock = DockStyle.Top, Height = 26, BackColor = Win98.Face };
+            var lblStudy = new Label { Text = "&Study:", Location = new Point(0, 6), AutoSize = true };
+            studyRow.Controls.Add(lblStudy);
+            studyRow.Controls.Add(cbStudy);
+            studyRow.Resize += (s, e) => cbStudy.SetBounds(lblStudy.Right + 4, 2, studyRow.Width - lblStudy.Right - 4, 21);
             var grpModel = new Win98GroupBox { Text = "Study", Dock = DockStyle.Top, Height = 300 };
             var stateImages = new ImageList { ImageSize = new Size(16, 16), ColorDepth = ColorDepth.Depth32Bit };
             stateImages.Images.Add("ok", Win98.Icon("check16"));
@@ -140,20 +111,37 @@ namespace Spica.UI
             var well = new Win98Well(studyCanvas) { Dock = DockStyle.Fill };
             lblStudyHint = new Label
             {
-                Dock = DockStyle.Bottom, Height = 18, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false,
-                Text = "Click a block to set it up on the right (red: something missing).  Drag from an output to an input of the same colour.  Right-click a port for a block that fits.  Space: fit.  Del: remove.",
+                Dock = DockStyle.Bottom, Height = 20, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true,
+                // the wire colours take the right end
+                Padding = new Padding(0, 0, StudyCanvas.TypeColor.Sum(kv => 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width) + 16, 0),
+                Text = "Click a block to set it up (red: something missing).  Drag output to input of the same colour.  Right-click a port for a block that fits.  Space: fit.  Del: remove.",
             };
 
+            lblStudyHint.Paint += (s, e) =>
+            {
+                // the wire colours, at the right end
+                int w = StudyCanvas.TypeColor.Sum(kv => 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width);
+                int x = lblStudyHint.Width - w - 4;
+                e.Graphics.FillRectangle(SystemBrushes.Control, x - 8, 0, w + 12, lblStudyHint.Height);
+                using (var bg = new SolidBrush(Win98.Face)) e.Graphics.FillRectangle(bg, x - 8, 0, w + 12, lblStudyHint.Height);
+                foreach (var kv in StudyCanvas.TypeColor)
+                {
+                    using (var pen = new Pen(kv.Value, 3)) e.Graphics.DrawLine(pen, x, 10, x + 12, 10);
+                    TextRenderer.DrawText(e.Graphics, kv.Key.ToString(), Win98.Font, new Point(x + 14, 3), Color.FromArgb(64, 64, 64));
+                    x += 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width;
+                }
+            };
             p.Controls.Add(well);
             p.Controls.Add(BuildInspector());
             p.Controls.Add(lblStudyHint);
             leftCol.Controls.Add(left);
             leftCol.Controls.Add(Gap(DockStyle.Top));
             leftCol.Controls.Add(grpModel);
+            leftCol.Controls.Add(Gap(DockStyle.Top, 4));
+            leftCol.Controls.Add(studyRow);
             p.Controls.Add(Gap(DockStyle.Left));
             p.Controls.Add(leftCol);
             p.Controls.Add(Gap(DockStyle.Top, 4));
-            p.Controls.Add(bar);
 
             FillBlockTree("");
             ShowBlockInfo(null);
@@ -234,6 +222,16 @@ namespace Spica.UI
             FillModelTree();
         }
 
+        /// <summary>Why the study shown cannot run now (null: it can): the first thing missing, no simulation, or one running.</summary>
+        string StudyBlocker()
+        {
+            var st = CurrentStudy;
+            if (st == null) return "no study (New Study, on the Workbench)";
+            if (StudyRunning) return $"the study \"{studyRunner.Study.Name}\" is running";
+            var p = StudyProblems();
+            return p.Count == 0 ? null : p[0] + (p.Count > 1 ? $"  (and {p.Count - 1} more: Validate lists them)" : "");
+        }
+
         // ------------------------------------------------------------------ the study tree
 
         static readonly (string Title, BlockFamily[] Families)[] ModelGroups =
@@ -289,6 +287,7 @@ namespace Spica.UI
             tvModel.EndUpdate();
             fillingModel = false;
             SelectInModel(studyCanvas.Selected);
+            UpdateCommandState();
         }
 
         void SelectInModel(Block b)
@@ -381,7 +380,7 @@ namespace Spica.UI
             var st = CurrentStudy;
             if (st == null) return new List<string>();
             var list = st.Validate().Where(i => i.Block == 0).Select(i => i.Message).ToList();
-            if (!st.Blocks.Any(b => b.Kind == BlockKind.Simulate)) list.Add("No Simulate block: nothing runs. Add one (Simulation, in the library) with a condition (e.g. Nominal) into it; Add to Queue offers to.");
+            if (!st.Blocks.Any(b => b.Kind == BlockKind.Simulate)) list.Add("no Simulate block, so nothing would run: add one (Simulation, in the library), with a condition (e.g. Nominal) wired into it");
             foreach (var b in st.Blocks.OrderBy(x => x.Id))
                 foreach (var m in BlockProblems(b)) list.Add($"{b.Spec?.Title ?? b.Kind} ({b.Id}): {m}");
             return list;

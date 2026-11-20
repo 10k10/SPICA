@@ -88,9 +88,15 @@ static class Program
                 var st = project.Studies.Single();
                 Check(st.Blocks.Count == 1 && st.Blocks[0].Kind == "Schematic", "the schematic opens alone in its study");
                 var problems = (System.Collections.Generic.List<string>)mf.GetMethod("StudyProblems", flags).Invoke(form, null);
-                Check(problems.Any(p => p.Contains("No Simulate")), "Validate says nothing would run: " + string.Join("; ", problems));
-                Check((bool)mf.GetMethod("AddNominalSimulation", flags).Invoke(form, new object[] { st }), "Nominal and Simulate are added");
-                Check(st.Validate().Count == 0 && st.Blocks.Count == 3 && st.Wires.Count == 2, $"and wired: {st.Blocks.Count} blocks, {st.Wires.Count} wires");
+                Check(problems.Any(p => p.Contains("no Simulate")), "Validate says nothing would run: " + string.Join("; ", problems));
+                var run = (System.Windows.Forms.ToolStripButton)Get("tbAdd");
+                Check(!run.Enabled && run.ToolTipText.Contains("no Simulate"), "Run is off, and says why: " + run.ToolTipText);
+                // the blocks a plain simulation needs, wired as the user would
+                var simB = st.Add("Simulate", 500, 120); var nomB = st.Add("Nominal", 300, 240);
+                st.Connect(st.Blocks[0], simB); st.Connect(nomB, simB);
+                mf.GetMethod("StudyEdited", flags).Invoke(form, null);
+                Check(run.Enabled, "with Simulate and Nominal wired, Run is on");
+                Check(st.Validate().Count == 0 && st.Blocks.Count == 3 && st.Wires.Count == 2, $"wired: {st.Blocks.Count} blocks, {st.Wires.Count} wires");
                 var queue = (CampaignQueue)Get("queue");
                 int before = queue.Jobs.Count;
                 mf.GetMethod("RunStudy", flags).Invoke(form, null);
