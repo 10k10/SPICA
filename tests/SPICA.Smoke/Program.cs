@@ -12,8 +12,9 @@ using Spica.Core.Graph;
 //   SPICA.Smoke --graph                 the study graph, the blocks, the project file, the campaign builder (no LTspice)
 //   SPICA.Smoke --studies <asc> <png>   the window on a schematic: its study, the inspector, what is missing (pictures)
 //   SPICA.Smoke --studyrun <asc> <png>  a study run with LTspice end to end: queue, waveforms, the cache (pictures)
-//   SPICA.Smoke --savesel <asc> <png>   a few signals saved: what the .meas read is forced, every signal plots (pictures)
+//   SPICA.Smoke --savesel <asc> <png>   a few signals saved (the .meas ones forced); plotting, expressions, cursors, measurements
 //   SPICA.Smoke --waves <dir> <signal>... every signal asked for is drawn from a campaign folder
+//   SPICA.Smoke --opentime <asc>        how long reading a schematic takes (LTspice, then the cache)
 //   SPICA.Smoke --hittest               the window's edges and corners resize it
 //   SPICA.Smoke <asc> [runs] [instances threads]   the campaign engine alone on a schematic (SPICA_TEMP=-40,25,90  SPICA_PAIRED=1  SPICA_SAVE="V(out) I(R1)")
 static class Program
@@ -28,6 +29,18 @@ static class Program
         if (args.Length > 2 && args[0] == "--studyrun") return Window(args[1], args[2], StudyRun);
         if (args.Length > 0 && args[0] == "--hittest") return HitTest();
         if (args.Length > 2 && args[0] == "--savesel") return Window(args[1], args[2], SaveSel);
+        if (args.Length > 1 && args[0] == "--opentime")
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var lt = Ltspice.Locate();
+            var nl = SchematicLoader.Load(lt, Path.GetFullPath(args[1]));
+            Console.WriteLine($"netlist {sw.ElapsedMilliseconds} ms"); sw.Restart();
+            var plan = McPlan.Build(nl.Lines, nl.SourcePath);
+            Console.WriteLine($"tolerances {sw.ElapsedMilliseconds} ms ({plan.Sites.Count} sites)"); sw.Restart();
+            plan = McPlan.Build(nl.Lines, nl.SourcePath);
+            Console.WriteLine($"tolerances again {sw.ElapsedMilliseconds} ms");
+            return 0;
+        }
         if (args.Length > 2 && args[0] == "--waves") return Waves(args[1], args.Skip(2).ToList());
         return Engine(args);
     }
@@ -166,6 +179,17 @@ static class Program
         public object Call(string m, params object[] a) => typeof(Spica.UI.MainForm).GetMethod(m, Flags).Invoke(Form, a);
         public object Prop(string p) => typeof(Spica.UI.MainForm).GetProperty(p, Flags).GetValue(Form);
         public T Wave<T>(string f) => (T)typeof(Spica.UI.WaveformView).GetField(f, Flags).GetValue(Get("waveView"));
+        /// <summary>The panes of the waveforms: their plots, top to bottom.</summary>
+        public List<Spica.UI.WavePlot> Plots()
+        {
+            var wv = Get("waveView");
+            var panes = (System.Collections.IList)typeof(Spica.UI.WaveformView).GetField("panes", Flags).GetValue(wv);
+            return panes.Cast<object>().Select(o => (Spica.UI.WavePlot)o.GetType().GetField("Plot").GetValue(o)).ToList();
+        }
+        /// <summary>A click on a trace's name, as the user does.</summary>
+        public void ClickLabel(int pane, Spica.UI.PlotTrace t) =>
+            typeof(Spica.UI.WaveformView).GetMethod("LabelClicked", Flags).Invoke(Get("waveView"), new object[] { pane, t, new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0) });
+        public void ChoosePane(int pane) => typeof(Spica.UI.WaveformView).GetMethod("Choose", Flags).Invoke(Get("waveView"), new object[] { pane });
         public int Tab { get => ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex; set => ((Spica.UI.Win98TabControl)Get("tabs")).SelectedIndex = value; }
         public void Pump(int n = 15) { for (int k = 0; k < n; k++) { Application.DoEvents(); Thread.Sleep(30); } }
         public void Shot(Control c, string name)
@@ -300,7 +324,7 @@ static class Program
             w.Tab = 2;
             var wv = (Spica.UI.WaveformView)w.Get("waveView");
             var sets = w.Wave<CheckedListBox>("lbSets");
-            var signals = w.Wave<CheckedListBox>("lbSignals").Items.Cast<string>().ToList();
+            var signals = w.Wave<ListBox>("lbSignals").Items.Cast<string>().ToList();
             Check(wv.Visible && sets.Items.Count == 3, "three analyses to look at: " + string.Join(", ", sets.Items.Cast<object>()));
             Check(signals.Contains("V(bulk)") && signals.Contains("V(in)"), "the .raw holds every signal: " + string.Join(" ", signals));
             Check(wv.Plotted.Contains("V(bulk)") && wv.SeriesCount >= 2, $"the first look plots what the .meas use: {string.Join(", ", wv.Plotted)}; {wv.SeriesCount} traces");
@@ -309,10 +333,12 @@ static class Program
             w.Pump(30);
             var runs = w.Wave<ComboBox>("cbRuns");
             Check(runs.SelectedItem?.ToString().StartsWith("All") == true && wv.SeriesCount == 5 * wv.Plotted.Count, $"the worst case: all its runs drawn ({wv.SeriesCount} traces)");
-            typeof(Spica.UI.WaveformView).GetField("curA", Flags).SetValue(wv, 0.05);
-            typeof(Spica.UI.WaveformView).GetMethod("ShowCursors", Flags).Invoke(wv, null);
-            var lc = w.Wave<Label>("lblCursor");
-            Check(lc.Visible && lc.Text.Contains("V(bulk)"), "cursor A reads the signals");
+            var bulk = w.Plots().Select((pl, i) => (pl, i)).First(x => x.pl.Traces.Any(t => t.Label != null && t.Label.StartsWith("V(bulk)")));
+            w.ClickLabel(bulk.i, bulk.pl.Traces.First(t => t.Label != null && t.Label.StartsWith("V(bulk)")));
+            w.Pump(5);
+            var meas = w.Wave<Spica.UI.Win98ListView>("lvMeasure");
+            var row = meas.Items.Cast<ListViewItem>().FirstOrDefault(x => x.Text.StartsWith("V(bulk)"));
+            Check(bulk.pl.Cursors.Count == 1 && row != null && row.SubItems[1].Text != "-", "a click on V(bulk)'s name puts cursor 1 on it, and it reads " + row?.SubItems[1].Text);
             w.Shot(w.Form, "worstcase");
 
             // the same study again: from the cache, at once
@@ -352,38 +378,50 @@ static class Program
             poll.Stop();
             w.Pump(20);
             var wv = (Spica.UI.WaveformView)w.Get("waveView");
-            var list = w.Wave<CheckedListBox>("lbSignals");
-            var names = list.Items.Cast<string>().ToList();
+            var names = w.Wave<ListBox>("lbSignals").Items.Cast<string>().ToList();
             Check(wv.Plotted.SequenceEqual(new[] { "I(Rload)", "I(Cout)", "V(out)" }), "the first look plots the signals the user saved: " + string.Join(" ", wv.Plotted));
             var stack0 = (Panel)typeof(Spica.UI.WaveformView).GetField("stack", Flags).GetValue(wv);
-            Check(stack0.Controls.Count == 3, $"one chart per pane, nothing left over underneath: {stack0.Controls.Count} charts");
+            Check(stack0.Controls.Count == 3, $"one plot per pane, nothing left over underneath: {stack0.Controls.Count}");
             Check(names.Count == 5, "listed: the saved ones and the ones the .meas read: " + string.Join(" ", names));
-            Check(list.CheckedItems.Cast<string>().OrderBy(x => x).SequenceEqual(wv.Plotted.OrderBy(x => x)), "the ticks are what is drawn: " + string.Join(" ", list.CheckedItems.Cast<string>()));
-            var stack = (Panel)typeof(Spica.UI.WaveformView).GetField("stack", Flags).GetValue(wv);
-            var charts = new Func<List<Spica.UI.Win98Chart>>(() => stack.Controls.OfType<Spica.UI.Win98Chart>().OrderBy(c => c.Top).ToList());
-            // a tick puts the signal in the pane chosen (the last one, framed), in view
-            int before = wv.SeriesCount;
-            list.SetItemChecked(names.IndexOf("V(p)"), true);
+            Check(w.Plots().All(pl => pl.Traces.All(t => t.Label == null || !t.Label.Contains(","))), "a pane names its traces once, in their colours (no title)");
+            // a click on a signal plots it in the pane chosen (the last one), in view
+            wv.Add("V(p)");
             w.Pump(5);
-            var framed = charts().Single(c => c.Framed);
-            Check(wv.SeriesCount == before + 1 && framed.Title.Contains("V(p)") && framed.Top >= 0 && framed.Bottom <= stack.ClientSize.Height + 2,
-                  $"ticked V(p): drawn in the framed pane, in view ({framed.Title}, {framed.Top}..{framed.Bottom} of {stack.ClientSize.Height})");
-            // New Pane, then a tick: the signal gets a pane of its own
-            typeof(Spica.UI.WaveformView).GetMethod("NewPane", Flags).Invoke(wv, null);
-            typeof(Spica.UI.WaveformView).GetField("active", Flags).SetValue(wv, charts().Count);
-            list.SetItemChecked(names.IndexOf("I(D1)"), true);
+            var last = w.Plots().Last();
+            Check(last.Traces.Any(t => t.Label == "V(p)") && last.Top >= 0 && last.Bottom <= stack0.ClientSize.Height + 2, $"V(p) clicked: drawn in the pane chosen, in view");
+            // another pane chosen: the next signal goes there
+            w.ChoosePane(0);
+            wv.Add("I(D1)");
             w.Pump(5);
-            Check(charts().Count == 4 && charts().Last().Title == "I(D1)", "New Pane, then I(D1) ticked: a pane of its own (" + string.Join(" | ", charts().Select(c => c.Title)) + ")");
-            // a tick cleared: the signal goes
-            list.SetItemChecked(names.IndexOf("V(p)"), false);
+            Check(w.Plots()[0].Traces.Any(t => t.Label == "I(D1)") && w.Plots()[0].Chosen, "the first pane chosen, then I(D1) clicked: it goes there, framed");
+            // expressions, as in LTspice
+            wv.Add("2*V(out)");
+            wv.Add("V(out,p)");
             w.Pump(5);
-            Check(!wv.Plotted.Contains("V(p)"), "V(p) cleared: no longer drawn (" + string.Join(" | ", charts().Select(c => c.Title)) + ")");
-            // a click on a pane chooses it
-            var firstChart = charts().First();
-            typeof(Control).GetMethod("OnMouseDown", Flags).Invoke(firstChart, new object[] { new MouseEventArgs(MouseButtons.Left, 1, 50, 50, 0) });
-            list.SetItemChecked(names.IndexOf("V(p)"), true);
+            var p0 = w.Plots()[0];
+            var vout = w.Plots().SelectMany(pl => pl.Traces).First(t => t.Label == "V(out)");
+            var vp = w.Plots().SelectMany(pl => pl.Traces).First(t => t.Label == "V(p)");
+            var twice = p0.Traces.FirstOrDefault(t => t.Label == "2*V(out)");
+            var diff = p0.Traces.FirstOrDefault(t => t.Label == "V(out,p)");
+            int k = vout.Y.Length / 2;
+            Check(twice != null && Math.Abs(twice.Y[k] - 2 * vout.Y[k]) < 1e-9, $"2*V(out) is twice V(out): {twice?.Y[k]} = 2 x {vout.Y[k]}");
+            Check(diff != null && Math.Abs(diff.Y[k] - (vout.Y[k] - vp.Y[k])) < 1e-9, $"V(out,p) is V(out) - V(p): {diff?.Y[k]}");
+            // cursors: a click on a trace's name puts cursor 1, another cursor 2; the table measures between them
+            w.ClickLabel(0, twice);
+            w.ClickLabel(0, twice);
             w.Pump(5);
-            Check(charts().First().Title.Contains("V(p)"), "a click on the first pane, then V(p) ticked: it goes there (" + charts().First().Title + ")");
+            var meas = w.Wave<Spica.UI.Win98ListView>("lvMeasure");
+            var head = w.Wave<Label>("lblMeasure").Text;
+            Check(p0.Cursors.Count == 2 && head.StartsWith("Between the cursors"), "two clicks on 2*V(out)'s name: cursors 1 and 2 on it; " + head);
+            var rOut = meas.Items.Cast<ListViewItem>().First(x => x.Text == "V(out)");
+            var rTwice = meas.Items.Cast<ListViewItem>().First(x => x.Text == "2*V(out)");
+            double Num(string t) => double.Parse(t.Replace("µ", "e-6").Replace("m", "e-3").Replace("k", "e3"), System.Globalization.CultureInfo.InvariantCulture);
+            Check(Math.Abs(Num(rTwice.SubItems[4].Text) - 2 * Num(rOut.SubItems[4].Text)) < 0.01 * Math.Abs(Num(rTwice.SubItems[4].Text)),
+                  $"its average is twice V(out)'s: {rTwice.SubItems[4].Text} vs {rOut.SubItems[4].Text}; RMS {rTwice.SubItems[5].Text}, p-p {rTwice.SubItems[8].Text}");
+            w.Shot(w.Form, "cursors");
+            w.ClickLabel(0, twice);
+            w.Pump(5);
+            Check(p0.Cursors.Count == 0 && w.Wave<Label>("lblMeasure").Text.StartsWith("Over the time shown"), "a third click takes the cursors off: the table measures the time shown");
             Console.WriteLine(bad == 0 ? "SAVE SELECTION: all ok" : $"SAVE SELECTION: {bad} wrong");
             w.Shot(w.Form, "all");
             close();
@@ -405,7 +443,7 @@ static class Program
             {
                 wv.Plot(new[] { sig });
                 Application.DoEvents();
-                var info = (Label)typeof(Spica.UI.WaveformView).GetField("lblInfo", Flags).GetValue(wv);
+                var info = (Label)typeof(Spica.UI.WaveformView).GetField("lblMeasure", Flags).GetValue(wv);
                 Check(wv.SeriesCount > 0, $"{sig}: {wv.SeriesCount} traces  {info.Text.Replace('\n', ' ')}");
             }
             form.Close();

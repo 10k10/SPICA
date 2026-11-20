@@ -139,9 +139,9 @@ namespace Spica.UI
             var graphRow = new Panel { Dock = DockStyle.Top, Height = 138, BackColor = Win98.Face };
             graph = new Win98Graph { Dock = DockStyle.Fill, Caption = "Throughput (runs/min)" };
             meter = new Win98ResourceMeter();
-            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = Win98Chart.Navy, Icon = Win98.Icon("cpu32") });
-            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "RAM", Color = Win98Chart.Teal, Icon = Win98.Icon("ram32") });
-            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "Disk activity", Color = Win98Chart.Purple, Icon = Win98.Icon("drive32") });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "CPU", Color = WavePlot.Navy, Icon = Win98.Icon("cpu32") });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "RAM", Color = WavePlot.Teal, Icon = Win98.Icon("ram32") });
+            meter.Bars.Add(new Win98ResourceMeter.Bar { Label = "Disk activity", Color = WavePlot.Purple, Icon = Win98.Icon("drive32") });
             meter.Dock = DockStyle.Fill;
             var grpMeter = new Win98GroupBox { Text = "This PC", Dock = DockStyle.Right, Width = meter.PreferredWidth + 16, Padding = new Padding(8, 16, 8, 6) };
             grpMeter.Controls.Add(meter);

@@ -6,7 +6,11 @@ using System.Linq;
 
 namespace Spica.Core
 {
-    /// <summary>Reads a schematic the way SPICA simulates it: LTspice converts it to a netlist, SPICA parses that.</summary>
+    /// <summary>
+    /// Reads a schematic the way SPICA simulates it: LTspice converts it to a netlist, SPICA parses that. A conversion
+    /// is kept (in %TEMP%\SPICA\netlists) while the schematic, the sheets and symbols beside it and LTspice itself are
+    /// unchanged, so opening or running the same schematic again does not wait for LTspice.
+    /// </summary>
     public static class SchematicLoader
     {
         static readonly object Gate = new object();     // LTspice writes the .net beside the schematic: one conversion at a time
@@ -16,11 +20,41 @@ namespace Spica.Core
             lock (Gate)
             {
                 string tmp = Path.Combine(Path.GetTempPath(), "SPICA");
-                Directory.CreateDirectory(tmp);
+                string cacheDir = Path.Combine(tmp, "netlists");
+                Directory.CreateDirectory(cacheDir);
+                string cached = Path.Combine(cacheDir, Key(ltspiceExe, ascPath) + ".net");
+                if (File.Exists(cached))
+                {
+                    try
+                    {
+                        // the first line is the code page of the netlist LTspice wrote (the chunks are written in it)
+                        var all = File.ReadAllText(cached, System.Text.Encoding.UTF8);
+                        int nl = all.IndexOf('\n');
+                        var enc = System.Text.Encoding.GetEncoding(int.Parse(all.Substring(0, nl).Trim(), CultureInfo.InvariantCulture));
+                        return Netlist.Parse(all.Substring(nl + 1), ascPath, enc);
+                    }
+                    catch { }
+                }
                 string ini = Ltspice.WritePrivateIni(Path.Combine(tmp, "convert.ini"), true);
-                string text = Ltspice.ConvertSchematic(ltspiceExe, ascPath, ini, out var enc);
-                return Netlist.Parse(text, ascPath, enc);
+                string text = Ltspice.ConvertSchematic(ltspiceExe, ascPath, ini, out var encoding);
+                try { File.WriteAllText(cached, encoding.CodePage.ToString(CultureInfo.InvariantCulture) + "\n" + text, System.Text.Encoding.UTF8); } catch { }
+                return Netlist.Parse(text, ascPath, encoding);
             }
+        }
+
+        /// <summary>What the conversion depends on: LTspice, the schematic, and every sheet and symbol in its folder.</summary>
+        static string Key(string exe, string asc)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append(Path.GetFullPath(exe).ToLowerInvariant()).Append('|').Append(File.GetLastWriteTimeUtc(exe).Ticks).Append('|').Append(Path.GetFullPath(asc).ToLowerInvariant());
+            string dir = Path.GetDirectoryName(Path.GetFullPath(asc));
+            foreach (var f in Directory.GetFiles(dir, "*.asc").Concat(Directory.GetFiles(dir, "*.asy")).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                var fi = new FileInfo(f);
+                sb.Append('|').Append(fi.Name.ToLowerInvariant()).Append(':').Append(fi.Length).Append(':').Append(fi.LastWriteTimeUtc.Ticks);
+            }
+            using (var sha = System.Security.Cryptography.SHA1.Create())
+                return string.Concat(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(sb.ToString())).Take(10).Select(b => b.ToString("x2")));
         }
     }
 

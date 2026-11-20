@@ -55,12 +55,17 @@ The studies that ran, each with its analyses, are on the left. On the right, the
 LTspice:
 
 - tick one or several analyses to overlay them; choose one run, or all of them;
-- tick a signal to draw it in the pane chosen (the one with the navy frame; click a pane to choose it), clear the
-  tick to take it away; New Pane adds an empty pane, chosen, for the next signals; Remove Pane takes the chosen
-  one away. Every pane shares the time axis (zoom one, all follow; double-click resets);
-- several temperatures of an analysis are drawn in their own colours;
-- click a pane for cursor A, Shift+click for cursor B: what every signal reads there, and B - A;
-- Save Image writes the panes as a PNG; Open in LTspice opens the `.raw`.
+- click a signal in the list to plot it in the pane chosen (the one with the navy frame; click a pane to choose
+  it). The signals plotted are in bold;
+- right-click a pane: **Add Trace** by expression (`2*V(out)`, `V(out)-V(in)`, `V(a,b)` for `V(a)-V(b)`,
+  `abs()`, `sqrt()`, `db()`...), add a pane above or below, delete it, reset the zoom, copy or save the picture;
+- click a trace's name for cursor 1, again for cursor 2, again to take them off; right-click the name to move
+  the cursors, edit the expression or delete the trace. Drag a cursor to move it;
+- every pane shares the time axis: drag a box to zoom (every pane follows), the wheel zooms, the middle button
+  pans, a double-click resets;
+- under the panes, every trace's value at the cursors and the difference, and its average, RMS, min, max and
+  peak-to-peak between the cursors (or over the time shown); with both cursors, Δt and 1/Δt;
+- several temperatures of an analysis are drawn in their own colours.
 
 The Folder button on the toolbar opens the study's campaigns on disk.
 
@@ -119,7 +124,8 @@ exe; building it on its own checks that it depends on no window code. The design
 - `--graph`: the blocks, the wiring, the executors, the cache, the campaign builder and the project file (no LTspice);
 - `--studies <asc> <png>`: the window on a schematic, with pictures;
 - `--studyrun <asc> <png>`: a study run with LTspice end to end, the waveforms and the cache;
-- `--savesel <asc> <png>`: a few signals saved: the `.meas` ones forced, every signal in the `.raw` plots, the new pane in view;
+- `--savesel <asc> <png>`: a few signals saved (the `.meas` ones forced); plotting, expressions, cursors and measurements;
+- `--opentime <asc>`: how long reading a schematic takes (LTspice, then the cache), and its tolerances;
 - `--waves <dir> <signal>...`: every signal asked for is drawn from a campaign folder;
 - `--hittest`: the window's edges resize it;
 - `<asc> [runs] [instances threads]`: the campaign engine alone (`SPICA_TEMP=-40,25,90`, `SPICA_PAIRED=1`).

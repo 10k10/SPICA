@@ -313,8 +313,8 @@ namespace Spica.UI
         {
             string lt = settings.LtspicePath ?? "";
             if (!File.Exists(lt)) return;
-            SetStatus("Reading " + Path.GetFileName(path) + " (LTspice -netlist)...");
-            UseWaitCursor = true;
+            // the window stays usable meanwhile: only what needs the nets (the Save list, the worst-case count) waits for it
+            SetStatus("LTspice is reading " + Path.GetFileName(path) + "...");
             try
             {
                 var nl = await Task.Run(() => SchematicLoader.Load(lt, path));
@@ -330,7 +330,6 @@ namespace Spica.UI
                 SetStatus("Ready");
                 Win98MessageBox.Show(this, "LTspice could not read the schematic.\n\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error);
             }
-            finally { UseWaitCursor = false; }
         }
 
         bool SaveProject(bool saveAs)

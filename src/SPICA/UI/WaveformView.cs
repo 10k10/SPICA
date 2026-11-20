@@ -1,17 +1,15 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Spica.Core;
 using Spica.Core.Graph;
 
 namespace Spica.UI
 {
-    /// <summary>A study that ran: its campaigns, its verdicts, its report (what the Results tab shows for it).</summary>
     /// <summary>A study that ran: its campaigns, and what did not finish.</summary>
     public sealed class StudyRunData
     {
@@ -24,43 +22,59 @@ namespace Spica.UI
     }
 
     /// <summary>
-    /// Results > a study: the signals of its .raw files, in the manner of LTspice.
-    /// - On the left, the analyses (tick several to overlay them), the runs, and the signals the .raw files hold;
-    ///   double-click a signal to add it to the selected pane.
-    /// - On the right, panes stacked on one time axis (zoom one, all follow), cursors A and B with their readings.
-    ///   Several temperatures of one analysis are drawn in their own colours.
+    /// Results > a study: its waveforms, in the manner of LTspice.
+    /// - Left: the analyses (tick several to overlay them), the runs, and the signals of the .raw files: a click on a
+    ///   signal plots it in the pane chosen (navy frame; a click on a pane chooses it).
+    /// - Right: the panes, on one time axis. A right-click on a pane adds a trace by expression (2*V(out), V(a,b)),
+    ///   panes above or below, deletes it; a click on a trace's name puts a cursor on it (1, then 2, then none), a
+    ///   right-click on the name moves the cursors, edits or deletes the trace. The cursors are dragged.
+    /// - Bottom: for every trace, its value at the cursors, and its average, RMS, min, max and peak-to-peak between
+    ///   the cursors (or over the time shown).
     /// </summary>
     public sealed class WaveformView : Panel
     {
         sealed class Pane
         {
-            public Win98Chart Chart;
-            public readonly List<string> Signals = new List<string>();
+            public readonly List<string> Exprs = new List<string>();
+            public WavePlot Plot;
+        }
+
+        /// <summary>A cursor: on a trace (by its pane and name), at a time.</summary>
+        sealed class CursorAt
+        {
+            public string Name;
+            public Color Color;
+            public int Pane = -1;
+            public string Trace;
+            public double X = double.NaN;
+            public bool On => Pane >= 0;
         }
 
         readonly CheckedListBox lbSets;
         readonly ComboBox cbRuns;
         readonly TextBox txtFilter;
-        readonly CheckedListBox lbSignals;
+        readonly ListBox lbSignals;
         readonly Panel stack;
-        readonly Label lblInfo;
+        readonly Label lblMeasure;
+        readonly Win98ListView lvMeasure;
         readonly List<Pane> panes = new List<Pane>();
+        readonly CursorAt cur1 = new CursorAt { Name = "1", Color = Color.FromArgb(200, 0, 0) };
+        readonly CursorAt cur2 = new CursorAt { Name = "2", Color = Color.FromArgb(0, 90, 200) };
         int active;
         bool filling, linking;
         StudyRunData data;
-        double curA = double.NaN, curB = double.NaN;     // the cursors (time), NaN = not placed
-        List<Trace> lastTraces = new List<Trace>();
-        readonly Label lblCursor;
+        double stop;                                    // the end of the simulation: the time axis runs 0 .. stop
+        (double A, double B)? shownX;                    // the time range zoomed to, kept when the panes are drawn again
+        List<Trace> traces = new List<Trace>();
         readonly Dictionary<string, List<string>> namesByDir = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-
-        /// <summary>LTspice.exe, to open a .raw there.</summary>
-        public Func<string> LtspicePath = () => null;
+        readonly List<string> problems = new List<string>();
+        readonly List<Color> measureColors = new List<Color>();      // the colour of each row's trace name
 
         public const int MaxOverlay = 50;
         static readonly Color[] Palette =
         {
-            Win98Chart.Navy, Color.FromArgb(200, 70, 0), Win98Chart.Green, Win98Chart.Purple, Win98Chart.Teal,
-            Win98Chart.Maroon, Win98Chart.Olive, Win98Chart.Blue, Win98Chart.Fuchsia,
+            WavePlot.Navy, Color.FromArgb(200, 70, 0), WavePlot.Green, WavePlot.Purple, WavePlot.Teal,
+            WavePlot.Maroon, WavePlot.Olive, WavePlot.Blue, WavePlot.Fuchsia,
         };
 
         public WaveformView()
@@ -75,74 +89,64 @@ namespace Spica.UI
             var lblRuns = new Label { Text = "&Runs:", AutoSize = true };
             cbRuns = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Win98.Font };
             cbRuns.SelectedIndexChanged += (s, e) => { if (!filling) Draw(); };
-            // the signals: ticked = drawn. A tick puts the signal in the pane chosen (navy frame), clearing it takes it out
-            var lblSig = new Label { Text = "&Signals: tick to plot in the pane chosen (navy frame), clear to remove. Click a pane to choose it.", AutoSize = false, Height = 42 };
+            var lblSig = new Label { Text = "&Signals: click one to plot it in the pane chosen (navy frame).", AutoSize = false, Height = 28 };
             txtFilter = new TextBox { Font = Win98.Font, BorderStyle = BorderStyle.Fixed3D };
             txtFilter.TextChanged += (s, e) => FillSignals();
-            lbSignals = new CheckedListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, CheckOnClick = true };
-            lbSignals.ItemCheck += (s, e) =>
+            // the signals plotted are in bold
+            lbSignals = new ListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 15 };
+            lbSignals.DrawItem += (s, e) =>
             {
-                if (filling) return;
+                if (e.Index < 0) return;
                 string sig = (string)lbSignals.Items[e.Index];
-                bool on = e.NewValue == CheckState.Checked;
-                BeginInvoke(new Action(() => Show(sig, on)));
+                bool sel = (e.State & DrawItemState.Selected) != 0;
+                using (var b = new SolidBrush(sel ? Win98.Navy : Color.White)) e.Graphics.FillRectangle(b, e.Bounds);
+                TextRenderer.DrawText(e.Graphics, sig, Plotted.Contains(sig, StringComparer.OrdinalIgnoreCase) ? Win98.BoldFont : Win98.Font,
+                    new Point(e.Bounds.X + 2, e.Bounds.Y + 1), sel ? Color.White : Color.Black, TextFormatFlags.NoPrefix);
             };
-            var btnNew = new Win98Button { Text = "New &Pane", Width = 100 };
-            var btnRemove = new Win98Button { Text = "Re&move Pane", Width = 100 };
-            var btnSave = new Win98Button { Text = "Sa&ve Image...", Width = 100 };
-            var btnLt = new Win98Button { Text = "Open in &LTspice", Width = 100 };
-            var btnCur = new Win98Button { Text = "Clear C&ursors", Width = 100 };
-            var tip = new ToolTip();
-            tip.SetToolTip(btnNew, "An empty pane under the others, chosen: the next signals ticked go there");
-            tip.SetToolTip(btnRemove, "Take the pane chosen away, with its signals");
-            btnNew.Click += (s, e) => { NewPane(); active = panes.Count - 1; Draw(); };
-            btnRemove.Click += (s, e) =>
+            lbSignals.MouseClick += (s, e) => { int i = lbSignals.IndexFromPoint(e.Location); if (i >= 0) Add((string)lbSignals.Items[i]); };
+            lbSignals.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter && lbSignals.SelectedItem is string sig) Add(sig); };
+            var lblHow = new Label
             {
-                if (active >= panes.Count) return;
-                panes.RemoveAt(active);
-                if (panes.Count == 0) NewPane();
-                active = Math.Min(active, panes.Count - 1);
-                Draw();
+                AutoSize = false, Height = 70, ForeColor = Win98.Shadow, UseMnemonic = false,
+                Text = "Right-click a pane: a trace by expression (2*V(out), V(a,b)), panes above and below.\nClick a trace's name: cursor 1, then 2. Drag a cursor to move it.",
             };
-            btnCur.Click += (s, e) => { curA = curB = double.NaN; ShowCursors(); };
-            btnLt.Click += (s, e) => OpenInLtspice();
-            btnSave.Click += (s, e) => SaveImage();
-            left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, btnNew, btnRemove, btnSave, btnLt, btnCur });
+            left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, lblHow });
             left.Resize += (s, e) =>
             {
                 int w = left.Width - 10, h = left.Height;
                 lbSets.SetBounds(2, 18, w, Math.Max(60, h / 5));
                 lblRuns.Location = new Point(2, lbSets.Bottom + 9);
                 cbRuns.SetBounds(42, lbSets.Bottom + 6, w - 40, 21);
-                lblSig.SetBounds(2, cbRuns.Bottom + 8, w, 42);
+                lblSig.SetBounds(2, cbRuns.Bottom + 8, w, 28);
                 txtFilter.SetBounds(2, lblSig.Bottom, w, 20);
-                int bottomButtons = 3 * 27 + 4;
-                lbSignals.SetBounds(2, txtFilter.Bottom + 4, w, Math.Max(40, h - txtFilter.Bottom - 8 - bottomButtons));
-                int by = lbSignals.Bottom + 6;
-                btnNew.Location = new Point(2, by); btnRemove.Location = new Point(btnNew.Right + 4, by);
-                btnSave.Location = new Point(2, by + 27); btnLt.Location = new Point(btnSave.Right + 4, by + 27);
-                btnCur.Location = new Point(2, by + 54);
+                lblHow.SetBounds(2, h - 70, w, 70);
+                lbSignals.SetBounds(2, txtFilter.Bottom + 4, w, Math.Max(40, lblHow.Top - 4 - txtFilter.Bottom - 4));
             };
 
             stack = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Win98.Face };
             stack.Resize += (s, e) => LayoutPanes();
-            lblInfo = new Label { Dock = DockStyle.Bottom, Height = 34, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false };
-            lblCursor = new Label { Dock = DockStyle.Bottom, Height = 0, BackColor = Win98.InfoBack, BorderStyle = BorderStyle.FixedSingle, Font = Win98.MonoFont, UseMnemonic = false, Padding = new Padding(4, 2, 4, 2), Visible = false };
+
+            // the measurements of the traces: at the cursors, and over the window between them (or the time shown)
+            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 132, BackColor = Win98.Face, Padding = new Padding(0, 4, 0, 0) };
+            lblMeasure = new Label { Dock = DockStyle.Top, Height = 18, UseMnemonic = false, BackColor = Win98.Face };
+            lvMeasure = new Win98ListView { MultiSelect = false };
+            lvMeasure.CellColor = (row, col) => col == 0 && row < measureColors.Count ? measureColors[row] : (Color?)null;
+            foreach (var (t, w) in new[] { ("Trace", 200), ("Cursor 1", 80), ("Cursor 2", 80), ("2 - 1", 80), ("Average", 80), ("RMS", 80), ("Min", 80), ("Max", 80), ("Peak-peak", 80) })
+                lvMeasure.Columns.Add(t, w, t == "Trace" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
+            bottom.Controls.Add(new Win98Well(lvMeasure) { Dock = DockStyle.Fill });
+            bottom.Controls.Add(lblMeasure);
 
             Controls.Add(stack);
-            Controls.Add(lblCursor);
-            Controls.Add(lblInfo);
+            Controls.Add(bottom);
             Controls.Add(left);
         }
 
         // ------------------------------------------------------------------ what is shown
 
-        List<RunSet> Checked => lbSets.CheckedIndices.Cast<int>().Select(i => data.Sets.Where(s => s.Dir != null).ElementAt(i)).ToList();
-
-        static string SetLabel(RunSet s) => s.Label;
+        List<RunSet> Checked => data == null ? new List<RunSet>() : lbSets.CheckedIndices.Cast<int>().Select(i => data.Sets.Where(s => s.Dir != null).ElementAt(i)).ToList();
 
         /// <summary>
-        /// Shows a study's campaigns, <paramref name="focus"/> ticked (or the first). The panes and their signals stay as
+        /// Shows a study's campaigns, <paramref name="focus"/> ticked (or the first). The panes and their traces stay as
         /// they were, so a study run again shows the same plots.
         /// </summary>
         public void ShowStudy(StudyRunData d, RunSet focus = null)
@@ -151,39 +155,41 @@ namespace Spica.UI
             filling = true;
             lbSets.Items.Clear();
             var sets = d.Sets.Where(s => s.Dir != null).ToList();
-            foreach (var s in sets) lbSets.Items.Add(SetLabel(s), s == focus || (focus == null && s == sets.FirstOrDefault()));
+            foreach (var s in sets) lbSets.Items.Add(s.Label, s == focus || (focus == null && s == sets.FirstOrDefault()));
             filling = false;
-            if (panes.Count == 0) NewPane();
+            if (panes.Count == 0) panes.Add(new Pane());
             active = Math.Min(active, panes.Count - 1);
             FillRuns();
             FillSignals();
             Draw();
         }
 
-        Pane NewPane() { var p = new Pane(); panes.Add(p); return p; }
-
-        /// <summary>A signal into the pane chosen (on), or out of every pane (off).</summary>
-        public void Show(string sig, bool on)
+        /// <summary>Puts signals on the panes, one pane each (the first look at a study).</summary>
+        public void Plot(IEnumerable<string> signals)
         {
-            if (string.IsNullOrEmpty(sig)) return;
-            if (on)
-            {
-                if (panes.Count == 0) { NewPane(); active = 0; }
-                var p = panes[Math.Min(active, panes.Count - 1)];
-                if (!p.Signals.Contains(sig, StringComparer.OrdinalIgnoreCase)) p.Signals.Add(sig);
-            }
-            else foreach (var p in panes) p.Signals.RemoveAll(x => x.Equals(sig, StringComparison.OrdinalIgnoreCase));
+            panes.Clear();
+            foreach (var s in signals) { var p = new Pane(); p.Exprs.Add(s); panes.Add(p); }
+            if (panes.Count == 0) panes.Add(new Pane());
+            active = panes.Count - 1;
+            cur1.Pane = cur2.Pane = -1;
             Draw();
         }
 
-        /// <summary>The ticks of the signal list as what the panes draw.</summary>
-        void SyncTicks()
+        /// <summary>The traces the panes show (signals and expressions).</summary>
+        public List<string> Plotted => panes.SelectMany(p => p.Exprs).ToList();
+
+        /// <summary>The curves drawn (one per run).</summary>
+        public int SeriesCount => panes.Where(p => p.Plot != null).Sum(p => p.Plot.Traces.Count);
+
+        /// <summary>A trace into the pane chosen.</summary>
+        public void Add(string expr)
         {
-            filling = true;
-            var shown = new HashSet<string>(Plotted, StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < lbSignals.Items.Count; i++)
-                if (lbSignals.GetItemChecked(i) != shown.Contains((string)lbSignals.Items[i])) lbSignals.SetItemChecked(i, shown.Contains((string)lbSignals.Items[i]));
-            filling = false;
+            expr = (expr ?? "").Trim();
+            if (expr.Length == 0) return;
+            if (panes.Count == 0) panes.Add(new Pane());
+            var p = panes[Math.Min(active, panes.Count - 1)];
+            if (!p.Exprs.Contains(expr, StringComparer.OrdinalIgnoreCase)) p.Exprs.Add(expr);
+            Draw();
         }
 
         void FillRuns()
@@ -191,8 +197,7 @@ namespace Spica.UI
             filling = true;
             string keep = cbRuns.SelectedItem as string;
             cbRuns.Items.Clear();
-            var sets = data == null ? new List<RunSet>() : Checked;
-            int maxRuns = sets.Select(s => { try { return s.Results.Rows.Count(r => r.Status == RunStatus.Ok); } catch { return 0; } }).DefaultIfEmpty(0).Max();
+            int maxRuns = Checked.Select(s => { try { return s.Results.Rows.Count(r => r.Status == RunStatus.Ok); } catch { return 0; } }).DefaultIfEmpty(0).Max();
             if (maxRuns <= 1) cbRuns.Items.Add("Run 1");
             else
             {
@@ -216,18 +221,14 @@ namespace Spica.UI
 
         void FillSignals()
         {
-            if (data == null) return;
             string f = txtFilter.Text.Trim();
             var all = Checked.SelectMany(NamesIn).Distinct(StringComparer.OrdinalIgnoreCase)
                              .Where(x => f.Length == 0 || x.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
                              .OrderBy(x => x.StartsWith("V(", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
-            filling = true;
             lbSignals.BeginUpdate();
             lbSignals.Items.Clear();
             foreach (var s in all) lbSignals.Items.Add(s);
             lbSignals.EndUpdate();
-            filling = false;
-            SyncTicks();
         }
 
         // ------------------------------------------------------------------ data
@@ -250,29 +251,15 @@ namespace Spica.UI
             return rows.Where(r => r.Run == n).ToList();
         }
 
-        /// <summary>A value with its SI prefix (1.234m, 12.00k).</summary>
-        static string Eng(double v)
+        List<Trace> Load(List<RunSet> sets, List<string> signals)
         {
-            if (double.IsNaN(v)) return "-";
-            if (v == 0) return "0";
-            string[] pre = { "f", "p", "n", "u", "m", "", "k", "M", "G" };
-            int e3 = (int)Math.Floor(Math.Log10(Math.Abs(v)) / 3);
-            e3 = Math.Max(-5, Math.Min(3, e3));
-            double m = v / Math.Pow(1000, e3);
-            return m.ToString(Math.Abs(m) >= 100 ? "0.0" : Math.Abs(m) >= 10 ? "0.00" : "0.000", System.Globalization.CultureInfo.InvariantCulture) + pre[e3 + 5];
-        }
-
-        static string TempText(double t) => double.IsNaN(t) ? "" : t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " °C";
-
-        List<Trace> Load(List<RunSet> sets, List<string> signals, List<string> problems)
-        {
-            var traces = new List<Trace>();
+            var list = new List<Trace>();
             foreach (var s in sets)
             {
                 List<ResultSet.Row> rows;
-                try { rows = RowsOf(s); } catch (Exception ex) { problems.Add($"{SetLabel(s)}: {ex.Message}"); continue; }
+                try { rows = RowsOf(s); } catch (Exception ex) { problems.Add($"{s.Label}: {ex.Message}"); continue; }
                 var chunks = RawFile.Chunks(s.Dir);
-                if (chunks.Count == 0) { problems.Add($"{SetLabel(s)}: no .raw file was kept."); continue; }
+                if (chunks.Count == 0) { problems.Add($"{s.Label}: no .raw file was kept."); continue; }
                 foreach (var g in rows.Select(r => new { r, c = RawFile.ChunkOf(chunks, r.Run, r.Temp) }).Where(x => x.c != null).GroupBy(x => x.c.Path))
                 {
                     try
@@ -286,13 +273,72 @@ namespace Spica.UI
                             if (!steps.TryGetValue(x.r.Run - first, out var st)) continue;
                             var tr = new Trace { Set = s, Row = x.r, X = st.X };
                             for (int k = 0; k < signals.Count; k++) if (st.Y[k] != null) tr.Y[signals[k]] = st.Y[k];
-                            traces.Add(tr);
+                            list.Add(tr);
                         }
                     }
-                    catch (Exception ex) { problems.Add($"{Path.GetFileName(g.Key)}: {ex.Message}"); }
+                    catch (Exception ex) { problems.Add($"{System.IO.Path.GetFileName(g.Key)}: {ex.Message}"); }
                 }
             }
-            return traces;
+            return list;
+        }
+
+        // ------------------------------------------------------------------ expressions
+
+        /// <summary>A trace's expression made computable: the signals it reads, and how to get its value at a point.</summary>
+        sealed class Compiled
+        {
+            public readonly List<string> Needs = new List<string>();
+            public bool Direct;                          // the signal itself, no arithmetic
+            public Func<Func<string, double>, double> Value;
+            public string Error;
+        }
+
+        static readonly Regex SignalRef = new Regex(@"\b([VI][A-Za-z0-9]{0,2})\(([^()]*)\)", RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// "V(out)" is the signal itself; anything else is an expression of signals, as in LTspice: 2*V(out),
+        /// V(out)-V(in), V(a,b) for V(a)-V(b), I(R1)*V(out), abs(), sqrt(), db(), min(), max()...
+        /// </summary>
+        static Compiled Compile(string expr)
+        {
+            var c = new Compiled();
+            var m0 = SignalRef.Match(expr.Trim());
+            if (m0.Success && m0.Length == expr.Trim().Length && !m0.Groups[2].Value.Contains(","))
+            {
+                string sig = m0.Value;
+                c.Needs.Add(sig);
+                c.Direct = true;
+                c.Value = get => get(sig);
+                return c;
+            }
+            var names = new List<string>();
+            string Var(string sig) { int i = names.FindIndex(x => x.Equals(sig, StringComparison.OrdinalIgnoreCase)); if (i < 0) { names.Add(sig); i = names.Count - 1; } return "spica_s" + i; }
+            string text = SignalRef.Replace(expr, m =>
+            {
+                var parts = m.Groups[2].Value.Split(',').Select(x => x.Trim()).ToList();
+                if (parts.Count == 2 && m.Groups[1].Value.Equals("V", StringComparison.OrdinalIgnoreCase))
+                    return $"({Var($"V({parts[0]})")} - {Var($"V({parts[1]})")})";
+                return Var(m.Value);
+            });
+            if (!Expr.TryParse(text, out var e, out var err, true)) { c.Error = $"{expr}: {err}"; return c; }
+            c.Needs.AddRange(names);
+            c.Value = get =>
+            {
+                var v = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < names.Count; i++) v["spica_s" + i] = get(names[i]);
+                return e.Eval(v);
+            };
+            return c;
+        }
+
+        /// <summary>An expression along a run's time points; null when a signal it reads is not in that .raw.</summary>
+        static double[] Evaluate(Compiled c, Trace tr)
+        {
+            if (c.Value == null || c.Needs.Any(n => !tr.Y.ContainsKey(n))) return null;
+            if (c.Direct) return tr.Y[c.Needs[0]];
+            var y = new double[tr.X.Length];
+            for (int i = 0; i < y.Length; i++) { int k = i; y[i] = c.Value(n => tr.Y[n][k]); }
+            return y;
         }
 
         // ------------------------------------------------------------------ drawing
@@ -303,202 +349,291 @@ namespace Spica.UI
             Cursor = Cursors.WaitCursor;
             try { DrawCore(); }
             finally { Cursor = Cursors.Default; }
+            lbSignals.Invalidate();      // the bold names follow what is plotted
         }
+
+        static string TempText(double t) => double.IsNaN(t) ? "" : t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " °C";
 
         void DrawCore()
         {
-            // every chart drawn before goes, also those of panes no longer in the list (Plot, Remove Pane): one left over
-            // would lie on top of the new ones and take their clicks
-            foreach (var c in stack.Controls.OfType<Win98Chart>().ToList()) { stack.Controls.Remove(c); c.Dispose(); }
-            foreach (var p in panes) p.Chart = null;
+            // every pane drawn before goes (also those taken out of the list): one left over would cover the new ones
+            foreach (var c in stack.Controls.OfType<WavePlot>().ToList()) { stack.Controls.Remove(c); c.Dispose(); }
+            foreach (var p in panes) p.Plot = null;
+            problems.Clear();
             var sets = Checked;
-            var signals = panes.SelectMany(p => p.Signals).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var problems = new List<string>();
-            var traces = sets.Count == 0 || signals.Count == 0 ? new List<Trace>() : Load(sets, signals, problems);
+            var compiled = panes.SelectMany(p => p.Exprs).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary(x => x, Compile, StringComparer.OrdinalIgnoreCase);
+            foreach (var c in compiled.Values.Where(c => c.Error != null)) problems.Add(c.Error);
+            var needs = compiled.Values.SelectMany(c => c.Needs).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            traces = sets.Count == 0 || needs.Count == 0 ? new List<Trace>() : Load(sets, needs);
+            stop = traces.Where(t => t.X.Length > 0).Select(t => t.X[t.X.Length - 1]).DefaultIfEmpty(stop).Max();
             bool manySets = sets.Count > 1;
-            double stop = traces.Where(t => t.X.Length > 0).Select(t => t.X[t.X.Length - 1]).DefaultIfEmpty(0).Max();
 
             for (int pi = 0; pi < panes.Count; pi++)
             {
                 var pane = panes[pi];
                 int paneIndex = pi;
-                var ch = new Win98Chart { Title = pane.Signals.Count == 0 ? "(empty pane: tick a signal on the left)" : string.Join(", ", pane.Signals), YLabel = "" };
-                ch.TitleColor = pi == active ? Win98.Navy : Color.FromArgb(80, 80, 80);
-                ch.Framed = pi == active && panes.Count > 1;
-                ch.MouseClick += (s, e) =>
-                {
-                    if (e.Button != MouseButtons.Left) return;
-                    double t = ((Win98Chart)s).DataX(e.Location);
-                    if (double.IsNaN(t)) return;
-                    if ((ModifierKeys & Keys.Shift) != 0) curB = t; else curA = t;
-                    ShowCursors();
-                };
-                ch.MouseDown += (s, e) =>
-                {
-                    if (active == paneIndex) return;
-                    active = paneIndex;
-                    foreach (var q in panes.Where(x => x.Chart != null))
-                    {
-                        q.Chart.TitleColor = q == panes[active] ? Win98.Navy : Color.FromArgb(80, 80, 80);
-                        q.Chart.Framed = q == panes[active];
-                        q.Chart.Invalidate();
-                    }
-                };
-                pane.Chart = ch;
-                stack.Controls.Add(ch);
-                if (pane.Signals.Count == 0) continue;
-                ch.YLabel = pane.Signals.All(x => x.StartsWith("I", StringComparison.OrdinalIgnoreCase)) ? "A" : pane.Signals.All(x => x.StartsWith("V", StringComparison.OrdinalIgnoreCase)) ? "V" : "";
-
-                // one colour per signal; with several analyses overlaid, per analysis; with several temperatures, per temperature
+                var plot = new WavePlot { EmptyText = "Empty pane: click a signal on the left to plot it here.", Chosen = pi == active && panes.Count > 1 };
+                plot.MouseDown += (s, e) => Choose(paneIndex);
+                plot.MenuRequested += at => PaneMenu(paneIndex, at);
+                plot.LabelClicked += (t, e) => LabelClicked(paneIndex, t, e);
+                plot.CursorMoved += c => CursorDragged(c);
+                plot.XViewChanged += (s, e) => Follow((WavePlot)s);
+                pane.Plot = plot;
+                stack.Controls.Add(plot);
                 int colour = 0;
-                for (int si = 0; si < pane.Signals.Count; si++)
+                foreach (var expr in pane.Exprs)
                 {
-                    string sig = pane.Signals[si];
+                    var c = compiled[expr];
                     for (int k = 0; k < sets.Count; k++)
                     {
-                        var mine = traces.Where(t => t.Set == sets[k] && t.Y.ContainsKey(sig)).ToList();
-                        if (mine.Count == 0) { if (!problems.Any(p => p.Contains(sig))) problems.Add($"{sig} is not in the .raw of {SetLabel(sets[k])}."); continue; }
-                        foreach (var g in mine.GroupBy(t => t.Row.Temp))
+                        var mine = traces.Where(t => t.Set == sets[k]).Select(t => (t, y: Evaluate(c, t))).Where(x => x.y != null).ToList();
+                        if (mine.Count == 0) { if (c.Error == null) problems.Add($"{expr} is not in the .raw of {sets[k].Label}."); continue; }
+                        bool temps = mine.Select(x => x.t.Row.Temp).Distinct().Count() > 1;
+                        foreach (var g in mine.GroupBy(x => x.t.Row.Temp))
                         {
                             var col = Palette[colour++ % Palette.Length];
                             int n = g.Count();
-                            string label = sig + (manySets ? " · " + SetLabel(sets[k]) : "") + (mine.Select(t => t.Row.Temp).Distinct().Count() > 1 ? " · " + TempText(g.Key) : "") + (n > 1 ? $" ({n} runs)" : "");
+                            string label = expr + (manySets ? " · " + sets[k].Label : "") + (temps ? " · " + TempText(g.Key) : "") + (n > 1 ? $" ({n} runs)" : "");
                             bool first = true;
-                            foreach (var tr in g)
+                            foreach (var x in g)
                             {
-                                ch.Add(new ChartSeries { Kind = SeriesKind.Line, Label = first ? label : null, Color = col, Size = n > 1 ? 3 : 2, X = tr.X, Y = tr.Y[sig] });
+                                plot.Traces.Add(new PlotTrace { Label = first ? label : null, Color = col, X = x.t.X, Y = x.y, Tag = expr });
                                 first = false;
                             }
                         }
                     }
                 }
+                plot.YLabel = pane.Exprs.Count > 0 && pane.Exprs.All(x => x.StartsWith("I(", StringComparison.OrdinalIgnoreCase)) ? "A"
+                            : pane.Exprs.Count > 0 && pane.Exprs.All(x => x.StartsWith("V(", StringComparison.OrdinalIgnoreCase)) ? "V" : "";
             }
-            if (panes.Count > 0 && panes.Last().Chart != null) panes.Last().Chart.XLabel = "time (s)";
-            foreach (var p in panes)
-                if (p.Chart != null)
-                {
-                    p.Chart.XViewChanged += (s, e) => Follow((Win98Chart)s, stop);
-                    if (stop > 0) p.Chart.FixedX = new KeyValuePair<double, double>(0, stop);
-                }
-            lastTraces = traces;
-            ShowCursors();
-            LayoutPanes();
-            lblInfo.Text = (problems.Count > 0 ? "! " + string.Join("   ! ", problems.Distinct().Take(3)) + "\n" : "") +
-                           "Click a pane to choose it and place cursor A there (Shift+click: cursor B). Drag to zoom (every pane follows), double-click a pane to reset.";
-            lblInfo.ForeColor = problems.Count > 0 ? Color.FromArgb(140, 0, 0) : Win98.Shadow;
-        }
-
-        /// <summary>The cursors on every pane, and what each signal reads there (and the difference B - A).</summary>
-        void ShowCursors()
-        {
-            foreach (var p in panes.Where(x => x.Chart != null))
+            if (panes.Count > 0 && panes.Last().Plot != null) panes.Last().Plot.XLabel = "time (s)";
+            foreach (var p in panes.Where(x => x.Plot != null))
             {
-                p.Chart.Series.RemoveAll(x => x.Label == "cursor A" || x.Label == "cursor B");
-                if (!double.IsNaN(curA)) p.Chart.Series.Add(new ChartSeries { Kind = SeriesKind.VLine, Label = "cursor A", InLegend = false, Color = Color.FromArgb(200, 0, 0), X = new[] { curA } });
-                if (!double.IsNaN(curB)) p.Chart.Series.Add(new ChartSeries { Kind = SeriesKind.VLine, Label = "cursor B", InLegend = false, Color = Color.FromArgb(0, 90, 200), Dashed = true, X = new[] { curB } });
-                p.Chart.Invalidate();
+                if (stop > 0) p.Plot.FixX(0, stop);
+                if (shownX.HasValue) p.Plot.LinkX(shownX.Value.A, shownX.Value.B);
             }
-            if (double.IsNaN(curA) && double.IsNaN(curB)) { lblCursor.Visible = false; return; }
-            var sets = data == null ? new List<RunSet>() : Checked;
-            var lines = new List<string>();
-            string E(double v) => Eng(v);
-            lines.Add($"{"",-28} {"A at " + E(curA) + "s",16} {"B at " + E(curB) + "s",16} {"B - A",12}" + (!double.IsNaN(curA) && !double.IsNaN(curB) ? $"   Δt = {E(curB - curA)}s" : ""));
-            foreach (var p in panes)
-                foreach (var sig in p.Signals)
-                    foreach (var tr in lastTraces.Where(t => t.Y.ContainsKey(sig)).GroupBy(t => (t.Set, t.Row.Temp)).Select(g => g.First()))
-                    {
-                        double a = At(tr, sig, curA), b = At(tr, sig, curB);
-                        bool temps = lastTraces.Where(t => t.Set == tr.Set).Select(t => t.Row.Temp).Distinct().Count() > 1;
-                        string name = sig + (sets.Count > 1 ? " · " + SetLabel(tr.Set) : "") + (temps ? " · " + TempText(tr.Row.Temp) : "");
-                        if (name.Length > 28) name = name.Substring(0, 27) + "…";
-                        lines.Add($"{name,-28} {E(a),16} {E(b),16} {(double.IsNaN(a) || double.IsNaN(b) ? "" : E(b - a)),12}");
-                    }
-            lblCursor.Text = string.Join("\n", lines.Take(10));
-            lblCursor.Height = Math.Min(10, lines.Count) * 13 + 8;
-            lblCursor.Visible = true;
+            // a cursor on a trace that is gone goes too
+            foreach (var c in new[] { cur1, cur2 })
+                if (c.On && (c.Pane >= panes.Count || panes[c.Pane].Plot == null || !panes[c.Pane].Plot.Traces.Any(t => t.Label == c.Trace))) c.Pane = -1;
+            LayoutPanes();
+            ShowCursors();
         }
 
-        /// <summary>A signal's value at a time, between the two samples around it.</summary>
-        static double At(Trace tr, string sig, double t)
+        void Choose(int pane)
         {
-            if (double.IsNaN(t) || !tr.Y.TryGetValue(sig, out var y) || tr.X.Length == 0) return double.NaN;
-            int i = Array.BinarySearch(tr.X, t);
-            if (i >= 0) return y[i];
-            i = ~i;
-            if (i == 0) return y[0];
-            if (i >= tr.X.Length) return y[y.Length - 1];
-            double f = (t - tr.X[i - 1]) / (tr.X[i] - tr.X[i - 1]);
-            return y[i - 1] + f * (y[i] - y[i - 1]);
+            if (active == pane) return;
+            active = pane;
+            for (int i = 0; i < panes.Count; i++)
+                if (panes[i].Plot != null) { panes[i].Plot.Chosen = i == active && panes.Count > 1; panes[i].Plot.Invalidate(); }
         }
 
-        void Follow(Win98Chart from, double stop)
+        /// <summary>The time range of a pane zoomed, panned or reset: every pane shows it.</summary>
+        void Follow(WavePlot from)
         {
             if (linking) return;
             linking = true;
             try
             {
-                foreach (var p in panes.Where(x => x.Chart != null && x.Chart != from))
+                shownX = from.IsZoomed ? (from.ViewX0, from.ViewX1) : ((double, double)?)null;
+                foreach (var p in panes.Where(x => x.Plot != null && x.Plot != from))
                 {
-                    if (from.IsZoomed) p.Chart.LinkX(from.ViewX0, from.ViewX1);
-                    else { p.Chart.LinkX(null, null); if (stop > 0) p.Chart.FixedX = new KeyValuePair<double, double>(0, stop); }
+                    if (shownX.HasValue) p.Plot.LinkX(shownX.Value.A, shownX.Value.B);
+                    else { p.Plot.LinkX(null, null); if (stop > 0) p.Plot.FixX(0, stop); }
                 }
-                if (!from.IsZoomed && stop > 0) from.FixedX = new KeyValuePair<double, double>(0, stop);
+                if (!from.IsZoomed && stop > 0) from.FixX(0, stop);
             }
             finally { linking = false; }
+            Measure();
         }
 
+        /// <summary>Every pane in view while they fit at a readable height; past that the stack scrolls, to the pane chosen.</summary>
         void LayoutPanes()
         {
-            var charts = panes.Where(p => p.Chart != null).Select(p => p.Chart).ToList();
-            if (charts.Count == 0) return;
-            // every pane in view while they fit at a readable height; past that the stack scrolls, to the pane chosen
-            int avail = stack.ClientSize.Height, each = Math.Max(120, (avail - 4) / charts.Count);
-            int w = stack.ClientSize.Width - (each * charts.Count > avail ? SystemInformation.VerticalScrollBarWidth : 0);
+            var plots = panes.Where(p => p.Plot != null).Select(p => p.Plot).ToList();
+            if (plots.Count == 0) return;
+            int avail = stack.ClientSize.Height, each = Math.Max(120, (avail - 4) / plots.Count);
+            int w = stack.ClientSize.Width - (each * plots.Count > avail ? SystemInformation.VerticalScrollBarWidth : 0);
             int y = -stack.VerticalScroll.Value;
-            foreach (var c in charts) { c.SetBounds(0, y, Math.Max(100, w), each - 2); y += each; }
-            if (active < panes.Count && panes[active].Chart != null) stack.ScrollControlIntoView(panes[active].Chart);
+            foreach (var c in plots) { c.SetBounds(0, y, Math.Max(100, w), each - 2); y += each; }
+            if (active < panes.Count && panes[active].Plot != null) stack.ScrollControlIntoView(panes[active].Plot);
         }
 
-        // ------------------------------------------------------------------ actions
+        // ------------------------------------------------------------------ menus
 
-        void OpenInLtspice()
+        void PaneMenu(int pane, Point at)
         {
-            var s = Checked.FirstOrDefault();
-            if (s == null) return;
-            var row = RowsOf(s).FirstOrDefault();
-            var chunk = row == null ? null : RawFile.ChunkOf(RawFile.Chunks(s.Dir), row.Run, row.Temp);
-            string lt = LtspicePath();
-            if (chunk == null || string.IsNullOrEmpty(lt) || !File.Exists(lt)) { Win98MessageBox.Show(FindForm(), "No .raw file or LTspice.exe to open it with.", "SPICA", MessageBoxButtons.OK, Win98Icon.Information); return; }
-            try { Process.Start(lt, "\"" + chunk.Path + "\""); }
-            catch (Exception ex) { Win98MessageBox.Show(FindForm(), "LTspice could not be started:\n" + ex.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error); }
+            Choose(pane);
+            var plot = panes[pane].Plot;
+            var m = new ContextMenuStrip();
+            m.Items.Add("&Add Trace...", null, (s, e) => { string x = Win98Prompt.Ask(FindForm(), "Add Trace", "&Expression:", ""); if (x != null) Add(x); });
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("Add Pane A&bove", null, (s, e) => { panes.Insert(pane, new Pane()); active = pane; Draw(); });
+            m.Items.Add("Add Pane Be&low", null, (s, e) => { panes.Insert(pane + 1, new Pane()); active = pane + 1; Draw(); });
+            m.Items.Add(new ToolStripMenuItem("&Delete Pane", null, (s, e) => { panes.RemoveAt(pane); if (panes.Count == 0) panes.Add(new Pane()); active = Math.Min(pane, panes.Count - 1); Draw(); }) { Enabled = panes.Count > 1 || panes[pane].Exprs.Count > 0 });
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add(new ToolStripMenuItem("&Reset Zoom", null, (s, e) => plot.ResetZoom()) { Enabled = plot.IsZoomed });
+            m.Items.Add("&Copy Image", null, (s, e) => { using (var b = Snapshot()) if (b != null) Clipboard.SetImage(b); });
+            m.Items.Add("&Save Image as PNG...", null, (s, e) => SaveImage());
+            Show(m, plot, at);
         }
+
+        void LabelClicked(int pane, PlotTrace t, MouseEventArgs e)
+        {
+            Choose(pane);
+            if (e.Button == MouseButtons.Left)
+            {
+                // as in LTspice: a click puts cursor 1 on the trace, another cursor 2 as well, another takes them off
+                bool on1 = cur1.Pane == pane && cur1.Trace == t.Label, on2 = cur2.Pane == pane && cur2.Trace == t.Label;
+                if (!on1) Attach(cur1, pane, t);
+                else if (!on2) Attach(cur2, pane, t);
+                else { cur1.Pane = cur2.Pane = -1; }
+                ShowCursors();
+                return;
+            }
+            string expr = (string)t.Tag;
+            var m = new ContextMenuStrip();
+            m.Items.Add("Cursor &1 on This Trace", null, (s, a) => { Attach(cur1, pane, t); ShowCursors(); });
+            m.Items.Add("Cursor &2 on This Trace", null, (s, a) => { Attach(cur2, pane, t); ShowCursors(); });
+            m.Items.Add(new ToolStripMenuItem("&No Cursors", null, (s, a) => { cur1.Pane = cur2.Pane = -1; ShowCursors(); }) { Enabled = cur1.On || cur2.On });
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("&Edit Expression...", null, (s, a) =>
+            {
+                string x = Win98Prompt.Ask(FindForm(), "Edit Trace", "&Expression:", expr);
+                if (x == null || x.Trim().Length == 0) return;
+                var ex = panes[pane].Exprs;
+                int i = ex.IndexOf(expr);
+                if (i >= 0) ex[i] = x.Trim();
+                Draw();
+            });
+            m.Items.Add("&Delete Trace", null, (s, a) => { panes[pane].Exprs.Remove(expr); Draw(); });
+            Show(m, panes[pane].Plot, e.Location);
+        }
+
+        static void Show(ContextMenuStrip m, Control on, Point at)
+        {
+            Win98Renderer.Apply(m);
+            Win98Renderer.StyleDropDowns(m.Items);
+            m.Closed += (s, e) => on.BeginInvoke(new Action(m.Dispose));
+            m.Show(on, at);
+        }
+
+        // ------------------------------------------------------------------ cursors and measurements
+
+        void Attach(CursorAt c, int pane, PlotTrace t)
+        {
+            c.Pane = pane;
+            c.Trace = t.Label;
+            var plot = panes[pane].Plot;
+            // a new cursor starts in the time shown: cursor 1 at a third, cursor 2 at two thirds
+            if (double.IsNaN(c.X) || c.X < plot.ViewX0 || c.X > plot.ViewX1)
+                c.X = plot.ViewX0 + (plot.ViewX1 - plot.ViewX0) * (c == cur1 ? 1 / 3.0 : 2 / 3.0);
+        }
+
+        void CursorDragged(PlotCursor pc)
+        {
+            var c = pc.Name == "1" ? cur1 : cur2;
+            c.X = pc.X;
+            ShowCursors();
+        }
+
+        /// <summary>The trace a cursor is on (its first run).</summary>
+        PlotTrace TraceOf(CursorAt c) =>
+            c.On && c.Pane < panes.Count ? panes[c.Pane].Plot?.Traces.FirstOrDefault(t => t.Label == c.Trace) : null;
+
+        /// <summary>A trace's value at a time, between the two samples around it.</summary>
+        static double At(PlotTrace t, double x)
+        {
+            if (t == null || double.IsNaN(x) || t.X.Length == 0) return double.NaN;
+            int i = Array.BinarySearch(t.X, x);
+            if (i >= 0) return t.Y[i];
+            i = ~i;
+            if (i == 0) return t.Y[0];
+            if (i >= t.X.Length) return t.Y[t.Y.Length - 1];
+            double f = (x - t.X[i - 1]) / (t.X[i] - t.X[i - 1]);
+            return t.Y[i - 1] + f * (t.Y[i] - t.Y[i - 1]);
+        }
+
+        /// <summary>The cursors on every pane (the cross on the pane of the trace they are on), and the measurements.</summary>
+        void ShowCursors()
+        {
+            for (int i = 0; i < panes.Count; i++)
+            {
+                var p = panes[i].Plot;
+                if (p == null) continue;
+                p.Cursors.Clear();
+                foreach (var c in new[] { cur1, cur2 }.Where(x => x.On))
+                    p.Cursors.Add(new PlotCursor { Name = c.Name, Color = c.Color, X = c.X, Y = c.Pane == i ? At(TraceOf(c), c.X) : double.NaN });
+                p.Invalidate();
+            }
+            Measure();
+        }
+
+        /// <summary>
+        /// For every named trace (its first run): its value at each cursor and the difference, and its average, RMS, min,
+        /// max and peak-to-peak over the window: between the two cursors, or the time shown.
+        /// </summary>
+        void Measure()
+        {
+            var plots = panes.Where(p => p.Plot != null).Select(p => p.Plot).ToList();
+            double a, b;
+            bool between = cur1.On && cur2.On;
+            if (between) { a = Math.Min(cur1.X, cur2.X); b = Math.Max(cur1.X, cur2.X); }
+            else if (plots.Count > 0) { a = plots[0].ViewX0; b = plots[0].ViewX1; }
+            else { a = b = double.NaN; }
+            string F(double v) => WavePlot.Fmt(v);
+            lblMeasure.ForeColor = problems.Count > 0 ? Color.FromArgb(140, 0, 0) : Color.Black;
+            lblMeasure.Text = problems.Count > 0 ? "! " + string.Join("   ! ", problems.Distinct().Take(3))
+                : (between ? $"Between the cursors: {F(a)}s .. {F(b)}s,  Δt = {F(b - a)}s,  1/Δt = {F(1 / (b - a))}Hz"
+                           : $"Over the time shown: {F(a)}s .. {F(b)}s") + "   (click a trace's name for a cursor; drag it)";
+            lvMeasure.BeginUpdate();
+            lvMeasure.Items.Clear();
+            measureColors.Clear();
+            foreach (var p in plots)
+                foreach (var t in p.Traces.Where(x => x.Label != null))
+                {
+                    double v1 = cur1.On ? At(t, cur1.X) : double.NaN, v2 = cur2.On ? At(t, cur2.X) : double.NaN;
+                    Window(t, a, b, out double avg, out double rms, out double min, out double max);
+                    lvMeasure.Items.Add(new ListViewItem(new[] { t.Label, F(v1), F(v2), double.IsNaN(v1) || double.IsNaN(v2) ? "" : F(v2 - v1), F(avg), F(rms), F(min), F(max), F(max - min) }));
+                    measureColors.Add(t.Color);
+                }
+            lvMeasure.EndUpdate();
+        }
+
+        /// <summary>Average and RMS over time (trapezoids, the window's edges interpolated), and the extremes, of a trace from a to b.</summary>
+        static void Window(PlotTrace t, double a, double b, out double avg, out double rms, out double min, out double max)
+        {
+            avg = rms = min = max = double.NaN;
+            if (!(b > a) || t.X.Length < 2) return;
+            var xs = new List<double> { a };
+            var ys = new List<double> { At(t, a) };
+            for (int i = 0; i < t.X.Length; i++) if (t.X[i] > a && t.X[i] < b) { xs.Add(t.X[i]); ys.Add(t.Y[i]); }
+            xs.Add(b); ys.Add(At(t, b));
+            double s1 = 0, s2 = 0;
+            for (int i = 1; i < xs.Count; i++)
+            {
+                double dx = xs[i] - xs[i - 1], ya = ys[i - 1], yb = ys[i];
+                s1 += dx * (ya + yb) / 2;
+                s2 += dx * (ya * ya + ya * yb + yb * yb) / 3;      // exact for a straight segment
+            }
+            avg = s1 / (b - a);
+            rms = Math.Sqrt(Math.Max(0, s2 / (b - a)));
+            min = ys.Where(v => !double.IsNaN(v)).DefaultIfEmpty(double.NaN).Min();
+            max = ys.Where(v => !double.IsNaN(v)).DefaultIfEmpty(double.NaN).Max();
+        }
+
+        // ------------------------------------------------------------------ pictures
 
         /// <summary>Every pane, one under the other, as one picture.</summary>
         public Bitmap Snapshot()
         {
-            var charts = panes.Where(p => p.Chart != null).Select(p => p.Chart).ToList();
-            if (charts.Count == 0) return null;
-            int w = Math.Max(800, charts[0].Width);
-            var parts = charts.Select(c => c.ToBitmap(w, Math.Max(200, c.Height))).ToList();
+            var plots = panes.Where(p => p.Plot != null).Select(p => p.Plot).ToList();
+            if (plots.Count == 0) return null;
+            int w = Math.Max(800, plots[0].Width);
+            var parts = plots.Select(c => c.ToBitmap(w, Math.Max(200, c.Height))).ToList();
             var bmp = new Bitmap(w, parts.Sum(p => p.Height), PixelFormat.Format24bppRgb);
             using (var g = Graphics.FromImage(bmp)) { int y = 0; foreach (var p in parts) { g.DrawImage(p, 0, y); y += p.Height; p.Dispose(); } }
             return bmp;
         }
-
-        public int SeriesCount => panes.Where(p => p.Chart != null).Sum(p => p.Chart.Series.Count(s => s.Kind == SeriesKind.Line));
-
-        /// <summary>Puts signals on the panes (one pane each), as a double-click would (tests, and the first look at a study).</summary>
-        public void Plot(IEnumerable<string> signals)
-        {
-            panes.Clear();
-            foreach (var s in signals) NewPane().Signals.Add(s);
-            if (panes.Count == 0) NewPane();
-            active = panes.Count - 1;
-            Draw();
-        }
-
-        /// <summary>The signals the panes show.</summary>
-        public List<string> Plotted => panes.SelectMany(p => p.Signals).ToList();
 
         void SaveImage()
         {

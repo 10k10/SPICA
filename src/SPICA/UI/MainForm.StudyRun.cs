@@ -29,9 +29,9 @@ namespace Spica.UI
 
             public string DefaultSchematic => f.project.Schematic;
 
+            /// <summary>The schematic as it is now (edited since it was opened, it is read again; unchanged, it comes from the cache).</summary>
             public Netlist NetlistFor(string asc)
             {
-                if (f.netlist != null && SameFile(asc, f.ascPath)) return f.netlist;
                 string key = Path.GetFullPath(asc);
                 if (netlists.TryGetValue(key, out var nl)) return nl;
                 string lt = f.settings.LtspicePath ?? "";
@@ -39,6 +39,7 @@ namespace Spica.UI
                 f.SetStatus("Reading " + Path.GetFileName(asc) + "...");
                 nl = SchematicLoader.Load(lt, key);
                 netlists[key] = nl;
+                if (SameFile(asc, f.project.Schematic)) { f.netlist = nl; f.ascPath = asc; }
                 return nl;
             }
 
@@ -173,7 +174,7 @@ namespace Spica.UI
             left.Controls.Add(tvResults);
             left.Resize += (s, e) => tvResults.SetBounds(8, 20, left.Width - 16, left.Height - 28);
 
-            waveView = new WaveformView { LtspicePath = () => settings.LtspicePath };
+            waveView = new WaveformView();
             lblNoResults = new Label
             {
                 Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false,
