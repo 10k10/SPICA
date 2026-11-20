@@ -139,7 +139,12 @@ namespace Spica.UI
             var r = BlockRect(b);
             var a = ToScreen(new PointF(r.X, r.Y)); var z = ToScreen(new PointF(r.Right, r.Bottom));
             if (a.X >= 0 && a.Y >= 0 && z.X <= Width && z.Y <= Height) return;
-            pan = new PointF(Width / 2f - (r.X + r.Width / 2f) * zoom, Height / 2f - (r.Y + r.Height / 2f) * zoom);
+            // the least move that brings it in, with a margin: the rest of the study stays where it was
+            const float M = 20;
+            float dx = z.X > Width ? Width - M - z.X : 0, dy = z.Y > Height ? Height - M - z.Y : 0;
+            if (a.X + dx < 0) dx = M - a.X;
+            if (a.Y + dy < 0) dy = M - a.Y;
+            pan = new PointF(pan.X + dx, pan.Y + dy);
             Invalidate();
         }
 

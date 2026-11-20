@@ -12,8 +12,10 @@ using Spica.Core.Graph;
 //   SPICA.Smoke --graph                 the study graph, the blocks, the project file, the campaign builder (no LTspice)
 //   SPICA.Smoke --studies <asc> <png>   the window on a schematic: its study, the inspector, what is missing (pictures)
 //   SPICA.Smoke --studyrun <asc> <png>  a study run with LTspice end to end: queue, waveforms, the cache (pictures)
+//   SPICA.Smoke --savesel <asc> <png>   a few signals saved: what the .meas read is forced, every signal plots (pictures)
+//   SPICA.Smoke --waves <dir> <signal>... every signal asked for is drawn from a campaign folder
 //   SPICA.Smoke --hittest               the window's edges and corners resize it
-//   SPICA.Smoke <asc> [runs] [instances threads]   the campaign engine alone on a schematic (SPICA_TEMP=-40,25,90  SPICA_PAIRED=1)
+//   SPICA.Smoke <asc> [runs] [instances threads]   the campaign engine alone on a schematic (SPICA_TEMP=-40,25,90  SPICA_PAIRED=1  SPICA_SAVE="V(out) I(R1)")
 static class Program
 {
     static int bad;
@@ -25,6 +27,8 @@ static class Program
         if (args.Length > 2 && args[0] == "--studies") return Window(args[1], args[2], Studies);
         if (args.Length > 2 && args[0] == "--studyrun") return Window(args[1], args[2], StudyRun);
         if (args.Length > 0 && args[0] == "--hittest") return HitTest();
+        if (args.Length > 2 && args[0] == "--savesel") return Window(args[1], args[2], SaveSel);
+        if (args.Length > 2 && args[0] == "--waves") return Waves(args[1], args.Skip(2).ToList());
         return Engine(args);
     }
 
@@ -324,6 +328,73 @@ static class Program
         });
     }
 
+    /// <summary>--savesel asc png: a few signals saved; every signal the .raw holds can be plotted.</summary>
+    static void SaveSel(W w, Action close)
+    {
+        var st = ((SpicaProject)w.Get("project")).Studies.Single();
+        var simB = st.Blocks.First(b => b.Kind == "Simulate").Set("Save", "I(Rload) I(Cout) V(out)");
+        w.Call("StudyEdited");
+        // the Simulate's list: what the .meas read is ticked and stays ticked
+        ((Spica.UI.StudyCanvas)w.Get("studyCanvas")).Select(simB);
+        w.Pump(10);
+        var list = ((Panel)w.Get("inspectorBody")).Controls.OfType<CheckedListBox>().Single();
+        var forced = list.Items.Cast<string>().Where(x => x.EndsWith("(.meas)")).ToList();
+        Check(forced.Count == 3 && forced.All(x => list.CheckedItems.Contains(x)), "the signals the .meas read are ticked: " + string.Join(", ", forced));
+        list.SetItemChecked(0, false);
+        w.Pump(5);
+        Check(list.GetItemChecked(0) && simB.Get("Save") == "I(Rload) I(Cout) V(out)", "and cannot be cleared; Save keeps only the user's: " + simB.Get("Save"));
+        w.Shot(w.Form, "simulate");
+        w.Call("RunStudy");
+        var poll = new System.Windows.Forms.Timer { Interval = 500 };
+        poll.Tick += (s, e) =>
+        {
+            if ((bool)w.Prop("StudyRunning")) return;
+            poll.Stop();
+            w.Pump(20);
+            var wv = (Spica.UI.WaveformView)w.Get("waveView");
+            var names = w.Wave<ListBox>("lbSignals").Items.Cast<string>().ToList();
+            Check(wv.Plotted.SequenceEqual(new[] { "I(Rload)", "I(Cout)", "V(out)" }), "the first look plots the signals the user saved: " + string.Join(" ", wv.Plotted));
+            Check(names.Count == 5, "listed: the saved ones and the ones the .meas read: " + string.Join(" ", names));
+            foreach (var sig in names)
+            {
+                int before = wv.SeriesCount;
+                typeof(Spica.UI.WaveformView).GetMethod("AddSignal", Flags).Invoke(wv, new object[] { sig, true });
+                w.Pump(5);
+                Check(wv.SeriesCount > before, $"{sig} added: {before} -> {wv.SeriesCount} traces");
+            }
+            var stack = (Panel)typeof(Spica.UI.WaveformView).GetField("stack", Flags).GetValue(wv);
+            var last = stack.Controls.Cast<Control>().OrderBy(c => c.Top).Last();
+            Check(last.Top >= 0 && last.Bottom <= stack.ClientSize.Height + 2, $"the pane added last is in view ({last.Top}..{last.Bottom} of {stack.ClientSize.Height})");
+            Console.WriteLine(bad == 0 ? "SAVE SELECTION: all ok" : $"SAVE SELECTION: {bad} wrong");
+            w.Shot(w.Form, "all");
+            close();
+        };
+        poll.Start();
+    }
+
+    /// <summary>--waves campaignDir signal...: every signal asked for is drawn, from a campaign folder.</summary>
+    static int Waves(string dir, List<string> signals)
+    {
+        var form = new Form { Width = 1200, Height = 800 };
+        var wv = new Spica.UI.WaveformView();
+        form.Controls.Add(wv);
+        form.Shown += (s, e) =>
+        {
+            var set = new RunSet { Condition = new Condition { Name = "campaign" }, Dir = dir };
+            wv.ShowStudy(new Spica.UI.StudyRunData { Sets = new List<RunSet> { set } });
+            foreach (var sig in signals)
+            {
+                wv.Plot(new[] { sig });
+                Application.DoEvents();
+                var info = (Label)typeof(Spica.UI.WaveformView).GetField("lblInfo", Flags).GetValue(wv);
+                Check(wv.SeriesCount > 0, $"{sig}: {wv.SeriesCount} traces  {info.Text.Replace('\n', ' ')}");
+            }
+            form.Close();
+        };
+        Application.Run(form);
+        return bad;
+    }
+
     // =====================================================================================
     //  --hittest
     // =====================================================================================
@@ -390,6 +461,7 @@ static class Program
         {
             LtspiceExe = lt, AscPath = asc, Netlist = nl, Manual = manual, Kind = RunKind.MonteCarlo, Runs = runs, Seed = 12345,
             Paired = Environment.GetEnvironmentVariable("SPICA_PAIRED") == "1", Temps = temps.Count > 0 ? temps : null,
+            Save = (Environment.GetEnvironmentVariable("SPICA_SAVE") ?? "").Split(' ').Where(x => x.Length > 0).ToList(),
             OutputDir = Path.Combine(Path.GetTempPath(), "SPICA", "smoke_" + DateTime.Now.ToString("HHmmss")),
         };
         var options = CampaignBuilder.Build(req, out string error) ?? throw new Exception(error);

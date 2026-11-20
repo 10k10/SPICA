@@ -552,7 +552,7 @@ namespace Spica.UI
             ["MonteCarlo.Temperature"] = "Empty: as in the schematic. Several, separated by ;  (e.g. -55; 25; 85): every run at each.",
             ["WorstCase.Sigma"] = "Gaussian tolerances are pushed to ± this many sigma; flat ones to their limits.",
             ["WorstCase.Temperature"] = "Empty: as in the schematic. Several, separated by ;  (e.g. -55; 25; 85): every combination at each.",
-            ["Simulate.Save"] = "The signals kept in the .raw files, to plot on the Results tab. None ticked: every signal (larger files).",
+            ["Simulate.Save"] = "The signals kept in the .raw files, to plot on the Results tab. The ones the schematic's .meas read are always kept. None other ticked: every signal (larger files).",
         };
 
         /// <summary>
@@ -623,14 +623,22 @@ namespace Spica.UI
                 }
                 if (kk == "Simulate.Save" && NetlistOf(st) is Netlist sn)
                 {
-                    // the circuit's signals, ticked when saved (what is set but not in the circuit stays, at the end)
+                    // the circuit's signals, ticked when saved: first the ones its .meas read, always saved (ticked, cannot be
+                    // cleared), then the others; what is set but not in the circuit stays, at the end
                     Text(PropLabels[key] + ":");
+                    const string Forced = "   (.meas)";
                     var now = val.Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-                    var choices = sn.Nodes.Select(n => $"V({n})").Concat(sn.Currents).ToList();
-                    var items = choices.Concat(now.Where(x => !choices.Contains(x, StringComparer.OrdinalIgnoreCase))).ToList();
+                    var forced = sn.RequiredSignals.ToList();
+                    var choices = sn.Nodes.Select(n => $"V({n})").Concat(sn.Currents).Where(x => !forced.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
+                    var ticked = now.Where(x => !forced.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
+                    var items = forced.Select(x => x + Forced).Concat(ticked).Concat(choices.Where(x => !ticked.Contains(x, StringComparer.OrdinalIgnoreCase))).ToList();
                     var list = new CheckedListBox { Location = new Point(6, y), Size = new Size(w, Math.Min(200, 20 + 16 * items.Count)), CheckOnClick = true, Font = Win98.Font, IntegralHeight = false, HorizontalScrollbar = true };
-                    foreach (var it in items) list.Items.Add(it, now.Contains(it, StringComparer.OrdinalIgnoreCase));
-                    list.ItemCheck += (s, e) => host.BeginInvoke(new Action(() => SetVal(string.Join(" ", list.CheckedItems.Cast<string>()))));
+                    foreach (var it in items) list.Items.Add(it, it.EndsWith(Forced) || now.Contains(it, StringComparer.OrdinalIgnoreCase));
+                    list.ItemCheck += (s, e) =>
+                    {
+                        if (((string)list.Items[e.Index]).EndsWith(Forced)) { e.NewValue = CheckState.Checked; return; }
+                        host.BeginInvoke(new Action(() => SetVal(string.Join(" ", list.CheckedItems.Cast<string>().Where(x => !x.EndsWith(Forced))))));
+                    };
                     host.Controls.Add(list);
                     y += list.Height + 4;
                     Hint(key, false);

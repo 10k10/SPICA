@@ -41,7 +41,7 @@ and runs nothing.
 | Analysis | **Nominal** | One run, every tolerance at its nominal value. |
 | | **Monte Carlo** | N units drawn from the tolerances (runs, seed, paired). |
 | | **Worst Case** | The nominal unit, then every combination of the tolerance edges: 1 + 2^n runs. |
-| Simulation | **Simulate** | Runs the circuit under every analysis wired into it, one campaign each. Save: the signals kept in the `.raw` (none ticked: all). |
+| Simulation | **Simulate** | Runs the circuit under every analysis wired into it, one campaign each. Save: the signals kept in the `.raw`; the ones the schematic's `.meas` read are always kept (ticked, marked `(.meas)`); none other ticked: all. |
 
 Every analysis has a **Temperature**: empty for the schematic's own, one value, or several (`-55; 25; 85`):
 every run at each.
@@ -118,6 +118,8 @@ exe; building it on its own checks that it depends on no window code. The design
 - `--graph`: the blocks, the wiring, the executors, the cache, the campaign builder and the project file (no LTspice);
 - `--studies <asc> <png>`: the window on a schematic, with pictures;
 - `--studyrun <asc> <png>`: a study run with LTspice end to end, the waveforms and the cache;
+- `--savesel <asc> <png>`: a few signals saved: the `.meas` ones forced, every signal in the `.raw` plots, the new pane in view;
+- `--waves <dir> <signal>...`: every signal asked for is drawn from a campaign folder;
 - `--hittest`: the window's edges resize it;
 - `<asc> [runs] [instances threads]`: the campaign engine alone (`SPICA_TEMP=-40,25,90`, `SPICA_PAIRED=1`).
 

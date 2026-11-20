@@ -19,6 +19,8 @@ namespace Spica.UI
         public DateTime Ended = DateTime.Now;
         public List<RunSet> Sets = new List<RunSet>();
         public List<string> Problems = new List<string>();
+        /// <summary>The signals its Simulate blocks were asked to save (the first look plots them).</summary>
+        public List<string> Saved = new List<string>();
     }
 
     /// <summary>
@@ -422,10 +424,12 @@ namespace Spica.UI
         {
             var charts = panes.Where(p => p.Chart != null).Select(p => p.Chart).ToList();
             if (charts.Count == 0) return;
-            int avail = stack.ClientSize.Height, each = Math.Max(170, (avail - 4) / charts.Count);
+            // every pane in view while they fit at a readable height; past that the stack scrolls, to the pane chosen
+            int avail = stack.ClientSize.Height, each = Math.Max(120, (avail - 4) / charts.Count);
             int w = stack.ClientSize.Width - (each * charts.Count > avail ? SystemInformation.VerticalScrollBarWidth : 0);
             int y = -stack.VerticalScroll.Value;
             foreach (var c in charts) { c.SetBounds(0, y, Math.Max(100, w), each - 2); y += each; }
+            if (active < panes.Count && panes[active].Chart != null) stack.ScrollControlIntoView(panes[active].Chart);
         }
 
         // ------------------------------------------------------------------ actions

@@ -130,6 +130,7 @@ namespace Spica.UI
             var run = new StudyRunData
             {
                 Study = st.Name, Problems = failed,
+                Saved = st.Blocks.Where(b => b.Kind == BlockKind.Simulate).SelectMany(SaveList).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
                 Sets = studyRunner.Results.Values.SelectMany(x => x.Values).OfType<List<RunSet>>().SelectMany(x => x).Distinct().ToList(),
             };
             int shown = run.Sets.Count(s => s.Dir != null);
@@ -217,12 +218,13 @@ namespace Spica.UI
             waveView.Visible = true;
             bool first = waveView.Plotted.Count == 0;
             waveView.ShowStudy(r, set);
-            // the first look: the signals the circuit's .meas use, else its first nets, one pane each (at most three)
+            // the first look, one pane each (at most four): the signals the Simulate saves, else the ones the .meas read, else the first nets
             if (first)
             {
                 var nl = set?.Circuit?.Netlist ?? r.Sets.FirstOrDefault()?.Circuit?.Netlist;
-                var sigs = nl == null ? new List<string>() : nl.RequiredSignals.Concat(nl.Nodes.Select(n => $"V({n})")).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList();
-                waveView.Plot(sigs);
+                var sigs = r.Saved.Count > 0 ? r.Saved
+                         : nl == null ? new List<string>() : nl.RequiredSignals.Concat(nl.Nodes.Select(n => $"V({n})")).ToList();
+                waveView.Plot(sigs.Distinct(StringComparer.OrdinalIgnoreCase).Take(4));
             }
             tabs.SelectedIndex = TabResults;
         }
