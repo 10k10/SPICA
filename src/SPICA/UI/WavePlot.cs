@@ -122,7 +122,15 @@ namespace Spica.UI
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Render(e.Graphics, ClientRectangle, true);
+            // a pane that cannot be drawn says so and goes back to the whole simulation: it never turns into a red cross
+            try { Render(e.Graphics, ClientRectangle, true); }
+            catch (Exception ex)
+            {
+                e.Graphics.FillRectangle(Brushes.White, ClientRectangle);
+                TextRenderer.DrawText(e.Graphics, "This pane could not be drawn (" + ex.Message + "): back to the whole simulation.", Font, ClientRectangle,
+                    Win98.Shadow, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                if (view.HasValue) BeginInvoke(new Action(ResetZoom));
+            }
             if (Chosen) using (var p = new Pen(Navy, 3)) e.Graphics.DrawRectangle(p, 1, 1, Width - 3, Height - 3);
         }
 
@@ -240,21 +248,23 @@ namespace Spica.UI
         {
             using (var grid = new Pen(Grid))
             {
-                foreach (var v in Ticks(x0, x1, Math.Max(2, plot.Width / 80)))
+                var xt = Ticks(x0, x1, Math.Max(2, plot.Width / 80)).ToList();
+                foreach (var v in xt)
                 {
                     float x = MapX(v);
                     g.DrawLine(grid, x, plot.Top, x, plot.Bottom);
                     g.DrawLine(Pens.Black, x, plot.Bottom, x, plot.Bottom + 4);
-                    string s = Fmt(v);
+                    string s = TickText(v, xt);
                     var sz = TextRenderer.MeasureText(s, Font);
                     TextRenderer.DrawText(g, s, Font, new Point((int)x - sz.Width / 2, plot.Bottom + 5), Color.Black);
                 }
-                foreach (var v in Ticks(y0, y1, Math.Max(2, plot.Height / 30)))
+                var yt = Ticks(y0, y1, Math.Max(2, plot.Height / 30)).ToList();
+                foreach (var v in yt)
                 {
                     float y = MapY(v);
                     g.DrawLine(grid, plot.Left, y, plot.Right, y);
                     g.DrawLine(Pens.Black, plot.Left - 4, y, plot.Left, y);
-                    string s = Fmt(v);
+                    string s = TickText(v, yt);
                     var sz = TextRenderer.MeasureText(s, Font);
                     TextRenderer.DrawText(g, s, Font, new Point(plot.Left - 6 - sz.Width, (int)y - sz.Height / 2), Color.Black);
                 }
@@ -272,26 +282,65 @@ namespace Spica.UI
             }
         }
 
+        /// <summary>
+        /// A trace as lines, each segment clipped to the plot (a little outside it) in double precision before it
+        /// becomes pixels: zoomed far in, the points off the plot are millions of pixels away, more than GDI+ can draw.
+        /// Only the segments in the time shown are looked at; a NaN value breaks the line.
+        /// </summary>
         void DrawTrace(Graphics g, PlotTrace t)
         {
-            var pts = new List<PointF>();
             int n = Math.Min(t.X.Length, t.Y.Length);
+            if (n < 2) return;
+            double sx = plot.Width / (x1 - x0), sy = plot.Height / (y1 - y0);
+            double PX(double x) => plot.Left + (x - x0) * sx;
+            double PY(double y) => plot.Bottom - (y - y0) * sy;
+            double l = plot.Left - 4, r = plot.Right + 4, top = plot.Top - 4, bot = plot.Bottom + 4;
+            // the first segment that can reach the time shown (the time only grows)
+            int lo = Array.BinarySearch(t.X, 0, n, x0);
+            int start = Math.Max(0, (lo < 0 ? ~lo : lo) - 1);
+            var pts = new List<PointF>();
             using (var p = new Pen(t.Color, 1.6f) { LineJoin = LineJoin.Round })
-                for (int i = 0; i <= n; i++)
+            {
+                void Flush() { if (pts.Count > 1) g.DrawLines(p, pts.ToArray()); pts.Clear(); }
+                for (int i = start; i + 1 < n; i++)
                 {
-                    if (i < n && Ok(t.X[i]) && Ok(t.Y[i])) { pts.Add(new PointF(MapX(t.X[i]), MapY(t.Y[i]))); continue; }
-                    if (i < n && !Ok(t.X[i])) continue;       // a NaN value breaks the line
-                    if (pts.Count > 1) g.DrawLines(p, pts.ToArray());
-                    pts.Clear();
+                    if (t.X[i] > x1) break;
+                    if (!Ok(t.X[i]) || !Ok(t.Y[i]) || !Ok(t.X[i + 1]) || !Ok(t.Y[i + 1])) { Flush(); continue; }
+                    double ax = PX(t.X[i]), ay = PY(t.Y[i]), bx = PX(t.X[i + 1]), by = PY(t.Y[i + 1]);
+                    if (!Clip(ref ax, ref ay, ref bx, ref by, l, top, r, bot)) { Flush(); continue; }
+                    var a = new PointF((float)ax, (float)ay);
+                    if (pts.Count == 0 || pts[pts.Count - 1] != a) { Flush(); pts.Add(a); }
+                    pts.Add(new PointF((float)bx, (float)by));
                 }
+                Flush();
+            }
+        }
+
+        /// <summary>Liang-Barsky: the part of a segment inside a rectangle; false when none of it is.</summary>
+        static bool Clip(ref double ax, ref double ay, ref double bx, ref double by, double l, double top, double r, double bot)
+        {
+            double dx = bx - ax, dy = by - ay, t0 = 0, t1 = 1;
+            bool Edge(double pp, double q)
+            {
+                if (pp == 0) return q >= 0;
+                double u = q / pp;
+                if (pp < 0) { if (u > t1) return false; if (u > t0) t0 = u; }
+                else { if (u < t0) return false; if (u < t1) t1 = u; }
+                return true;
+            }
+            if (!Edge(-dx, ax - l) || !Edge(dx, r - ax) || !Edge(-dy, ay - top) || !Edge(dy, bot - ay)) return false;
+            double nax = ax + t0 * dx, nay = ay + t0 * dy;
+            bx = ax + t1 * dx; by = ay + t1 * dy;
+            ax = nax; ay = nay;
+            return true;
         }
 
         void DrawCursor(Graphics g, PlotCursor c)
         {
-            if (!Ok(c.X)) return;
+            if (!Ok(c.X) || c.X < x0 || c.X > x1) return;
             float x = MapX(c.X);
             using (var p = new Pen(c.Color, 1) { DashStyle = DashStyle.Dash }) g.DrawLine(p, x, plot.Top, x, plot.Bottom);
-            if (!Ok(c.Y)) return;
+            if (!Ok(c.Y) || c.Y < y0 || c.Y > y1) return;
             float y = MapY(c.Y);
             using (var p = new Pen(c.Color, 1) { DashStyle = DashStyle.Dash }) g.DrawLine(p, plot.Left, y, plot.Right, y);
             using (var p = new Pen(c.Color, 2)) g.DrawRectangle(p, x - 4, y - 4, 8, 8);
@@ -305,6 +354,24 @@ namespace Spica.UI
             double mag = Math.Pow(10, Math.Floor(Math.Log10(raw)));
             double step = new[] { 1, 2, 2.5, 5, 10 }.Select(m => m * mag).First(st => st >= raw);
             for (double v = Math.Ceiling(a / step) * step; v <= b + step * 1e-9; v += step) yield return Math.Abs(v) < step * 1e-9 ? 0 : v;
+        }
+
+        /// <summary>
+        /// A tick's number with as many decimals as the step between ticks needs, with the SI prefix of the largest
+        /// tick: zoomed far in, 140.70012m, 140.70014m... instead of the same 0.1407 five times.
+        /// </summary>
+        static string TickText(double v, List<double> ticks) =>
+            ticks.Count < 2 ? Fmt(v) : Fmt(v, ticks[1] - ticks[0], ticks.Max(Math.Abs));
+
+        /// <summary>A value told apart from values <paramref name="step"/> away (the SI prefix of <paramref name="big"/>).</summary>
+        public static string Fmt(double v, double step, double big)
+        {
+            if (!(step > 0) || big == 0 || double.IsNaN(v)) return Fmt(v);
+            string[] pre = { "f", "p", "n", "µ", "m", "", "k", "M", "G", "T" };
+            int e3 = Math.Max(-5, Math.Min(4, (int)Math.Floor(Math.Log10(big) / 3)));
+            double unit = Math.Pow(1000, e3);
+            int dec = Math.Max(0, Math.Min(12, (int)Math.Ceiling(-Math.Log10(step / unit) - 1e-9)));
+            return (v / unit).ToString("F" + dec, CultureInfo.InvariantCulture) + pre[e3 + 5];
         }
 
         /// <summary>A value with its SI prefix (1.5m, 12k, 0.25).</summary>
@@ -441,6 +508,10 @@ namespace Spica.UI
         void SetView(double xa, double xb, double ya, double yb)
         {
             if (!(xb > xa) || !(yb > ya) || double.IsInfinity(xb - xa) || double.IsInfinity(yb - ya)) return;
+            double minX = limits.HasValue ? (limits.Value.Value - limits.Value.Key) * 1e-9 : 1e-15;
+            if (xb - xa < minX) { double m = (xa + xb) / 2; xa = m - minX / 2; xb = m + minX / 2; }
+            double minY = Math.Max(1e-15, Math.Max(Math.Abs(ya), Math.Abs(yb)) * 1e-9);
+            if (yb - ya < minY) { double m = (ya + yb) / 2; ya = m - minY / 2; yb = m + minY / 2; }
             if (limits.HasValue)
             {
                 double lo = limits.Value.Key, hi = limits.Value.Value, span = Math.Min(xb - xa, hi - lo);

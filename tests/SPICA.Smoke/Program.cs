@@ -443,6 +443,18 @@ static class Program
             Check(pl0.ViewX0 >= -1e-12 && pl0.ViewX1 <= 0.3 + 1e-9 && w.Plots().All(x => Math.Abs(x.ViewX1 - pl0.ViewX1) < 1e-9), $"zoomed out 15 times: the time stays 0 .. 0.3 s ({pl0.ViewX0} .. {pl0.ViewX1}), every pane alike");
             for (int z = 0; z < 6; z++) wheel.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.None, 0, pl0.Width / 2, pl0.Height / 2, 120) });
             w.Pump(3);
+            // zoomed in as far as the wheel goes, on a point and on a sharp edge: every pane still draws
+            for (int z = 0; z < 200; z++) wheel.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.None, 0, pl0.Width / 2, pl0.Height / 2, 120) });
+            w.Pump(3);
+            bool drew = true;
+            foreach (var pl in w.Plots()) using (var b = new System.Drawing.Bitmap(Math.Max(10, pl.Width), Math.Max(10, pl.Height)))
+                try { pl.DrawToBitmap(b, new System.Drawing.Rectangle(0, 0, b.Width, b.Height)); } catch { drew = false; }
+            var shownSpan = pl0.ViewX1 - pl0.ViewX0;
+            Check(drew && shownSpan >= 0.3e-9 * 0.99, $"zoomed in 200 times: every pane draws, the time shown stays at least a billionth of the run ({shownSpan:G3} s)");
+            w.Shot(w.Form, "deepzoom");
+            typeof(Spica.UI.WaveformView).GetMethod("ResetZoom", Flags).Invoke(wv, null);
+            for (int z = 0; z < 6; z++) wheel.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.None, 0, pl0.Width / 2, pl0.Height / 2, 120) });
+            w.Pump(3);
             bool zoomed = pl0.ViewX1 - pl0.ViewX0 < 0.2;
             typeof(Spica.UI.WaveformView).GetMethod("ResetZoom", Flags).Invoke(wv, null);
             w.Pump(3);

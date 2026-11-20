@@ -628,10 +628,12 @@ namespace Spica.UI
             else if (plots.Count > 0) { a = plots[0].ViewX0; b = plots[0].ViewX1; }
             else { a = b = double.NaN; }
             string F(double v) => WavePlot.Fmt(v);
+            // the window's ends, told apart however far it is zoomed in
+            string T(double v) => WavePlot.Fmt(v, (b - a) / 100, Math.Max(Math.Abs(a), Math.Abs(b)));
             lblMeasure.ForeColor = problems.Count > 0 ? Color.FromArgb(140, 0, 0) : Color.Black;
             lblMeasure.Text = problems.Count > 0 ? "! " + string.Join("   ! ", problems.Distinct().Take(3))
-                : (between ? $"Between the cursors: {F(a)}s .. {F(b)}s,  Δt = {F(b - a)}s,  1/Δt = {F(1 / (b - a))}Hz"
-                           : $"Over the time shown: {F(a)}s .. {F(b)}s") + "   (click a trace's name for a cursor; drag it)";
+                : (between ? $"Between the cursors: {T(a)}s .. {T(b)}s,  Δt = {F(b - a)}s,  1/Δt = {F(1 / (b - a))}Hz"
+                           : $"Over the time shown: {T(a)}s .. {T(b)}s") + "   (click a trace's name for a cursor; drag it)";
             lvMeasure.BeginUpdate();
             lvMeasure.Items.Clear();
             measureColors.Clear();
