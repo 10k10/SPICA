@@ -33,9 +33,15 @@ namespace Spica.UI
     /// </summary>
     public sealed class WavePlot : Control
     {
-        public static readonly Color Navy = Color.FromArgb(0, 0, 128), Maroon = Color.FromArgb(128, 0, 0), Green = Color.FromArgb(0, 128, 0),
-            Teal = Color.FromArgb(0, 128, 128), Purple = Color.FromArgb(128, 0, 128), Olive = Color.FromArgb(128, 128, 0),
-            Blue = Color.FromArgb(0, 0, 255), Fuchsia = Color.FromArgb(255, 0, 255), Silver = Color.FromArgb(192, 192, 192);
+        public static readonly Color Navy = Color.FromArgb(0, 0, 128), Teal = Color.FromArgb(0, 128, 128), Purple = Color.FromArgb(128, 0, 128),
+            Grid = Color.FromArgb(222, 222, 222);
+
+        /// <summary>The colours of the traces, in order: strong and far apart on white.</summary>
+        public static readonly Color[] Palette =
+        {
+            Color.FromArgb(0, 0, 220), Color.FromArgb(210, 0, 0), Color.FromArgb(0, 145, 0), Color.FromArgb(190, 0, 190),
+            Color.FromArgb(230, 115, 0), Color.FromArgb(0, 140, 150), Color.FromArgb(120, 70, 20), Color.FromArgb(100, 0, 210),
+        };
 
         public readonly List<PlotTrace> Traces = new List<PlotTrace>();
         public readonly List<PlotCursor> Cursors = new List<PlotCursor>();
@@ -45,6 +51,8 @@ namespace Spica.UI
 
         /// <summary>A trace's name clicked (left or right button).</summary>
         public event Action<PlotTrace, MouseEventArgs> LabelClicked;
+        /// <summary>A trace's name dragged out (the owner starts the drag and drop).</summary>
+        public event Action<PlotTrace> LabelDragged;
         /// <summary>A right-click on the plot, not on a name.</summary>
         public event Action<Point> MenuRequested;
         /// <summary>A cursor dragged to a new X.</summary>
@@ -54,7 +62,10 @@ namespace Spica.UI
 
         Rectangle plot;
         double x0, x1, y0, y1;
-        Point? mouse, dragFrom, panFrom;
+        Point? mouse, dragFrom, panFrom, labelDown;
+        PlotTrace labelPressed;
+        /// <summary>The whole simulation: the time can be zoomed into it, never out of it.</summary>
+        KeyValuePair<double, double>? limits;
         Rectangle dragBox;
         PlotCursor dragging;
         (double X0, double X1, double Y0, double Y1)? view, panStart;
@@ -85,11 +96,17 @@ namespace Spica.UI
         }
 
         /// <summary>The time axis from 0 to the end of the simulation, whatever the data drawn.</summary>
-        public void FixX(double a, double b) { if (b > a) fixedX = new KeyValuePair<double, double>(a, b); Invalidate(); }
+        public void FixX(double a, double b)
+        {
+            if (!(b > a)) return;
+            fixedX = limits = new KeyValuePair<double, double>(a, b);
+            Invalidate();
+        }
 
         public void ResetZoom()
         {
             view = null;
+            if (limits.HasValue) fixedX = limits;
             Invalidate();
             XViewChanged?.Invoke(this, EventArgs.Empty);
         }
@@ -127,12 +144,14 @@ namespace Spica.UI
             DrawAxes(g, bounds);
             var clip = g.Clip;
             g.SetClip(Rectangle.Inflate(plot, -1, -1));
+            g.SmoothingMode = SmoothingMode.AntiAlias;
             foreach (var t in Traces) DrawTrace(g, t);
+            g.SmoothingMode = SmoothingMode.None;
             foreach (var c in Cursors) DrawCursor(g, c);
             g.Clip = clip;
             g.DrawRectangle(Pens.Black, plot);
             foreach (var l in labels)
-                TextRenderer.DrawText(g, l.Value.Label, Font, l.Key, l.Value.Color, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                TextRenderer.DrawText(g, l.Value.Label, Win98.BoldFont, l.Key, l.Value.Color, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             foreach (var c in Cursors.Where(c => Ok(c.X) && c.X >= x0 && c.X <= x1))
             {
                 // the cursor's number above the plot, on its line
@@ -167,7 +186,7 @@ namespace Spica.UI
             labels.Clear();
             var items = Traces.Where(t => !string.IsNullOrEmpty(t.Label)).ToList();
             if (items.Count == 0) return 0;
-            var widths = items.Select(t => TextRenderer.MeasureText(t.Label, Font, Size.Empty, TextFormatFlags.NoPrefix).Width + 16).ToList();
+            var widths = items.Select(t => TextRenderer.MeasureText(t.Label, Win98.BoldFont, Size.Empty, TextFormatFlags.NoPrefix).Width + 18).ToList();
             int max = Math.Max(60, bounds.Width - 70), i = 0, rows = 0;
             while (i < items.Count)
             {
@@ -176,12 +195,12 @@ namespace Spica.UI
                 int x = bounds.Left + 62 + Math.Max(0, (bounds.Width - 76 - w) / 2);
                 for (; i < j; i++)
                 {
-                    labels.Add(new KeyValuePair<Rectangle, PlotTrace>(new Rectangle(x, y + rows * 15, widths[i] - 8, 15), items[i]));
+                    labels.Add(new KeyValuePair<Rectangle, PlotTrace>(new Rectangle(x, y + rows * 16, widths[i] - 8, 16), items[i]));
                     x += widths[i];
                 }
                 rows++;
             }
-            return rows * 15 + 12;     // and room for the cursors' numbers
+            return rows * 16 + 12;     // and room for the cursors' numbers
         }
 
         void ComputeRange()
@@ -204,6 +223,14 @@ namespace Spica.UI
         }
 
         static bool Ok(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+
+        /// <summary>The range of the values drawn (null: none).</summary>
+        (double Lo, double Hi)? DataY()
+        {
+            double a = double.PositiveInfinity, b = double.NegativeInfinity;
+            foreach (var t in Traces) foreach (var v in t.Y) if (Ok(v)) { a = Math.Min(a, v); b = Math.Max(b, v); }
+            return b > a ? (a, b) : ((double, double)?)null;
+        }
         float MapX(double x) => (float)(plot.Left + (x - x0) / (x1 - x0) * plot.Width);
         float MapY(double y) => (float)(plot.Bottom - (y - y0) / (y1 - y0) * plot.Height);
         double InvX(int px) => x0 + (px - plot.Left) * (x1 - x0) / plot.Width;
@@ -211,7 +238,7 @@ namespace Spica.UI
 
         void DrawAxes(Graphics g, Rectangle bounds)
         {
-            using (var grid = new Pen(Silver) { DashStyle = DashStyle.Dot })
+            using (var grid = new Pen(Grid))
             {
                 foreach (var v in Ticks(x0, x1, Math.Max(2, plot.Width / 80)))
                 {
@@ -249,7 +276,7 @@ namespace Spica.UI
         {
             var pts = new List<PointF>();
             int n = Math.Min(t.X.Length, t.Y.Length);
-            using (var p = new Pen(t.Color, 1))
+            using (var p = new Pen(t.Color, 1.6f) { LineJoin = LineJoin.Round })
                 for (int i = 0; i <= n; i++)
                 {
                     if (i < n && Ok(t.X[i]) && Ok(t.Y[i])) { pts.Add(new PointF(MapX(t.X[i]), MapY(t.Y[i]))); continue; }
@@ -315,7 +342,7 @@ namespace Spica.UI
             if (e.Button == MouseButtons.Left)
             {
                 var t = LabelAt(e.Location);
-                if (t != null) { LabelClicked?.Invoke(t, e); return; }
+                if (t != null) { labelPressed = t; labelDown = e.Location; return; }
                 dragging = CursorAt(e.Location);
                 if (dragging == null && plot.Contains(e.Location)) { dragFrom = e.Location; dragBox = Rectangle.Empty; }
             }
@@ -331,6 +358,13 @@ namespace Spica.UI
         {
             base.OnMouseMove(e);
             mouse = e.Location;
+            if (labelPressed != null && labelDown.HasValue && (Math.Abs(e.X - labelDown.Value.X) > 4 || Math.Abs(e.Y - labelDown.Value.Y) > 4))
+            {
+                var t = labelPressed;
+                labelPressed = null; labelDown = null;
+                LabelDragged?.Invoke(t);
+                return;
+            }
             if (dragging != null)
             {
                 dragging.X = Math.Max(x0, Math.Min(x1, InvX(Math.Max(plot.Left, Math.Min(plot.Right, e.X)))));
@@ -362,6 +396,13 @@ namespace Spica.UI
                 var t = LabelAt(e.Location);
                 if (t != null) LabelClicked?.Invoke(t, e);
                 else MenuRequested?.Invoke(e.Location);
+                return;
+            }
+            if (labelPressed != null)
+            {
+                var t = labelPressed;
+                labelPressed = null; labelDown = null;
+                LabelClicked?.Invoke(t, e);
                 return;
             }
             if (dragging != null) { dragging = null; return; }
@@ -400,6 +441,19 @@ namespace Spica.UI
         void SetView(double xa, double xb, double ya, double yb)
         {
             if (!(xb > xa) || !(yb > ya) || double.IsInfinity(xb - xa) || double.IsInfinity(yb - ya)) return;
+            if (limits.HasValue)
+            {
+                double lo = limits.Value.Key, hi = limits.Value.Value, span = Math.Min(xb - xa, hi - lo);
+                if (xa < lo) xa = lo;
+                if (xa + span > hi) xa = hi - span;
+                xb = xa + span;
+            }
+            var data = DataY();
+            if (data.HasValue && yb - ya > 4 * (data.Value.Hi - data.Value.Lo))
+            {
+                double mid = (ya + yb) / 2, half = 2 * (data.Value.Hi - data.Value.Lo);
+                ya = mid - half; yb = mid + half;
+            }
             view = (xa, xb, ya, yb);
             x0 = xa; x1 = xb;
             Invalidate();

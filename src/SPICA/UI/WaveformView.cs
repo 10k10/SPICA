@@ -58,8 +58,8 @@ namespace Spica.UI
         readonly Label lblMeasure;
         readonly Win98ListView lvMeasure;
         readonly List<Pane> panes = new List<Pane>();
-        readonly CursorAt cur1 = new CursorAt { Name = "1", Color = Color.FromArgb(200, 0, 0) };
-        readonly CursorAt cur2 = new CursorAt { Name = "2", Color = Color.FromArgb(0, 90, 200) };
+        readonly CursorAt cur1 = new CursorAt { Name = "1", Color = Color.FromArgb(40, 40, 40) };
+        readonly CursorAt cur2 = new CursorAt { Name = "2", Color = Color.FromArgb(110, 110, 110) };
         int active;
         bool filling, linking;
         StudyRunData data;
@@ -71,11 +71,10 @@ namespace Spica.UI
         readonly List<Color> measureColors = new List<Color>();      // the colour of each row's trace name
 
         public const int MaxOverlay = 50;
-        static readonly Color[] Palette =
-        {
-            WavePlot.Navy, Color.FromArgb(200, 70, 0), WavePlot.Green, WavePlot.Purple, WavePlot.Teal,
-            WavePlot.Maroon, WavePlot.Olive, WavePlot.Blue, WavePlot.Fuchsia,
-        };
+        // what is dragged: a signal from the list, or a trace's name from a pane ("pane|expression")
+        const string SignalPrefix = "spica-signal:", TracePrefix = "spica-trace:";
+        bool dragCancelled;
+        static Color[] Palette => WavePlot.Palette;
 
         public WaveformView()
         {
@@ -89,26 +88,34 @@ namespace Spica.UI
             var lblRuns = new Label { Text = "&Runs:", AutoSize = true };
             cbRuns = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Win98.Font };
             cbRuns.SelectedIndexChanged += (s, e) => { if (!filling) Draw(); };
-            var lblSig = new Label { Text = "&Signals: click one to plot it in the pane chosen (navy frame).", AutoSize = false, Height = 28 };
+            var lblSig = new Label { Text = "&Signals: click one to plot it in the pane chosen (navy frame), or drag it onto a pane.", AutoSize = false, Height = 28 };
             txtFilter = new TextBox { Font = Win98.Font, BorderStyle = BorderStyle.Fixed3D };
             txtFilter.TextChanged += (s, e) => FillSignals();
-            // the signals plotted are in bold
-            lbSignals = new ListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 15 };
-            lbSignals.DrawItem += (s, e) =>
+            lbSignals = new ListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D };
+            // a click plots the signal in the pane chosen; a drag takes it to the pane it is dropped on
+            int downAt = -1;
+            Point downPoint = Point.Empty;
+            bool listDragged = false;
+            lbSignals.MouseDown += (s, e) => { downAt = e.Button == MouseButtons.Left ? lbSignals.IndexFromPoint(e.Location) : -1; downPoint = e.Location; listDragged = false; };
+            lbSignals.MouseMove += (s, e) =>
             {
-                if (e.Index < 0) return;
-                string sig = (string)lbSignals.Items[e.Index];
-                bool sel = (e.State & DrawItemState.Selected) != 0;
-                using (var b = new SolidBrush(sel ? Win98.Navy : Color.White)) e.Graphics.FillRectangle(b, e.Bounds);
-                TextRenderer.DrawText(e.Graphics, sig, Plotted.Contains(sig, StringComparer.OrdinalIgnoreCase) ? Win98.BoldFont : Win98.Font,
-                    new Point(e.Bounds.X + 2, e.Bounds.Y + 1), sel ? Color.White : Color.Black, TextFormatFlags.NoPrefix);
+                if (downAt < 0 || e.Button != MouseButtons.Left || (Math.Abs(e.X - downPoint.X) < 5 && Math.Abs(e.Y - downPoint.Y) < 5)) return;
+                string sig = (string)lbSignals.Items[downAt];
+                downAt = -1;
+                listDragged = true;
+                lbSignals.DoDragDrop(SignalPrefix + sig, DragDropEffects.Copy);
             };
-            lbSignals.MouseClick += (s, e) => { int i = lbSignals.IndexFromPoint(e.Location); if (i >= 0) Add((string)lbSignals.Items[i]); };
+            lbSignals.MouseClick += (s, e) =>
+            {
+                if (listDragged) return;
+                int i = lbSignals.IndexFromPoint(e.Location);
+                if (i >= 0) Add((string)lbSignals.Items[i]);
+            };
             lbSignals.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter && lbSignals.SelectedItem is string sig) Add(sig); };
             var lblHow = new Label
             {
                 AutoSize = false, Height = 70, ForeColor = Win98.Shadow, UseMnemonic = false,
-                Text = "Right-click a pane: a trace by expression (2*V(out), V(a,b)), panes above and below.\nClick a trace's name: cursor 1, then 2. Drag a cursor to move it.",
+                Text = "Right-click a pane: a trace by expression (2*V(out), V(a,b)), panes above and below.\nClick a trace's name: cursor 1, then 2. Drag a name to another pane, or out to delete it.",
             };
             left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, lblHow });
             left.Resize += (s, e) =>
@@ -349,7 +356,6 @@ namespace Spica.UI
             Cursor = Cursors.WaitCursor;
             try { DrawCore(); }
             finally { Cursor = Cursors.Default; }
-            lbSignals.Invalidate();      // the bold names follow what is plotted
         }
 
         static string TempText(double t) => double.IsNaN(t) ? "" : t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " °C";
@@ -377,6 +383,14 @@ namespace Spica.UI
                 plot.MenuRequested += at => PaneMenu(paneIndex, at);
                 plot.LabelClicked += (t, e) => LabelClicked(paneIndex, t, e);
                 plot.CursorMoved += c => CursorDragged(c);
+                plot.LabelDragged += t => DragTrace(paneIndex, (string)t.Tag);
+                plot.AllowDrop = true;
+                plot.DragOver += (s, e) =>
+                {
+                    string d = e.Data.GetData(DataFormats.Text) as string ?? "";
+                    e.Effect = d.StartsWith(SignalPrefix) ? DragDropEffects.Copy : d.StartsWith(TracePrefix) ? DragDropEffects.Move : DragDropEffects.None;
+                };
+                plot.DragDrop += (s, e) => BeginInvoke(new Action(() => Dropped(paneIndex, e.Data.GetData(DataFormats.Text) as string ?? "")));
                 plot.XViewChanged += (s, e) => Follow((WavePlot)s);
                 pane.Plot = plot;
                 stack.Controls.Add(plot);
@@ -419,6 +433,31 @@ namespace Spica.UI
             ShowCursors();
         }
 
+        /// <summary>A trace's name dragged: dropped on another pane, it moves there; dropped outside every pane, it goes.</summary>
+        void DragTrace(int pane, string expr)
+        {
+            dragCancelled = false;
+            var from = panes[pane].Plot;
+            QueryContinueDragEventHandler esc = (s, e) => { if (e.EscapePressed) dragCancelled = true; };
+            from.QueryContinueDrag += esc;
+            var effect = from.DoDragDrop(TracePrefix + pane + "|" + expr, DragDropEffects.Move);
+            if (!from.IsDisposed) from.QueryContinueDrag -= esc;
+            if (effect == DragDropEffects.None && !dragCancelled && pane < panes.Count) { panes[pane].Exprs.Remove(expr); Draw(); }
+        }
+
+        void Dropped(int pane, string data)
+        {
+            if (pane >= panes.Count) return;
+            if (data.StartsWith(SignalPrefix)) { Choose(pane); Add(data.Substring(SignalPrefix.Length)); return; }
+            if (!data.StartsWith(TracePrefix)) return;
+            var parts = data.Substring(TracePrefix.Length).Split(new[] { '|' }, 2);
+            if (parts.Length < 2 || !int.TryParse(parts[0], out int from) || from == pane || from >= panes.Count) return;
+            panes[from].Exprs.Remove(parts[1]);
+            if (!panes[pane].Exprs.Contains(parts[1], StringComparer.OrdinalIgnoreCase)) panes[pane].Exprs.Add(parts[1]);
+            active = pane;
+            Draw();
+        }
+
         void Choose(int pane)
         {
             if (active == pane) return;
@@ -446,12 +485,20 @@ namespace Spica.UI
             Measure();
         }
 
+        /// <summary>Every pane back to the whole simulation, its values to fit.</summary>
+        void ResetZoom()
+        {
+            shownX = null;
+            foreach (var p in panes.Where(x => x.Plot != null)) { p.Plot.LinkX(null, null); if (stop > 0) p.Plot.FixX(0, stop); }
+            Measure();
+        }
+
         /// <summary>Every pane in view while they fit at a readable height; past that the stack scrolls, to the pane chosen.</summary>
         void LayoutPanes()
         {
             var plots = panes.Where(p => p.Plot != null).Select(p => p.Plot).ToList();
             if (plots.Count == 0) return;
-            int avail = stack.ClientSize.Height, each = Math.Max(120, (avail - 4) / plots.Count);
+            int avail = stack.ClientSize.Height, each = Math.Max(150, (avail - 4) / plots.Count);
             int w = stack.ClientSize.Width - (each * plots.Count > avail ? SystemInformation.VerticalScrollBarWidth : 0);
             int y = -stack.VerticalScroll.Value;
             foreach (var c in plots) { c.SetBounds(0, y, Math.Max(100, w), each - 2); y += each; }
@@ -465,13 +512,13 @@ namespace Spica.UI
             Choose(pane);
             var plot = panes[pane].Plot;
             var m = new ContextMenuStrip();
-            m.Items.Add("&Add Trace...", null, (s, e) => { string x = Win98Prompt.Ask(FindForm(), "Add Trace", "&Expression:", ""); if (x != null) Add(x); });
+            m.Items.Add("&Add Trace...", null, (s, e) => { string x = Win98Prompt.Ask(FindForm(), "Add Trace", "&Expression:", "", "e.g.  2*V(out)    V(out)-V(in)    V(a,b)    abs(I(R1))"); if (x != null) Add(x); });
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Add Pane A&bove", null, (s, e) => { panes.Insert(pane, new Pane()); active = pane; Draw(); });
             m.Items.Add("Add Pane Be&low", null, (s, e) => { panes.Insert(pane + 1, new Pane()); active = pane + 1; Draw(); });
             m.Items.Add(new ToolStripMenuItem("&Delete Pane", null, (s, e) => { panes.RemoveAt(pane); if (panes.Count == 0) panes.Add(new Pane()); active = Math.Min(pane, panes.Count - 1); Draw(); }) { Enabled = panes.Count > 1 || panes[pane].Exprs.Count > 0 });
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add(new ToolStripMenuItem("&Reset Zoom", null, (s, e) => plot.ResetZoom()) { Enabled = plot.IsZoomed });
+            m.Items.Add("&Reset Zoom", null, (s, e) => ResetZoom());
             m.Items.Add("&Copy Image", null, (s, e) => { using (var b = Snapshot()) if (b != null) Clipboard.SetImage(b); });
             m.Items.Add("&Save Image as PNG...", null, (s, e) => SaveImage());
             Show(m, plot, at);
@@ -498,7 +545,7 @@ namespace Spica.UI
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("&Edit Expression...", null, (s, a) =>
             {
-                string x = Win98Prompt.Ask(FindForm(), "Edit Trace", "&Expression:", expr);
+                string x = Win98Prompt.Ask(FindForm(), "Edit Trace", "&Expression:", expr, "e.g.  2*V(out)    V(out)-V(in)    V(a,b)    abs(I(R1))");
                 if (x == null || x.Trim().Length == 0) return;
                 var ex = panes[pane].Exprs;
                 int i = ex.IndexOf(expr);

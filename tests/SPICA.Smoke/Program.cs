@@ -268,6 +268,19 @@ static class Program
         canvas.Select(null);
         w.Shot(w.Form, "missing");
 
+        // the File menu opens under its name, with the recent files filled in
+        var menu = (MenuStrip)w.Get("menu");
+        var file = (ToolStripMenuItem)menu.Items[0];
+        // a click on it, as the mouse sends it
+        var c = new System.Drawing.Point(file.Bounds.Left + 8, file.Bounds.Top + 8);
+        SendMessage(menu.Handle, 0x0201, (IntPtr)1, (IntPtr)((c.Y << 16) | c.X));
+        SendMessage(menu.Handle, 0x0202, IntPtr.Zero, (IntPtr)((c.Y << 16) | c.X));
+        w.Pump(10);
+        GetWindowRect(file.DropDown.Handle, out var wr);
+        var at = new System.Drawing.Rectangle(wr.L, wr.T, wr.R - wr.L, wr.B - wr.T);      // where the window really is
+        var under = menu.PointToScreen(new System.Drawing.Point(file.Bounds.Left, file.Bounds.Bottom));
+        Check(Math.Abs(at.Left - under.X) < 12 && Math.Abs(at.Top - under.Y) < 12, $"File opens under its name: {at.Location} (its name ends at {under})");
+        file.HideDropDown();
         using (var f = new Spica.UI.OptionsForm(new AppSettings(), HardwareInfo.Detect()))
         {
             f.Show(w.Form);
@@ -422,6 +435,43 @@ static class Program
             w.ClickLabel(0, twice);
             w.Pump(5);
             Check(p0.Cursors.Count == 0 && w.Wave<Label>("lblMeasure").Text.StartsWith("Over the time shown"), "a third click takes the cursors off: the table measures the time shown");
+            // the time cannot be zoomed out past the simulation, and Reset Zoom brings every pane back
+            var wheel = typeof(Control).GetMethod("OnMouseWheel", Flags);
+            var pl0 = w.Plots()[0];
+            for (int z = 0; z < 15; z++) wheel.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.None, 0, pl0.Width / 2, pl0.Height / 2, -120) });
+            w.Pump(3);
+            Check(pl0.ViewX0 >= -1e-12 && pl0.ViewX1 <= 0.3 + 1e-9 && w.Plots().All(x => Math.Abs(x.ViewX1 - pl0.ViewX1) < 1e-9), $"zoomed out 15 times: the time stays 0 .. 0.3 s ({pl0.ViewX0} .. {pl0.ViewX1}), every pane alike");
+            for (int z = 0; z < 6; z++) wheel.Invoke(pl0, new object[] { new MouseEventArgs(MouseButtons.None, 0, pl0.Width / 2, pl0.Height / 2, 120) });
+            w.Pump(3);
+            bool zoomed = pl0.ViewX1 - pl0.ViewX0 < 0.2;
+            typeof(Spica.UI.WaveformView).GetMethod("ResetZoom", Flags).Invoke(wv, null);
+            w.Pump(3);
+            Check(zoomed && w.Plots().All(x => Math.Abs(x.ViewX0) < 1e-12 && Math.Abs(x.ViewX1 - 0.3) < 1e-9), "zoomed in, then Reset Zoom: every pane shows the whole simulation again");
+            // a signal dropped on a pane, a trace's name dragged to another pane
+            var dropped = typeof(Spica.UI.WaveformView).GetMethod("Dropped", Flags);
+            int lastPane = w.Plots().Count - 1;
+            dropped.Invoke(wv, new object[] { lastPane, "spica-signal:I(Cout)" });
+            w.Pump(5);
+            Check(w.Plots()[lastPane].Traces.Any(t => t.Label == "I(Cout)"), "I(Cout) dropped on the last pane: plotted there");
+            dropped.Invoke(wv, new object[] { lastPane, "spica-trace:0|2*V(out)" });
+            w.Pump(5);
+            Check(w.Plots()[lastPane].Traces.Any(t => t.Label == "2*V(out)") && !w.Plots()[0].Traces.Any(t => t.Label == "2*V(out)"), "2*V(out) dragged from the first pane to the last: it moved");
+            w.Shot(w.Form, "moved");
+            // the Add Trace window: its label clear of the field
+            var shot = new System.Windows.Forms.Timer { Interval = 300 };
+            shot.Tick += (s2, e2) =>
+            {
+                var dlg = Application.OpenForms.Cast<Form>().FirstOrDefault(x => x.Text == "Add Trace");
+                if (dlg == null) return;
+                shot.Stop();
+                var lbl = dlg.Controls.OfType<Label>().First();
+                var field = dlg.Controls.OfType<Spica.UI.Win98TextField>().First();
+                Check(lbl.Right <= field.Left, $"Add Trace: the label ends ({lbl.Right}) before the field starts ({field.Left})");
+                w.Shot(dlg, "addtrace");
+                dlg.DialogResult = DialogResult.Cancel;
+            };
+            shot.Start();
+            typeof(Spica.UI.MainForm).Assembly.GetType("Spica.UI.Win98Prompt").GetMethod("Ask").Invoke(null, new object[] { w.Form, "Add Trace", "&Expression:", "", "e.g.  2*V(out)    V(out)-V(in)    V(a,b)    abs(I(R1))" });
             Console.WriteLine(bad == 0 ? "SAVE SELECTION: all ok" : $"SAVE SELECTION: {bad} wrong");
             w.Shot(w.Form, "all");
             close();
@@ -457,6 +507,8 @@ static class Program
     // =====================================================================================
 
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr WindowFromPoint(System.Drawing.Point p);
+    struct WinRect { public int L, T, R, B; }
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out WinRect r);
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
 
     /// <summary>What Windows finds at the main window's edges and corners (resizing needs a sizing code there).</summary>

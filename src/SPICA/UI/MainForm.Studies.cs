@@ -726,15 +726,19 @@ namespace Spica.UI
     /// <summary>A one-line question (a name), Win98 style; null when cancelled.</summary>
     static class Win98Prompt
     {
-        public static string Ask(IWin32Window owner, string title, string label, string value)
+        public static string Ask(IWin32Window owner, string title, string label, string value, string hint = null)
         {
             using (var f = new Win98Form { Text = title, MinimizeBox = false, MaximizeBox = false, Resizable = false, ShowInTaskbar = false, StartPosition = FormStartPosition.CenterParent })
             {
-                f.ClientSize = new Size(330, 92 + f.Padding.Vertical);
+                f.ClientSize = new Size(hint == null ? 360 : 440, (hint == null ? 92 : 116) + f.Padding.Vertical);
                 int x = f.Padding.Left + 10, y = f.Padding.Top + 10;
-                f.Controls.Add(new Label { Text = label, Location = new Point(x, y + 3), AutoSize = true });
-                var tf = new Win98TextField { Location = new Point(x + 50, y), Width = 250, Text = value };
+                var lbl = new Label { Text = label, Location = new Point(x, y + 3), AutoSize = true };
+                f.Controls.Add(lbl);
+                int lw = TextRenderer.MeasureText(label.Replace("&", ""), Win98.Font).Width + 8;
+                var tf = new Win98TextField { Location = new Point(x + lw, y), Width = f.ClientSize.Width - f.Padding.Right - 10 - x - lw, Text = value };
                 f.Controls.Add(tf);
+                if (hint != null)
+                    f.Controls.Add(new Label { Text = hint, Location = new Point(x + lw, y + 26), AutoSize = true, ForeColor = Win98.Shadow, UseMnemonic = false });
                 int by = f.ClientSize.Height - f.Padding.Bottom - 33;
                 var ok = new Win98Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(f.ClientSize.Width - f.Padding.Right - 176, by), Size = new Size(80, 23) };
                 var cancel = new Win98Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(f.ClientSize.Width - f.Padding.Right - 88, by), Size = new Size(80, 23) };

@@ -38,7 +38,8 @@ namespace Spica.UI
         Win98TabControl tabs;
         Win98TabPage pageStudies, pageQueue, pageResults;
         ToolStripButton tbSave, tbRun, tbStop, tbFolder;
-        ToolStripMenuItem miSave, miSaveAs, miRecent, miRun, miStop, miRename, miDelete;
+        ToolStripMenuItem mFile, miSave, miSaveAs, miRun, miStop, miRename, miDelete;
+        ToolStripSeparator recentSep;
 
         const int TabStudies = 0, TabQueue = 1, TabResults = 2;
         const int PaneText = 0, PaneLtspice = 1, PaneClock = 3;
@@ -118,15 +119,16 @@ namespace Spica.UI
             menu = new MenuStrip { Dock = DockStyle.Top, Padding = new Padding(2, 1, 0, 1) };
             Win98Renderer.Apply(menu);
 
-            var mFile = new ToolStripMenuItem("&File");
+            mFile = new ToolStripMenuItem("&File");
             var miOpen = new ToolStripMenuItem("&Open Schematic or Project...", Win98.Icon("open16"), (s, e) => BrowseOpen()) { ShortcutKeys = Keys.Control | Keys.O };
             miSave = new ToolStripMenuItem("&Save Project", Win98.Icon("save16"), (s, e) => SaveProject(false)) { ShortcutKeys = Keys.Control | Keys.S };
             miSaveAs = new ToolStripMenuItem("Save Project &As...", null, (s, e) => SaveProject(true));
-            miRecent = new ToolStripMenuItem("Recent &Files");
+            // the recent files are listed in File itself, numbered, above Exit, as Windows 98 programs did (a Recent
+            // submenu made WinForms open File away from its name)
             var miExit = new ToolStripMenuItem("E&xit", null, (s, e) => Close());
-            mFile.DropDownItems.AddRange(new ToolStripItem[] { miOpen, miSave, miSaveAs, new ToolStripSeparator(), miRecent, new ToolStripSeparator(), miExit });
+            recentSep = new ToolStripSeparator();
+            mFile.DropDownItems.AddRange(new ToolStripItem[] { miOpen, miSave, miSaveAs, recentSep, new ToolStripSeparator(), miExit });
             mFile.DropDownOpening += (s, e) => FillRecent();
-            miRecent.DropDownItems.Add("(empty)");
 
             var mStudy = new ToolStripMenuItem("&Study");
             var miNew = new ToolStripMenuItem("&New Study...", Win98.Icon("doc16"), (s, e) => NewStudy()) { ShortcutKeys = Keys.Control | Keys.N };
@@ -200,18 +202,19 @@ namespace Spica.UI
             tabs.SelectedIndexChanged += (s, e) => UpdateCommandState();
         }
 
+        /// <summary>The recent files between Save As and Exit (none: no list, one separator).</summary>
         void FillRecent()
         {
-            miRecent.DropDownItems.Clear();
-            var rec = settings.RecentFiles;
-            if (rec.Count == 0) { miRecent.DropDownItems.Add(new ToolStripMenuItem("(empty)") { Enabled = false }); return; }
+            var items = mFile.DropDownItems;
+            int at = items.IndexOf(recentSep) + 1;
+            while (items[at] is ToolStripMenuItem) items.RemoveAt(at);
             int i = 1;
-            foreach (var r in rec)
+            foreach (var r in settings.RecentFiles)
             {
                 string path = r;
-                miRecent.DropDownItems.Add(new ToolStripMenuItem($"&{i++} {Shorten(path, 60)}", null, (s, e) => OpenFile(path)));
+                items.Insert(at++, new ToolStripMenuItem($"&{i++} {Shorten(path, 60)}", null, (s, e) => OpenFile(path)));
             }
-            Win98Renderer.StyleDropDowns(menu.Items);
+            recentSep.Visible = i > 1;
         }
 
         static string Shorten(string p, int max) => p.Length <= max ? p : "..." + p.Substring(p.Length - max + 3);

@@ -56,13 +56,14 @@ LTspice:
 
 - tick one or several analyses to overlay them; choose one run, or all of them;
 - click a signal in the list to plot it in the pane chosen (the one with the navy frame; click a pane to choose
-  it). The signals plotted are in bold;
+  it), or drag it onto a pane;
+- drag a trace's name to another pane to move it there, or out of the panes to delete it (Esc cancels);
 - right-click a pane: **Add Trace** by expression (`2*V(out)`, `V(out)-V(in)`, `V(a,b)` for `V(a)-V(b)`,
   `abs()`, `sqrt()`, `db()`...), add a pane above or below, delete it, reset the zoom, copy or save the picture;
 - click a trace's name for cursor 1, again for cursor 2, again to take them off; right-click the name to move
   the cursors, edit the expression or delete the trace. Drag a cursor to move it;
-- every pane shares the time axis: drag a box to zoom (every pane follows), the wheel zooms, the middle button
-  pans, a double-click resets;
+- every pane shares the time axis, within the simulation: drag a box to zoom (every pane follows), the wheel
+  zooms, the middle button pans, a double-click or Reset Zoom shows the whole simulation again;
 - under the panes, every trace's value at the cursors and the difference, and its average, RMS, min, max and
   peak-to-peak between the cursors (or over the time shown); with both cursors, Δt and 1/Δt;
 - several temperatures of an analysis are drawn in their own colours.
