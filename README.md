@@ -28,7 +28,7 @@ one piece at a time.
   - Drag the empty canvas to pan, use the wheel to zoom, press Space to fit the study.
   - Drag from an output to an input of the same colour to wire them; a wire of the wrong type, or one that would
     make a loop, is refused with the reason. Right-click a port to add a block that fits it, already wired.
-  - Ports are named by what they carry, inputs and outputs alike; "…" takes several wires, a port of two colours takes both kinds, a hollow one may stay
+  - Ports are named by what they carry, inputs and outputs alike; the conditions (tolerances, temperature) share one colour; a hollow port may stay
     empty. Under each block's title: what it is set to, and how many runs it makes.
   - Del removes the block or wire selected.
 - **Right:** while a block is selected, its settings. Changes apply at once.

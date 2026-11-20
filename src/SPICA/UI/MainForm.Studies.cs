@@ -119,19 +119,19 @@ namespace Spica.UI
             {
                 Dock = DockStyle.Bottom, Height = 20, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true,
                 // the wire colours take the right end
-                Padding = new Padding(0, 0, StudyCanvas.TypeColor.Sum(kv => 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width) + 16, 0),
+                Padding = new Padding(0, 0, StudyCanvas.Legend.Sum(kv => 18 + TextRenderer.MeasureText(kv.Name, Win98.Font).Width) + 16, 0),
                 Text = "Click a block to set it up (red: something missing).  Drag an output to an input of its colour (hollow: optional).  Right-click a port for a block that fits.  Space: fit.  Del: remove.",
             };
             hint.Paint += (s, e) =>
             {
-                int w = StudyCanvas.TypeColor.Sum(kv => 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width);
+                int w = StudyCanvas.Legend.Sum(kv => 18 + TextRenderer.MeasureText(kv.Name, Win98.Font).Width);
                 int x = hint.Width - w - 4;
                 using (var bg = new SolidBrush(Win98.Face)) e.Graphics.FillRectangle(bg, x - 8, 0, w + 12, hint.Height);
-                foreach (var kv in StudyCanvas.TypeColor)
+                foreach (var kv in StudyCanvas.Legend)
                 {
-                    using (var pen = new Pen(kv.Value, 3)) e.Graphics.DrawLine(pen, x, 10, x + 12, 10);
-                    TextRenderer.DrawText(e.Graphics, kv.Key.ToString(), Win98.Font, new Point(x + 14, 3), Color.FromArgb(64, 64, 64));
-                    x += 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width;
+                    using (var pen = new Pen(kv.Color, 3)) e.Graphics.DrawLine(pen, x, 10, x + 12, 10);
+                    TextRenderer.DrawText(e.Graphics, kv.Name, Win98.Font, new Point(x + 14, 3), Color.FromArgb(64, 64, 64));
+                    x += 18 + TextRenderer.MeasureText(kv.Name, Win98.Font).Width;
                 }
             };
             p.Controls.Add(well);

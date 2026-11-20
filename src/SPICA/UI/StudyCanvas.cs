@@ -25,9 +25,15 @@ namespace Spica.UI
 
         public static readonly Dictionary<PortType, Color> TypeColor = new Dictionary<PortType, Color>
         {
-            [PortType.Circuit] = Color.FromArgb(31, 95, 191), [PortType.Tolerances] = Color.FromArgb(184, 134, 11),
-            [PortType.Temperature] = Color.FromArgb(200, 60, 40),
+            [PortType.Circuit] = Color.FromArgb(31, 95, 191), [PortType.Tolerances] = Conditions, [PortType.Temperature] = Conditions,
         };
+
+        /// <summary>The colour of every condition (tolerances, temperature): one kind of wire.</summary>
+        const int ConditionsArgb = unchecked((int)0xFFB8860B);
+        static Color Conditions => Color.FromArgb(ConditionsArgb);
+
+        /// <summary>The wire colours, as the legend names them.</summary>
+        public static readonly (string Name, Color Color)[] Legend = { ("Circuit", Color.FromArgb(31, 95, 191)), ("Conditions", Color.FromArgb(ConditionsArgb)) };
 
         public static readonly Dictionary<BlockFamily, Color> FamilyColor = new Dictionary<BlockFamily, Color>
         {
@@ -35,12 +41,11 @@ namespace Spica.UI
             [BlockFamily.Simulation] = Color.FromArgb(0, 0, 128),
         };
 
-        /// <summary>A block's title bar: its family's colour, or its own when it makes a wire of its own (Temperature).</summary>
-        public static Color HeadColor(BlockKind k) =>
-            k == null ? Color.Gray : k.Name == BlockKind.Temperature ? Color.FromArgb(160, 40, 25) : FamilyColor[k.Family];
+        /// <summary>A block's title bar: its family's colour.</summary>
+        public static Color HeadColor(BlockKind k) => k == null ? Color.Gray : FamilyColor[k.Family];
 
-        /// <summary>How a port is named on a block, an input or an output alike: its type, "…" when it takes several wires.</summary>
-        public static string PortText(PortSpec p) => p.Text + (p.Many ? " …" : "");
+        /// <summary>How a port is named on a block, an input or an output alike.</summary>
+        public static string PortText(PortSpec p) => p.Text;
 
         /// <summary>The app's own 16 px icon for a block kind.</summary>
         public static Image KindIcon(string kind)
@@ -400,12 +405,10 @@ namespace Spica.UI
             }
         }
 
-        /// <summary>A port: a dot of its type's colour (cut in theirs when it takes several); hollow when it may stay empty.</summary>
+        /// <summary>A port: a dot of its type's colour; hollow when it may stay empty.</summary>
         static void DrawPort(Graphics g, PointF p, PortSpec spec, Pen edge)
         {
-            float sweep = 360f / spec.Types.Length;
-            for (int i = 0; i < spec.Types.Length; i++)
-                using (var fill = new SolidBrush(TypeColor[spec.Types[i]])) g.FillPie(fill, p.X - 5, p.Y - 5, 10, 10, -90 + i * sweep, sweep);
+            using (var fill = new SolidBrush(TypeColor[spec.Type])) g.FillEllipse(fill, p.X - 5, p.Y - 5, 10, 10);
             if (spec.Optional)
                 using (var white = new SolidBrush(Color.White)) g.FillEllipse(white, p.X - 2.5f, p.Y - 2.5f, 5, 5);
             g.DrawEllipse(edge, p.X - 5, p.Y - 5, 10, 10);
