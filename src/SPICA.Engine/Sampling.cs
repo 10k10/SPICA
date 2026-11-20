@@ -193,9 +193,6 @@ namespace Spica.Core
             return z ^ (z >> 31);
         }
 
-        /// <summary>Stream used for the per-run random temperature (never collides with a site index).</summary>
-        public const ulong TempStream = 0x7E3D_0000_0001UL;
-
         // ------------------------------------------------------------------ rewriting
 
         static Dictionary<string, FuncDef> ParseFuncs(IList<string> lines)

@@ -1,462 +1,125 @@
 # SPICA — Simulation Platform for Investigation, Compliance and Analysis
 
-Portable Windows app (C# / .NET Framework 4.8 / WinForms, Windows 98 look) for studying a circuit
-on LTspice. It handles:
+Portable Windows app (C# / .NET Framework 4.8 / WinForms, Windows 98 look) for studying a circuit on LTspice.
+A study is drawn as a graph of blocks: the schematic, the analyses (nominal, Monte Carlo, worst case), and the
+simulation that runs them. SPICA runs it as many parallel LTspice batch instances, tuned to the machine, and shows
+the waveforms of every run.
 
-- tolerance analysis: Monte Carlo, worst case, error budget;
-- qualification tests against standards, with pass/fail criteria (DO-160G Section 16 to start).
+`dist/SPICA-<version>.exe` is the whole app. Copy it anywhere; its settings (`SPICA.ini`) and the run times it
+learns (`SPICA.profiles`) are written next to it.
 
-It runs them as many parallel LTspice batch instances, tuning the parallelism to the machine it runs on.
+This version is deliberately small: the parts that are here are meant to work well, and the rest comes back
+one piece at a time.
 
-`dist/SPICA-<version>.exe` is the whole app. Copy it anywhere; settings (`SPICA.ini`) and
-scheduler profiles (`SPICA.profiles`) are written next to it. `SPICA-cli-<version>.exe` is the same
-engine without a window, for scripts, other tools and the workstation that runs campaigns for others
-(see [Command line](#command-line)).
+## Starting
 
-## Workbench: studies as graphs of blocks
+1. **Open** an LTspice schematic (`.asc`), from File > Open, the toolbar, or by dropping it on the window.
+   SPICA makes a study of it, ready to run: the schematic, every tolerance nominal, simulated.
+2. **Run** (F5). The study's campaigns go into the queue; the Queue tab follows the one that runs.
+3. When the study ends, the **Results** tab opens with its waveforms.
+4. **Save** keeps the project (`.spica`, beside the schematic): its studies. Opening the schematic again opens
+   its project with it.
 
-A study is an analysis drawn as a graph: blocks joined by wires, left to right, from what is applied to the
-circuit to what is delivered. The **Workbench** is the editor, and the tab the app opens on. Opening a schematic
-that has no study yet gives it one, with its Schematic block, to start from.
+## The Workbench
 
-- **Left:** the block library, as a tree with search. Double-click a block or drag it in. The blocks marked
-  "(soon)" do not run yet.
-- **The rest:** the canvas.
-  - **Moving around:** drag the empty canvas to pan, use the wheel to zoom, and press Space (or double-click the
-    empty canvas) to fit the whole study.
-  - **Setting up a block:** double-click it to open its configurator (OK keeps the changes, Cancel leaves the
-    block as it was). Limits lists the setup's criteria, with New / Edit / Delete; Simulate holds the output
-    folder of the studies.
-  - **What is missing:** a block that misses something it needs to run (a schematic, a net, tests, criteria, an
-    input not wired) has a red border and a red "!". The pointer over it says what is missing; **Validate**
-    lists it all.
+- **Left:** the study shown (with New, Rename and Delete beside it), its blocks as a tree with their state, and
+  the block library. Double-click a block in the library, or drag it onto the canvas.
+- **Middle:** the canvas.
+  - Drag the empty canvas to pan, use the wheel to zoom, press Space to fit the study.
+  - Drag from an output to an input of the same colour to wire them; a wire of the wrong type, or one that would
+    make a loop, is refused with the reason. Right-click a port to add a block that fits it, already wired.
+  - Del removes the block or wire selected.
+- **Right:** while a block is selected, its settings. Changes apply at once.
 
-A wire carries one type of data and only joins ports of that type (the colours): Stimulus, Circuit, Conditions,
-Data, Table, Ratings, Verdicts. A wire of the wrong type, or one that would make a loop, is refused, with the
-reason. Right-click a port to add a block of a kind that fits it, already wired.
+A block that misses something it needs (a schematic, an input not wired, a setting that is not a number) has a
+red border, and its settings say what. **Run** says it too: pressed while something is missing, it lists what,
+and runs nothing.
 
-| Family | Blocks that run in this version |
-|---|---|
-| Stimulus | **Supply Waveform** (a test of a library, e.g. DO-160G Section 16, into a net, in place of its source; one case per test), **Fault** (a switch of resistance R between two nets, closed from a time on, for a while or to the end) |
-| Circuit | **Schematic** (an `.asc`; its stimuli are wired to it, and the wire shows the net), **Candidates** (several schematics compared; `OUT = A: V(out), B: V(vo)` maps a logical signal to each one's own) |
-| Variation | **Nominal**, **Monte Carlo** (runs, paired, seed, temperature), **Corners** (temperatures), **Combine** (product or union of conditions) |
-| Simulation | **Simulate**: every case at every condition, as campaigns in the queue |
-| Evaluation | **Limits** (the setup's criteria: made and edited in its configurator), **Error Budget**, **Spec** |
-| Output | **Report** (HTML: a grid per criterion), **Export** (CSV of the verdicts), **Plots** (signals saved and drawn with the waveforms) |
+| Family | Block | What it does |
+|---|---|---|
+| Circuit | **Schematic** | An `.asc`, simulated as drawn. Empty: the project's own schematic. |
+| Analysis | **Nominal** | One run, every tolerance at its nominal value. |
+| | **Monte Carlo** | N units drawn from the tolerances (runs, seed, paired). |
+| | **Worst Case** | The nominal unit, then every combination of the tolerance edges: 1 + 2^n runs. |
+| Simulation | **Simulate** | Runs the circuit under every analysis wired into it, one campaign each. Save: the signals kept in the `.raw` (none ticked: all). |
 
-Worst-Case Search, tolerance edges in Corners, Stress, Survival, Derating, Parts Database, Susceptibility and
-Spectrum are in the library but do not run yet; a study that uses them shows them as skipped.
+Every analysis has a **Temperature**: empty for the schematic's own, one value, or several (`-55; 25; 85`):
+every run at each.
 
-**New** starts a study blank, from a template, or from the classic Setup and Qualification tabs. The templates are:
+Running a study again reuses what already ran: a campaign whose netlist and analysis did not change comes from
+the results on disk at once. Change a block and only what it feeds runs again (the tree marks it ⚡).
 
-- qualification;
-- qualification at corners + worst case;
-- compare candidates;
-- tolerance;
-- input short;
-- derating.
+## Results
 
-**Run** (toolbar, F5) or **Add to Queue** (Workbench bar) runs the study shown, and **Stop** stops it. Each block
-shows its state on the canvas: running, done, from the cache, error, skipped.
+The studies that ran, each with its analyses, are on the left. On the right, the waveforms, in the manner of
+LTspice:
 
-- **Cache:** a campaign is reused when its netlist and condition have not changed, so changing a limit and running
-  again only judges again.
-- **Results tab:** the study opens there when it ends. A tree on the left lists the campaign open and the
-  studies that ran, each with Verdicts, Waveforms and Report.
-  - **Verdicts:** one grid per criterion (case × condition). Click a cell for its details; double-click it for
-    its waveforms.
-  - **Waveforms:** a viewer in the manner of LTspice.
-    - **Cases:** tick several cases and conditions to overlay them (temperatures, candidates). In Monte Carlo,
-      choose the worst run, all of them or one.
-    - **Signals and panes:** double-click a signal of the .raw to add it to the pane chosen, or start a new pane.
-      The panes share the time axis: zoom one and all follow.
-    - **Criteria:** a criterion draws its window and limits on its signal.
-    - **Open in LTspice** opens the .raw there.
-- **What the .raw holds:** what the criteria and the Plots need, plus the signals chosen in a **Measure** block
-  (Save). Its Meas field adds `.meas` lines. A signal that was not saved cannot be shown.
-- **Folders:** the campaigns, the report and the CSV go under `<output>\studies\<study>`. Folder names stay short,
-  because LTspice cannot open files past 260 characters of path. A study whose folders would still be too deep
-  says so before it runs.
-- **Requirement IDs:** a criterion can carry one (e.g. REQ-PWR-012); it follows its verdicts into the grid, the
-  report and the CSV.
+- tick one or several analyses to overlay them; choose one run, or all of them;
+- double-click a signal to put it in the pane chosen, or New Pane for a pane of its own; every pane shares the
+  time axis (zoom one, all follow; double-click resets);
+- several temperatures of an analysis are drawn in their own colours;
+- click a pane for cursor A, Shift+click for cursor B: what every signal reads there, and B - A;
+- Save Image writes the panes as a PNG; Open in LTspice opens the `.raw`.
 
-The studies are saved in the `.spica` setup (`[Study]` and `[Block n]` sections). `SPICA-cli studies <setup.spica>`
-lists them. The design and what comes next are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-### The classic tabs
-
-**View > Classic Setup and Qualification Tabs** shows the tabs of the versions before the Workbench. While the
-classic Setup tab is open, Run and Run Remote act on its campaign, as described below. Studies run on this PC only
-in this version.
-
-## How a campaign works (the engine; the classic Setup tab)
-
-1. **Open** an `.asc`. SPICA runs `LTspice -netlist`, lists every net (`V(x)`) and device current,
-   and finds the `.meas` statements.
-2. Pick the **signals to save**. SPICA writes a `.save` directive with only those, so the `.raw`
-   stays small. Signals used by `.meas` are always saved (locked), because `.meas` reads the `.raw`.
-3. Type the **number of runs**. Any `.step` in the schematic is replaced by SPICA's own
-   `.step param run a b 1` per chunk (a single-run chunk uses `.param run=N`, because LTspice refuses a one-point `.step`).
-4. **Run** (F5, with the classic Setup tab open) or **Run Remote** (F6). Run puts the campaign in this PC's queue: it starts at
-   once, or waits its turn behind the ones already there (see *Queue*). Run Remote sends it to another PC
-   (see *Run Remote*). Each chunk is launched as `LTspice.exe -b chunk.net -ini <private ini>`:
-   - The private ini copies the user's LTspice settings and forces `UseClocktoReseedMC=true`
-     plus the keys that stop start-up dialogs (analytics / web sync) from blocking batch mode.
-     The user's own `LTspice.ini` is never modified.
-   - Launches are staggered by 100 ms; at the end a duplicate check flags identical result rows.
-   - `.options threads=N` limits the threads each instance may use.
-5. Results: `results.csv` (run, temp, status, one column per `.meas`), `summary.txt`, `campaign.log`,
-   `campaign.spica` (the setup used, with the actual seed), `samples.csv` (paired mode: every random
-   value of every run) and the chunk `.net/.log/.raw` files in `<schematic>_SPICA/<timestamp>/`.
-
-A stepped `.op` makes LTspice report one `.meas` row for the whole sweep, so for `.op` circuits
-each chunk gets a dummy first `.step param spica_op list 0 1`, which restores one row per run.
-
-## Stopping, resuming, long campaigns
-
-- `results.csv` is rewritten (atomically, at most once a second) whenever a chunk finishes, and
-  `campaign.state` records Running / Stopped / Finished with the progress. A crash or a closed
-  window loses only the simulations that were in progress.
-- **Stop** offers three choices:
-  - **Analyze now**: stop at once and show the finished runs.
-  - **Finish running**: start nothing new, wait for the simulations in progress, then analyze.
-  - **Discard**: delete the campaign folder, after a confirmation.
-- **File > Open Results** on an unfinished folder offers **Resume**. It reloads the campaign's own
-  `campaign.spica` (same seed, temperatures and signals) and simulates only the missing and failed runs.
-  - In paired mode the result is identical to an uninterrupted campaign: tested on 1200 rows, 0 differ.
-  - If the schematic changed since the campaign started, SPICA warns before resuming.
-- While a campaign runs, Windows is kept from sleeping. The display may still turn off.
-
-## Setup file (.spica)
-
-Everything needed to repeat a campaign and its analysis: schematic (relative path), runs, seed,
-paired mode, temperature mode, saved signals, spec limits per measurement and the TF definition.
-`File > Save Setup` writes it; opening an `.asc` also loads `<name>.spica` next to it when present.
-Seed 0 means "a new seed per campaign"; the seed actually used goes into the campaign folder.
-
-One setup per circuit, for both jobs: **schematic + setup** to simulate, **results + setup** to
-analyse. Opening a campaign folder pairs it with the setup of its schematic: the one open now,
-else the `.spica` next to the schematic, else the campaign's record as an unsaved setup (save it
-with `File > Save Setup As`). Error budget, specs, TF and report edits on the Results tab go into
-that setup (`*` in the title, saved with Ctrl+S), so one `.spica` analyses every campaign of the
-circuit, old ones included. The `campaign.spica` in a campaign folder is the record of how that
-campaign ran; it is used for the analysis only when the schematic is not found.
-
-## Temperature and paired samples
-
-- **As in the schematic**: SPICA sets no temperature; the schematic's own `.temp` applies (27 °C without one).
-- **Corners** (e.g. -40, 25, 90): every run is simulated at each temperature (`.temp T` per chunk;
-  nested `.step temp` cannot be used because LTspice then logs `.meas` for one slice only).
-- **Random flat**: each run gets its own temperature in [min, max] (`.temp {spica_temp}` from a table),
-  recorded in the `temp` column.
-- **Paired samples** (on by default when a temperature mode is chosen): SPICA replaces every
-  `mc()`, `flat()` and `gauss()` in its chunk copy with a parameter whose value is a pure function
-  of (seed, site, run), injected as `table(run, ...)`. Run 37 is then the same unit at every
-  temperature and in any chunk, and the campaign is reproducible from its seed. `.func` bodies that
-  draw random numbers are inlined at each call so every call stays independent.
-  Random values inside sub-circuits are drawn by SPICA too, per instance: SPICA reads the
-  sub-circuits the netlist defines and the ones in the files it includes (`.lib`, `.include`,
-  found as LTspice finds them, nested sub-circuits and `.model` lines inside them too), gives each
-  definition one parameter per random value (`spica_r1..n`) and passes every instance its own
-  paired values, named by where they are (`U3.R5`, `U3.X1.Rin`). Library sub-circuits are copied
-  into the campaign's netlist renamed (`NAME__spica`); the files are not touched. A `.include`
-  file with random values at its own top level (a netlist saved as a library) is placed into the
-  netlist so those are paired as well. Encrypted models cannot be read: SPICA warns, and their
-  tolerances, if any, stay with LTspice. LTspice's own `rand()` was not used: its
-  consecutive values show a small but systematic correlation (about -0.03).
-
-## Results analysis
-
-Results tab, for the running campaign or any folder opened with `File > Open Results`:
-
-- **Error Budget**: each error the design must keep inside its boundaries, in one of two styles:
-  a `.meas` that already is the error, or an output compared run by run with a reference
-  (error = output - (gain x reference + offset), or any ideal expression of x and T), optionally
-  referred to the input. Boundaries symmetric (+/-) or lower/upper (either side may be open), in
-  absolute units, % of reading or % of full scale. A `.meas` error may name its input too.
-  Judged per temperature and across the input: an input swept in levels is judged level by level;
-  an input that varies continuously gets an envelope (mean error fitted up to a cubic in the input,
-  its variance as a quadratic, exact for offset and gain tolerances), so mean +/- k sigma widens
-  where the error spreads more and is judged at 11 points across the range. Mean +/- k sigma
-  (default 6) must stay inside both boundaries and the error must be bell-shaped (Anderson-Darling,
-  one test per temperature on the residuals over their local sigma); PASS / FAIL / CHECK, figures
-  in boxes (mean, sigma, room on each side in sigma), one row per temperature with its tightest
-  point, the error vs input with the envelope and the worst point (or the histogram), and the
-  tolerances that drive it.
-  A **lopsided** error (one tail reaching further) is shown with the units of its long tail in orange
-  on the histogram, and SPICA looks for the likely cause: each tolerance's effect is fitted as a broken
-  line (it follows a bend, a one-sided clipping, a saturation), and since the draws are independent the
-  asymmetry (third moment) splits among the tolerances. The notes give the cause, its share of the
-  asymmetry and a confidence (high / medium / low) from three checks: the skewness against what chance
-  gives with that many runs, the share the tolerances account for, and how often the same cause comes
-  out on top when the runs are resampled (bootstrap, 30 times). When no tolerance explains it alone, pairs
-  of tolerances acting together are tried. Chart **Error vs cause** shows the error against that
-  tolerance, every other effect removed, with the long-tail units in orange (for a pair: one tolerance
-  against the other, the tail gathering in a corner). The Histogram tab does the same for any measurement.
-  It is a model fitted to the runs, so it points where to look; it does not prove the cause.
-- **Table**: every run, out-of-spec values in red, filter and sort.
-- **Statistics**: n, mean, sigma, min/max, median, 0.135/99.865 % percentiles, skewness, kurtosis,
-  Anderson-Darling normality, spec limits, observed yield with exact (Clopper-Pearson) 95 % CI, Cpk,
-  normal-model ppm. The sigma analysis (mean +/- k sigma, predicted ppm) is shown only when the
-  sample is consistent with a normal distribution; otherwise percentiles are used.
-- **Histogram** with normal fit, mean +/- k sigma lines (one k or several, e.g. 3, 6) and spec lines.
-- **Scatter & TF**: finds the TF: fitted line (gain, offset with CIs, R2), the scatter around it,
-  and an optional ideal (`2*x`, `x*(1+50e-6*(T-25))`, SPICE suffixes accepted) with its gain and
-  offset error. *Use as ideal in Error Budget* / *Use the fitted line* send it to the Error Budget,
-  where the boundaries and the verdict live.
-- **Temperature**: corners give per-temperature statistics and, with paired samples, per-unit drift,
-  tempco (ppm/°C) and the yield of units passing every spec at all temperatures. The chart shows each unit
-  as a faint line with a point at every corner, mean ± 3σ and the extremes per corner, either as values or
-  (**Show: Drift from the reference**) as each unit minus itself at the reference temperature. A random range gives
-  the regression on temperature, tempco and the RSS split of the spread into temperature and tolerances.
-- **Sensitivity**: with paired samples SPICA knows every random draw, so it regresses each
-  measurement on all random parameters (and on temperature in random-temperature campaigns):
-  share of the variance per input (standardized coefficient squared, adding up to R2), signed
-  effect, and the shift of the measurement with the input at its tolerance limit, as a tornado chart
-  and a table (double-click an input for its scatter plot). Without paired samples: correlation with
-  the other measurements.
-  The circuit's **input** (a random parameter sweeping the operating range, e.g. the input voltage)
-  drives the outputs by design and would fill the chart with one 99.99 % bar. It is set apart: SPICA
-  first removes its own effect (a cubic in the input, so a nonlinear transfer goes too), then shares
-  what is left among the tolerances, each with a term that grows with the input, so a gain error
-  counts in full even when the input sweeps around zero. The chart title gives the input's share
-  and the narrative the sigma of what is left. The input is found automatically (the reference x of
-  an error or of the TF when it is a parameter, or a parameter that sets it, |r| > 0.95) or chosen
-  with *Inputs...*; *Range* shows one band of the input (five bands, equal numbers of runs). The
-  choice is saved with the setup. In the Error Budget the error is already referred to the ideal TF,
-  so an input that still explains most of it is flagged as a systematic error (gain, offset or
-  nonlinearity), not a tolerance.
-- **Convergence**: running mean with its 95 % band, running sigma and yield.
-- **Charts**: drag a box to zoom (a flat box zooms X only), wheel to zoom (Shift: X, Ctrl: Y),
-  middle-drag to pan, double-click to reset, click a legend entry to hide a series; right-click to
-  copy or save the chart as PNG or SVG. Histogram view: histogram (bins selectable), cumulative
-  distribution or normal probability plot. Scatter axes: measurements, TEMP, random parameters or
-  the run number.
-- **Live**: while a campaign runs the tab refreshes every second; untick *Live update* to freeze the
-  snapshot while you analyse it.
-- **Report**: one self-contained HTML file. *Results > Report...* asks what goes in:
-  - *Error budget only*: one page per error ticked, for checking a requirement: the requirement as
-    entered (definition, boundaries, % of full scale also in absolute terms, the k-sigma criterion),
-    the verdict and the calculated numbers at the worst point (mean, sigma, mean ± k sigma, room on
-    each side, bell-shaped), the histogram, the error across the input with its envelope and against
-    temperature, and what drives it;
-  - *Full analysis*: the error budget, summary tables and one section per measurement, with the
-    measurements and the sections (histogram, sensitivity, temperature, convergence, transfer
-    function) chosen by checkboxes.
-
-  The dialog also takes a *Title* (the report's heading; empty = the campaign folder's name; the
-  schematic is listed under it) and free *Notes* shown at the top. All of it is saved with
-  the setup and the campaign folder. The file is named after the title (else the schematic),
-  `<title>_report.html` or `<title>_error_budget.html`, in the campaign folder;
-  if that name is taken, a timestamp is added. Setup > *Write the report when it ends* saves it
-  automatically when the campaign ends. It is laid out like a datasheet: numbered sections, grid tables,
-  numbered figures with their caption underneath, the SPICA icon at the top right and a footer that
-  says when it was generated. Charts are vector (SVG), sharp when zoomed or printed;
-  printing starts each measurement (and each error of the short report) on a new page.
-  The report ends with *Traceability*: when the campaign ran (start, end, simulating time), on
-  which computer (name, user, Windows build, CPU, cores, RAM), with which SPICA, LTspice and
-  LTspice model library, the seed, and every file simulated with its SHA-256.
-
-## Source bundle (reproducing a campaign)
-
-When a campaign starts, SPICA writes `<schematic>_sources.zip` into the campaign folder: a snapshot
-of what is simulated and where.
-
-- the schematic, its hierarchical sheets and the symbols that do not ship with LTspice (found
-  beside the schematic, in LTspice's `lib\sym` or in the Control Panel's symbol search paths);
-- every model file the netlist uses (`.lib`, `.include`, PWL `file=`), including LTspice's own
-  `standard.*` files and anything those files include, found as LTspice finds them: beside the
-  schematic, `lib\sub`, `lib\cmp`, the library search paths;
-- the setup, named like the schematic, with the campaign's seed, and the netlist SPICA simulated;
-- `SPICA_bundle.txt`: start time, computer, Windows, CPU/RAM, SPICA and LTspice versions, the
-  date of LTspice's model library, search paths, each file with its SHA-256 and original path.
-
-To run it again: unzip anywhere and open the schematic in SPICA; its setup loads with it, and the
-library references are redirected to the copies in the bundle (the status bar says how many), so
-the same models are simulated even if the originals changed or the PC is another. With SPICA's
-paired generator the results are identical run by run; with LTspice's `mc()` reseeded from the
-clock only the statistics repeat. A resumed campaign keeps its first bundle.
-
-The statistics were checked against SciPy (Anderson-Darling, skewness, kurtosis, quantiles,
-Clopper-Pearson, normal tail ppm, regression standard errors).
+The Folder button on the toolbar opens the study's campaigns on disk.
 
 ## Queue
 
-**Run Here** takes the campaign as the Setup tab shows it at that moment (schematic netlist, runs,
-temperatures, signals, seed) and puts it in line. One campaign runs at a time, with all the instances
-the scheduler gives it; the next one starts by itself when it ends. The Setup tab is free again as
-soon as a campaign is added: change a value, open another schematic, add the next one.
+The campaigns of the studies run one after another, each with the whole machine. The list shows each one's
+progress and when it should end; Move Up / Move Down change the order of those waiting, Hold the queue lets the
+running one finish and starts nothing new. Below, the campaign that runs: progress, time left, throughput, this
+PC's CPU, RAM and disk, every LTspice instance, the log.
 
-- The **Queue** tab lists every campaign: its analysis, status, progress, when it starts or ends and
-  how long it takes (from the scheduler's profile of that circuit, once it has run before), who added
-  it (this PC or the listener) and how it ended. The campaigns sent with **Run Remote** are listed there
-  too (marked `R`, "-> <PC>"), with the status, progress and end time their listener reports.
-- A waiting campaign can be moved up or down or removed. **Hold the queue** finishes the running
-  campaign and starts nothing new. **Stop** acts on the running one (Analyze now, Finish running,
-  Discard); the next campaign then starts unless the queue is on hold.
-- Double-click (or **Open Results**) shows a campaign in the Results tab: a finished one from its
-  folder, the running one live.
-- One message tells how the campaigns added here ended, when the last of them has ended, so that a
-  night of campaigns leaves one message and not one per campaign.
-- Under the list, the campaign that runs: progress, timing, the scheduler's plan and per-instance
-  status, a throughput graph and a resource meter (CPU and RAM of the whole machine, disk activity) in the style of Windows 98.
-  When the kept `.raw` files are forecast to need more than the output drive has free, the `.raw forecast`
-  turns red and SPICA warns once, before the drive fills up.
-The CPU figure is Windows' *% Processor Utility*, the same as Task Manager (it counts turbo clocks,
-so it reads higher than the share of busy time). The remaining time plays the runs left out on the
-instances round by round, so the last, partly filled round counts whole.
+Stop (toolbar, Shift+F5) stops the whole study. Stop on the Queue tab stops only the campaign that runs: at once,
+when the simulations running now finish, or discarding its folder. What a stopped campaign finished can still be
+looked at.
 
-Each run takes longer in a campaign than alone in LTspice (all cores busy: lower clocks, shared
-cache and memory bandwidth); the campaign still finishes far sooner than the runs one by one.
+## Options
 
-## Listener
+Tools > Options holds what belongs to this PC:
 
-**Listener** (toolbar, Ctrl+L) makes this SPICA run whatever campaign appears in a folder, e.g. a share
-of a workstation that several people use. It takes two folders: the one to **watch** and the one for
-the **results** (suggested: `<watched>\results`, inside it, so the PCs that send campaigns can open
-their results; any other folder will do, except the watched one itself).
+- **LTspice:** found by itself in the usual places (Detect looks again), or chosen with Browse.
+- **Parallel instances:** automatic (one LTspice per core, fewer if RAM is short), or a fixed number of
+  instances and threads.
+- **Results:** where the studies put their campaigns (`<folder>\studies\<study>`). Empty: beside the project, in
+  `<name>_SPICA`. Keep it short: LTspice cannot open files past 260 characters of path.
 
-- A campaign is a setup (`.spica`) with its schematic beside it, or a bundle (`.zip`, written by
-  **Run Remote** on another PC). A bundle runs from the netlist it carries, so the listening PC does not
-  need the sender's symbols or library search paths: only LTspice's own library.
-- While it listens, the PC is a runner: Open, Run Here and Run Remote are off, and the Setup tab says so.
-- The folder is looked at every 4 seconds. A file is taken when it has stopped changing between two
-  looks (it may still be copying), goes to the queue as any other campaign, and its results are written
-  to `<results>\<file name>\<timestamp>\`.
-- Which campaigns ran and which did not: the listener window lists every file with its status (waiting,
-  queued with its place in line, running with progress and the time it ends, done, stopped, failed and
-  why) and the results folder. The same is written as text to `SPICA_listener.txt` in the watched
-  folder (refreshed at every change and at least every 30 s), so that whoever dropped the file can
-  follow it without access to the workstation's screen. `SPICA_listener_state.tsv` holds the same for
-  programs: it is what Run Remote follows.
-- Each file runs once. A file that changes is a new campaign; **Run Again** repeats one as it is.
-  What ran is kept in `SPICA_listener_jobs.tsv` in the results folder, so closing SPICA loses nothing:
-  the listener starts again with SPICA, and campaigns that were waiting or running are taken again.
+## How a campaign runs
 
-- The listener also runs without the window: `SPICA-cli listen <folder>` (see [Command line](#command-line)).
-
-## Run Remote
-
-**Run Remote** (toolbar, F6) runs the campaign of the Setup tab on another PC, typically a workstation,
-through a shared folder that a SPICA listener watches there. The folder is set once in
-**Tools > Options > Remote PC** (asked the first time).
-
-- SPICA writes the campaign as a bundle into that folder: schematic, sub-sheets, setup, the netlist as
-  converted on this PC, and every model, include and symbol file that is not part of LTspice.
-- The remote PC runs it with its own options (automatic or manual instances, its own cores): nothing
-  about this PC's hardware travels with the campaign.
-- This PC's Queue tab follows the campaign with what the listener reports every few seconds (sent,
-  waiting with its place in line, running with progress and end time, finished). A campaign running
-  there and one running here are followed side by side. The list is kept when SPICA closes.
-- **Open Results** opens a finished remote campaign from the shared folder when the listener writes its
-  results inside the watched folder (the default); otherwise it says where they are on the remote PC.
-
-## Scheduler (Automatic mode)
-
-One fixed rule, printed in the log as the campaign's plan:
-
-- **Instances** N = physical cores (or the manual value), 1 thread each; fewer if free RAM
-  divided by the peak RAM of one instance is smaller. The memory guard only ever lowers N.
-- **Run time** x: each instance first simulates one run alone; x is then tracked from LTspice's
-  own simulation time.
-- **Chunk** k = the runs that fit in about 2 minutes (k = 120 s / x), never more than an equal
-  share of what is left (so all instances finish together) and never a .raw over ~1.5 GB.
-  Two minutes keeps LTspice start-up (~1 s) under 1 % of the work and saves progress often.
-- **Total** about runs x x / N, e.g. `Plan: 1000 runs x 2 s = 33 min of simulation / 6 instances
-  = about 6 min; chunks of 59 runs (~118 s) -> 17 launches.`
-- x is remembered per machine and circuit, so the next campaign plans from the first chunk.
-- A running instance that opens a window (e.g. a dialog) is detected and killed; failed chunks
-  are retried run by run.
-
-## Verified on this machine (Ryzen 5 5500X3D, 6C/12T, LTspice 26.0.1)
-
-| Finding | Result |
-|---|---|
-| Reseed **off**, two runs | identical values, so chunks would repeat the same random sequence |
-| Reseed **on**, 4 simultaneous launches | all different |
-| `-ini` placement | must come **after** the netlist: `-b file.net -ini x.ini` (before it, LTspice opens the GUI) |
-| Private ini without `CaptureAnalytics=false` | LTspice blocks on the analytics dialog |
-| 300 runs, small RC (`samples/rc_mc.asc`) | 12 s, 6 instances, no duplicates |
-| 400 runs, ~1 s/run (`samples/rc_mc_heavy.asc`) | climbed 6 → 8 → 10 → 12 instances, +47 % vs 6 |
-| End-of-campaign chunk floor (1000 fast runs) | 23 s → 16 s |
-| Paired corners, `samples/rc_tc.asc` (tc = 4000 ppm/°C) | measured per-unit tempco 4032–4035 ppm/°C vs 4032 expected |
-| `.op` dummy step, `samples/divider_op.asc` | 120 runs, every value equal to the exact divider formula (error < 3e-8) |
-
-## Op-amp models with datasheet tolerances
-
-`Tools > Op-amp Models` lists op-amps modelled from their datasheets: OPA4991, OPA4182, LMH6619 (SPICA_OA)
-and the AD8139 fully differential amplifier (SPICA_FDA). Place LTspice's `opamp2` symbol (or the AD8139
-symbol) and set its value to `<PART>_MC`, e.g. `OPA4991_MC`. When the campaign runs SPICA adds the
-part's tolerances to the instance (offset and its drift, bias and offset current, CMRR, PSRR, open-loop
-gain, ...), so they are paired and named per unit (`U1.Vos`) in Sensitivity, Worst Case and the Error
-Budget. Datasheet limits are flat over the limit; a value given only as typical is flat over 3x typical.
-Override any of them on the symbol (`Vos={gauss(277u)}`, or `Vos=0` to hold it). *Save Library* writes
-`SPICA_opamps.lib`, so the schematic also runs in LTspice with `.lib SPICA_opamps.lib`. The models are
-built for DC and low-frequency accuracy (one pole, slew rate, rails, current limit). Sample:
-`samples/opamp_gain2.asc`.
-
-## Heavier sample circuits
-
-Each comes with a ready `.spica` setup next to it (opening the `.asc` loads it): run count, specs,
-TF and temperatures. Only built-in LTspice parts are used. Schematics are net-labelled (every pin
-carries a net name). Times are single LTspice runs on the machine above; 96-run campaigns all
-completed with 0 failures.
-
-| Sample | What it exercises | s/run | Setup |
-|---|---|---|---|
-| `buck_hysteretic.asc` | 12 → 3.3 V hysteretic buck, BSC050N03LS + MBRS340, 1 A load step. vout, ripple, variable fsw, eff, droop | 0.53 | 500 runs, specs |
-| `classd_amp.asc` | ±12 V half bridge, 400 kHz carrier, random input amplitude (`flat`). TF `12*x`: about −2.5 % gain error (switch/inductor R vs 8 Ω) | 0.30 | 500 runs, TF 2 % |
-| `sigma_delta.asc` | CT 2nd-order ΣΔ ADC, 1 MHz D flip-flop, 4000 samples. TF `x`; gain scatter from 1 % R1/R2, offset from `gauss` Vos | 0.53 | 500 runs, TF ±0.005 FS (abs) |
-| `colpitts_osc.asc` | 10.3 MHz 2N3904 Colpitts, 100 µs at ≤ 1 ns steps. freq, vpp, start-up time | 0.60 | 200 runs × 3 corners, paired |
-| `linear_psu.asc` | 50 Hz bridge + 2200 µF + zener/darlington regulator, 300 ms. headroom (dropout) and ripple; Vz/Vbe tempco | 0.26 | 200 runs × 3 corners, paired |
-
-The ΣΔ needs an absolute budget: with a bipolar input, a % budget explodes near 0 V.
-
-## Command line
-
-`SPICA-cli-<version>.exe` (rename it as you like, e.g. `spica.exe`) is the same engine as the window,
-for scripts, other tools and the workstation that runs campaigns. It reads `SPICA.ini` next to it
-(LTspice location, automatic or manual instances); the options override it.
-
-```
-SPICA-cli run <setup.spica | bundle.zip | schematic.asc> [--out <folder>] [--runs n] [--seed n]
-              [--raw | --no-raw] [--cores n] [--threads n] [--ltspice <path>] [--strict] [--quiet]
-SPICA-cli listen <folder> [--out <folder>] [--cores n] [--threads n] [--ltspice <path>]
-SPICA-cli status <folder>
-SPICA-cli budget <campaign folder> [--sigma k]
-```
-
-- `run` runs one campaign and waits for it: progress on the console, then the error budget verdicts
-  when the setup has errors. The last line printed is the campaign folder (`results.csv`, `samples.csv`,
-  `campaign.log`, `campaign.spica`), so a script can take it from there. Warnings that the window asks
-  about are printed and the campaign goes on; `--strict` stops at them instead.
-- `listen` is the listener of the window, without it: it watches the folder (results in `<folder>\results`
-  by default), prints each campaign as it starts and ends, and writes the same status files, so Run
-  Remote on other PCs follows it as before.
-- `status` shows a listener's state and its campaigns from its status file (any PC that sees the folder).
-- `budget` prints the Error Budget of a finished campaign.
-- **Ctrl+C** once: the simulations already running finish and nothing new starts; twice: stop now.
-- Exit codes: 0 done; 1 some runs failed or gave no data; 2 could not run; 3 stopped with Ctrl+C.
-  `budget`: 0 every error PASS, 1 a FAIL, 4 only CHECK, 2 an error could not be computed.
+- SPICA converts the schematic with `LTspice -netlist` and splits the runs into chunks, each launched as
+  `LTspice.exe -b chunk.net -ini <private ini>`. The private ini copies the user's LTspice settings, reseeds
+  `mc()` from the clock and turns off the start-up dialogs; the user's own `LTspice.ini` is never touched.
+- Any `.step` in the schematic is replaced by SPICA's own `.step param run a b 1` per chunk. A stepped `.op`
+  gets a dummy first step, so `.meas` give one row per run.
+- **Nominal and worst case** set every tolerance SPICA can drive (`mc()`, `gauss()`, `flat()`, also inside
+  sub-circuits and the libraries they come from) to its nominal value or to an edge (flat: its limits; gaussian:
+  ± sigma). **Monte Carlo, paired**: SPICA draws the values itself, as a pure function of (seed, tolerance, run),
+  so run 37 is the same unit at every temperature and the campaign is reproducible from its seed. Not paired:
+  LTspice's own `mc()`.
+- A temperature is set per chunk with `.temp T`.
+- The scheduler: N instances = physical cores (or the manual value), fewer if free RAM is short; each first
+  measures the run time, then chunks of about 2 minutes, never more than an equal share of what is left. The run
+  time is remembered per machine and circuit, so the next campaign plans from the start.
+- Each campaign folder holds `results.csv` (run, temperature, status, one column per `.meas`), `summary.txt`,
+  `campaign.log`, `campaign.state` and the chunks with their `.raw` files.
 
 ## Build
 
 ```
 dotnet build src/SPICA/SPICA.csproj -c Release
-dotnet build src/SPICA.Cli/SPICA.Cli.csproj -c Release
 ```
 
-The version of both is in `src/Directory.Build.props`. The engine lives in `src/SPICA.Engine`: both exes
-compile its files in, so each is a single exe. Building `src/SPICA.Engine` on its own checks that the engine
-does not depend on any window code. The direction the app is taking (studies as graphs of blocks) is in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). `SPICA-cli studies <setup.spica>` lists a setup's studies.
+The version is in `src/Directory.Build.props`. The engine lives in `src/SPICA.Engine` and is compiled into the
+exe; building it on its own checks that it depends on no window code. The design is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-`tests/SPICA.Smoke` runs a headless campaign: `SPICA.Smoke.exe <file.asc> <runs> [instances threads]`
-(environment: `SPICA_TEMP=corners:-40,25,90` or `random:-40,90`, `SPICA_PAIRED=1`, `SPICA_SEED=n`, `SPICA_NORAW=1`).
-`--stats <folder> <meas> [lsl usl]` prints the analysis of a campaign folder; `--ui <folder> <pngdir>` and
-`--setup <file> <png> [run]` render the windows off-screen for checking.
-`--resume <file.asc> <runs> <corners>` stops a paired campaign part-way, resumes it and compares it with an
-uninterrupted one (it must match exactly). It also tests the finish-running stop.
+`tests/SPICA.Smoke` checks the app; each check prints `ok` or `WRONG`:
+
+- `--graph`: the blocks, the wiring, the executors, the cache, the campaign builder and the project file (no LTspice);
+- `--studies <asc> <png>`: the window on a schematic, with pictures;
+- `--studyrun <asc> <png>`: a study run with LTspice end to end, the waveforms and the cache;
+- `--hittest`: the window's edges resize it;
+- `<asc> [runs] [instances threads]`: the campaign engine alone (`SPICA_TEMP=-40,25,90`, `SPICA_PAIRED=1`).
 
 ## License
 

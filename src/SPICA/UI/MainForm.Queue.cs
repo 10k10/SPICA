@@ -26,13 +26,11 @@ namespace Spica.UI
         TextBox txtLog;
         readonly Dictionary<string, Label> stat = new Dictionary<string, Label>();
 
-        int meterTick;
-        int liveDone = -1;
-        DateTime nextLiveRefresh = DateTime.MinValue;
+        QueueJob shownJob;             // on the monitor: the running campaign, or the last that ran
+        CampaignEngine engine;         // shownJob's engine, kept after it ends (final figures, log)
+        int meterTick, graphTick;
+        double graphShown;             // throughput as drawn: rises from 0 at the start
         bool monitorFinal;             // the monitor already shows the final figures of its campaign
-        bool finishBoxOpen;
-        // campaigns added here that ended since the last "finished" message: told together, when the queue stops
-        readonly List<(QueueJob Job, string Note)> ended = new List<(QueueJob, string)>();
 
         static readonly Color GoodColor = Color.FromArgb(0, 110, 0), BadColor = Color.FromArgb(176, 0, 0);
         const int QueueListHeight = 118;
@@ -55,28 +53,24 @@ namespace Spica.UI
                 x += width + gap;
                 return b;
             }
-            btnQOpen = B("Open &Results", "results16", 112, () => { if (SelectedRemote() != null) ShowRemoteResults(SelectedRemote()); else ShowJobResults(SelectedJob()); }, "Show the selected campaign on the Results tab: live while it runs (double-click does the same)");
-            btnQStop = B("S&top...", "stop16", 80, StopCampaign, "Stop the running campaign: analyse what is done, finish the running simulations, or discard it (Shift+F5)", 16);
+            btnQOpen = B("&Waveforms", "chart16", 100, () => ShowJobResults(SelectedJob()), "The waveforms of the selected campaign, as far as it has run (double-click does the same)");
+            btnQStop = B("S&top...", "stop16", 80, StopCampaign, "Stop the running campaign: at once, or when the simulations running now finish; or discard it", 16);
             btnQUp = B("Move &Up", null, 75, () => MoveSelected(-1), "The selected waiting campaign runs earlier");
             btnQDown = B("Move &Down", null, 80, () => MoveSelected(+1), "The selected waiting campaign runs later");
             btnQRemove = B("Re&move", null, 75, RemoveSelected, "Take the selected campaign out of the list (Del). The results of an ended campaign stay on disk.", 16);
-            btnQClear = B("&Clear Ended", null, 92, () => { queue.ClearEnded(); remote.ClearEnded(); }, "Take the campaigns that ended out of the list; their results stay on disk", 16);
+            btnQClear = B("&Clear Ended", null, 92, () => queue.ClearEnded(), "Take the campaigns that ended out of the list; their results stay on disk", 16);
             chkHold = new Win98CheckBox { Text = "&Hold the queue: finish the running campaign, start nothing new", Location = new Point(x, 3) };
             chkHold.CheckedChanged += (s, e) => { if (queue.Hold != chkHold.Checked) queue.Hold = chkHold.Checked; };
             bar.Controls.Add(chkHold);
 
             // --- the campaigns ----------------------------------------------------------------
             lvQueue = new Win98ListView { MultiSelect = false };
-            foreach (var (t, w) in new[] { ("#", 30), ("Campaign", 140), ("Analysis", 250), ("Status", 76), ("Progress", 124), ("Time", 216), ("From", 70), ("Result", 120) })
+            foreach (var (t, w) in new[] { ("#", 30), ("Campaign", 200), ("Analysis", 280), ("Status", 76), ("Progress", 124), ("Time", 216), ("Result", 120) })
                 lvQueue.Columns.Add(t, w);
             lvQueue.CellColor = (row, col) =>
             {
                 if (col != 3 || row < 0 || row >= lvQueue.Items.Count) return null;
-                var tag = lvQueue.Items[row].Tag;
-                if (tag is RemoteJob r)
-                    return r.Status == RemoteStatus.Running ? Win98.Navy : r.Status == RemoteStatus.Done ? GoodColor
-                         : r.Status == RemoteStatus.Failed || r.Status == RemoteStatus.Lost ? BadColor : (Color?)null;
-                if (!(tag is QueueJob j)) return null;
+                if (!(lvQueue.Items[row].Tag is QueueJob j)) return null;
                 switch (j.Status)
                 {
                     case JobStatus.Running: return Win98.Navy;
@@ -88,19 +82,12 @@ namespace Spica.UI
             lvQueue.CellTip = (row, col) =>
             {
                 if (row < 0 || row >= lvQueue.Items.Count) return null;
-                var tag = lvQueue.Items[row].Tag;
-                if (tag is RemoteJob r)
-                {
-                    if (col == 6) return "Sent to " + (r.Machine.Length > 0 ? r.Machine : "the remote PC") + " through " + r.Folder + "\n(file " + r.File + ")";
-                    if (col == 7) return string.Join("\n", new[] { r.ResultsHere ?? (r.Results.Length > 0 ? r.Results + " (on " + r.Machine + ")" : ""), r.Message, r.Note }.Where(x => !string.IsNullOrEmpty(x)));
-                    return col == 2 || col == 5 ? lvQueue.Items[row].SubItems[col].Text : null;
-                }
-                if (!(tag is QueueJob j)) return null;
-                if (col == 7) return ((j.OutputDir ?? "") + (j.Message.Length > 0 ? "\n" + j.Message : "")).Trim();
+                if (!(lvQueue.Items[row].Tag is QueueJob j)) return null;
+                if (col == 6) return ((j.OutputDir ?? "") + (j.Message.Length > 0 ? "\n" + j.Message : "")).Trim();
                 return col == 2 || col == 5 ? lvQueue.Items[row].SubItems[col].Text : null;
             };
             lvQueue.SelectedIndexChanged += (s, e) => UpdateQueueButtons();
-            lvQueue.DoubleClick += (s, e) => { if (SelectedJob() != null) ShowJobResults(SelectedJob()); else if (SelectedRemote() != null) ShowRemoteResults(SelectedRemote()); };
+            lvQueue.DoubleClick += (s, e) => { if (SelectedJob() != null) ShowJobResults(SelectedJob()); };
             lvQueue.KeyDown += (s, e) => { if (e.KeyCode == Keys.Delete && btnQRemove.Enabled) RemoveSelected(); };
             bool sizing = false;
             lvQueue.Resize += (s, e) =>
@@ -114,7 +101,7 @@ namespace Spica.UI
             };
             lblQueueEmpty = new Label
             {
-                Text = "The queue is empty. Set up a campaign on the Setup tab and press Run Here (F5) or Run Remote (F6): the campaigns of this PC and the ones sent to the remote PC are followed here.",
+                Text = "The queue is empty. Run a study (Run, F5): its campaigns wait here for their turn, and the one running is followed below.",
                 AutoSize = true, Location = new Point(8, 30), ForeColor = Win98.Shadow, BackColor = Win98.Window, UseMnemonic = false,
             };
             lvQueue.Controls.Add(lblQueueEmpty);
@@ -206,7 +193,6 @@ namespace Spica.UI
         // =====================================================================================
 
         QueueJob SelectedJob() => lvQueue != null && lvQueue.SelectedItems.Count > 0 ? lvQueue.SelectedItems[0].Tag as QueueJob : null;
-        RemoteJob SelectedRemote() => lvQueue != null && lvQueue.SelectedItems.Count > 0 ? lvQueue.SelectedItems[0].Tag as RemoteJob : null;
 
         void MoveSelected(int delta)
         {
@@ -216,14 +202,6 @@ namespace Spica.UI
 
         void RemoveSelected()
         {
-            var r = SelectedRemote();
-            if (r != null)
-            {
-                if (r.Pending && Win98MessageBox.Show(this, $"Stop following {r.Name} here?\nIt still runs on {(r.Machine.Length > 0 ? r.Machine : "the remote PC")}; its results stay there.",
-                        "Queue", MessageBoxButtons.YesNo, Win98Icon.Question) != DialogResult.Yes) return;
-                remote.Remove(r);
-                return;
-            }
             var j = SelectedJob();
             if (j == null || j.Status == JobStatus.Running) return;
             if (j.Status == JobStatus.Queued &&
@@ -233,6 +211,17 @@ namespace Spica.UI
 
         static string Clock(DateTime t) => t.ToString(t.Date == DateTime.Today ? "HH:mm" : "ddd HH:mm", CultureInfo.InvariantCulture);
         static string Hms(TimeSpan t) => $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}";
+
+        /// <summary>A duration in the words of a clock: 40 s, 12 min, 2 h 05 min.</summary>
+        static string Duration(double seconds)
+        {
+            if (double.IsNaN(seconds) || double.IsInfinity(seconds)) return "?";
+            if (seconds < 90) return $"{Math.Max(1, Math.Round(seconds)):0} s";
+            if (seconds < 90 * 60) return $"{Math.Round(seconds / 60):0} min";
+            int h = (int)(seconds / 3600), m = (int)Math.Round((seconds - h * 3600.0) / 60);
+            if (m == 60) { h++; m = 0; }
+            return $"{h} h {m:00} min";
+        }
 
         /// <summary>The last two names of a campaign folder: the output folder and the campaign's date.</summary>
         static string ShortFolder(string dir)
@@ -250,7 +239,7 @@ namespace Spica.UI
                 {
                     var s = j.Engine?.Snapshot();
                     int done = s?.Done ?? 0, total = Math.Max(1, s?.Total ?? j.Total);
-                    state = s != null && s.Draining ? (s.AutoStopped ? "Finishing" : "Stopping") : "Running";
+                    state = s != null && s.Draining ? "Stopping" : "Running";
                     prog = $"{done:N0} / {total:N0}  ({100.0 * done / total:0} %)";
                     double rem = queue.RemainingSeconds(j);
                     time = double.IsNaN(rem) ? "measuring the run time..." : $"ends about {Clock(DateTime.Now.AddSeconds(rem))}  ({Duration(rem)} left)";
@@ -278,56 +267,14 @@ namespace Spica.UI
                              (j.Message.Length > 0 ? " - " + j.Message : "");
                     break;
             }
-            return new[] { j.Id.ToString(CultureInfo.InvariantCulture), j.Name, j.Analysis, state, prog, time, j.Source, result };
+            return new[] { j.Id.ToString(CultureInfo.InvariantCulture), j.Name, j.Analysis, state, prog, time, result };
         }
-
-        string[] RemoteRow(RemoteJob r)
-        {
-            string state, prog, time, result;
-            int total = Math.Max(1, r.Total);
-            switch (r.Status)
-            {
-                case RemoteStatus.Running:
-                    state = "Running";
-                    prog = $"{r.Done:N0} / {r.Total:N0}  ({100.0 * r.Done / total:0} %)";
-                    time = double.IsNaN(r.Eta) ? "measuring the run time..." : $"ends about {Clock(DateTime.Now.AddSeconds(r.Eta))}  ({Duration(r.Eta)} left)";
-                    result = r.Note;
-                    break;
-                case RemoteStatus.Queued:
-                    state = "Waiting";
-                    prog = $"{r.Total:N0} to run";
-                    time = !double.IsNaN(r.Wait) ? $"starts about {Clock(DateTime.Now.AddSeconds(r.Wait))} there" : r.Ahead == 0 ? "next there" : $"{r.Ahead} before it there";
-                    result = r.Note;
-                    break;
-                case RemoteStatus.Sent:
-                case RemoteStatus.Waiting:
-                    state = "Sent";
-                    prog = r.Total > 0 ? $"{r.Total:N0} to run" : "";
-                    time = "sent " + Clock(r.Sent);
-                    result = r.Status == RemoteStatus.Waiting && r.Message.Length > 0 ? r.Message : r.Note;
-                    break;
-                default:
-                    state = r.Status == RemoteStatus.Done ? "Finished" : r.Status == RemoteStatus.Stopped ? "Stopped" : r.Status == RemoteStatus.Lost ? "Lost" : "Failed";
-                    prog = r.Total > 0 && r.Status != RemoteStatus.Lost ? $"{r.Done:N0} / {r.Total:N0}" : "";
-                    time = r.Started != null && r.Ended != null ? $"took {Hms(r.Ended.Value - r.Started.Value)}, ended {Clock(r.Ended.Value)}" : r.Ended != null ? "ended " + Clock(r.Ended.Value) : "";
-                    result = r.Status == RemoteStatus.Done || r.Status == RemoteStatus.Stopped
-                        ? $"{r.Ok:N0} with data" + (r.NoData > 0 ? $", {r.NoData:N0} without" : "") + (r.Failed > 0 ? $", {r.Failed:N0} failed" : "") + (r.ResultsHere == null ? "  (results on " + r.Machine + ")" : "")
-                        : r.Message;
-                    break;
-            }
-            string to = "-> " + (r.Machine.Length > 0 ? r.Machine : "remote");
-            return new[] { "R", r.Name, r.Analysis, state, prog, time, to, result };
-        }
-
-        object[] QueueItems() => queue.Jobs.Cast<object>().Concat(remote.Jobs).ToArray();
-
-        string[] Row(object o) => o is QueueJob j ? QueueRow(j) : RemoteRow((RemoteJob)o);
 
         /// <summary>Brings the list in line with the queue; texts are touched only when they change (no flicker).</summary>
         void UpdateQueueList()
         {
             if (lvQueue == null) return;
-            var jobs = QueueItems();
+            var jobs = queue.Jobs.ToArray();
             bool same = lvQueue.Items.Count == jobs.Length;
             for (int i = 0; same && i < jobs.Length; i++) same = ReferenceEquals(lvQueue.Items[i].Tag, jobs[i]);
             if (!same)
@@ -335,7 +282,7 @@ namespace Spica.UI
                 var sel = lvQueue.SelectedItems.Count > 0 ? lvQueue.SelectedItems[0].Tag : null;
                 lvQueue.BeginUpdate();
                 lvQueue.Items.Clear();
-                foreach (var j in jobs) lvQueue.Items.Add(new ListViewItem(Row(j)) { Tag = j, Selected = j == sel });
+                foreach (var j in jobs) lvQueue.Items.Add(new ListViewItem(QueueRow(j)) { Tag = j, Selected = j == sel });
                 lvQueue.EndUpdate();
                 lblQueueEmpty.Visible = jobs.Length == 0;
                 UpdateQueueButtons();
@@ -345,14 +292,14 @@ namespace Spica.UI
                 for (int i = 0; i < jobs.Length; i++)
                 {
                     var it = lvQueue.Items[i];
-                    var cols = Row(jobs[i]);
+                    var cols = QueueRow(jobs[i]);
                     bool status = it.SubItems[3].Text != cols[3];
                     for (int c = 0; c < cols.Length; c++)
                         if (it.SubItems[c].Text != cols[c]) it.SubItems[c].Text = cols[c];
                     if (status) UpdateQueueButtons();
                 }
             }
-            int pending = queue.Jobs.Count(j => j.Pending) + remote.Jobs.Count(r => r.Pending);
+            int pending = queue.Jobs.Count(j => j.Pending);
             string title = pending > 0 ? $"Queue ({pending})" : "Queue";
             if (pageQueue.Text != title) { pageQueue.Text = title; tabs.Invalidate(); }
         }
@@ -361,16 +308,15 @@ namespace Spica.UI
         {
             if (btnQOpen == null) return;
             var j = SelectedJob();
-            var r = SelectedRemote();
             var jobs = queue.Jobs;
             int i = j == null ? -1 : jobs.ToList().IndexOf(j);
             bool waiting = j != null && j.Status == JobStatus.Queued;
-            btnQOpen.Enabled = (j != null && j.Status != JobStatus.Queued) || (r != null && r.Results.Length > 0);
+            btnQOpen.Enabled = j != null && j.Status != JobStatus.Queued;
             btnQStop.Enabled = Running;
             btnQUp.Enabled = waiting && i > 0 && jobs[i - 1].Status == JobStatus.Queued;
             btnQDown.Enabled = waiting && i >= 0 && i + 1 < jobs.Count && jobs[i + 1].Status == JobStatus.Queued;
-            btnQRemove.Enabled = (j != null && j.Status != JobStatus.Running) || r != null;
-            btnQClear.Enabled = jobs.Any(q => !q.Pending) || remote.Jobs.Any(q => !q.Pending);
+            btnQRemove.Enabled = j != null && j.Status != JobStatus.Running;
+            btnQClear.Enabled = jobs.Any(q => !q.Pending);
             if (chkHold.Checked != queue.Hold) chkHold.Checked = queue.Hold;
         }
 
@@ -378,28 +324,15 @@ namespace Spica.UI
         //  What the queue tells
         // =====================================================================================
 
-        void OnJobStarted(QueueJob job, bool second)
+        void OnJobStarted(QueueJob job)
         {
             shownJob = job;
             engine = job.Engine;
             monitorFinal = false;
-            if (!second)
-            {
-                txtLog.Clear();
-                graph.Clear();
-                graphShown = 0;
-                // Results follow the new campaign, unless the user is reading other results there: the ones opened from
-                // disk, or the ones on screen now. The campaign started by the user's own click is always followed.
-                if (addingLocal || resultsView.Data == null || (liveJob != null && tabs.SelectedIndex != TabResults))
-                {
-                    liveJob = job;
-                    resultsView.SetData(null, false);
-                }
-            }
+            txtLog.Clear();
+            graph.Clear();
+            graphShown = 0;
             progress.Value = 0;
-            liveDone = -1;
-            nextLiveRefresh = DateTime.MinValue;
-
             UpdateQueueList();
             foreach (ListViewItem it in lvQueue.Items)
                 if (it.Tag == job)
@@ -407,172 +340,19 @@ namespace Spica.UI
                     if (lvQueue.SelectedItems.Count == 0) it.Selected = true;
                     it.EnsureVisible();
                 }
-            SetStatus(second ? "Worst case: verification runs..." : job.Request.Resume != null ? $"Resuming {job.Name}..." : $"Running {job.Name}: {job.Total:N0} simulations...");
+            SetStatus($"Running {job.Name}: {job.Total:N0} simulations...");
             UpdateCommandState();
         }
 
         void OnJobFinished(QueueJob job)
         {
-            bool local = job.Tag == null;       // added here by the user (the listener's jobs end without a message)
-            if (job.Engine == null)
+            if (job.Engine == null) SetStatus($"{job.Name}: {job.Message}");          // it could not even start
+            else
             {
-                // it could not even start
-                SetStatus($"{job.Name}: {job.Message}");
-                if (local) ended.Add((job, ""));
-                Post(ShowFinishBox);
-                return;
+                if (job == shownJob) UpdateMonitor(true);
+                SetStatus($"{job.Name}: campaign {(job.Status == JobStatus.Finished ? "finished" : job.Status == JobStatus.Stopped ? "stopped" : "failed")}.");
             }
-
-            var s = job.Engine.Snapshot();
-            if (job == shownJob) UpdateMonitor(true);
-            if (job == liveJob) RefreshResults();
-
-            // Setup > "Write the report when it ends": into the campaign folder, as set in Results > Report...
-            string reportNote = "", reportFile = null;
-            if (job.Request.Project.Report.Auto && s.Ok > 0 && !closing)
-            {
-                try
-                {
-                    reportFile = WriteAutoReport(job);
-                    reportNote = "\nReport saved: " + Path.GetFileName(reportFile);
-                }
-                catch (Exception ex) { reportNote = "\nThe report could not be written: " + ex.Message; }
-            }
-            SetStatus($"{job.Name}: campaign {(job.Status == JobStatus.Finished ? "finished" : job.Status == JobStatus.Stopped ? "stopped" : "failed")}." +
-                      (reportFile != null ? " Report: " + reportFile : ""));
             UpdateCommandState();
-            if (closing) return;
-
-            if (job.AnalyzeOnFinish)
-            {
-                // the Stop dialog asked for the results: no question, show them
-                job.AnalyzeOnFinish = false;
-                if (job != liveJob || resultsView.Data == null) { liveJob = job; RefreshResults(); }
-                tabs.SelectedIndex = TabResults;
-            }
-            else if (local) ended.Add((job, reportNote));
-            Post(ShowFinishBox);
-        }
-
-        /// <summary>The report of a campaign that just ended: from the Results tab when it shows that campaign, else built aside.</summary>
-        string WriteAutoReport(QueueJob job)
-        {
-            if (job == liveJob && resultsView.Data != null) return resultsView.AutoReport();
-            var e = job.Engine;
-            using (var view = new ResultsView())
-            {
-                view.SetData(ResultSet.FromResults(e.GetResults(), e.MeasNames, e.Options, e.Options.Setup), false);
-                return view.AutoReport();
-            }
-        }
-
-        /// <summary>
-        /// Tells how the campaigns added here ended: once, when the queue has nothing more to run, so that a night of
-        /// campaigns leaves one message and not a pile of them.
-        /// </summary>
-        void ShowFinishBox()
-        {
-            if (closing || finishBoxOpen || ended.Count == 0) return;
-            // while a campaign added here still runs or waits its turn, the message waits too (the listener's do not count)
-            if (queue.Jobs.Any(j => j.Tag == null && (j.Status == JobStatus.Running || (j.Status == JobStatus.Queued && !queue.Hold)))) return;
-            var list = ended.ToList();
-            ended.Clear();
-            finishBoxOpen = true;
-            try
-            {
-                System.Media.SystemSounds.Asterisk.Play();
-                var last = list[list.Count - 1].Job;
-                if (list.Count == 1)
-                {
-                    if (last.Status == JobStatus.Failed)
-                    {
-                        Win98MessageBox.Show(this, last.Message, "SPICA", MessageBoxButtons.OK, Win98Icon.Error);
-                        return;
-                    }
-                    string msg = $"{(last.Status == JobStatus.Stopped ? "Campaign stopped" : "Campaign finished")} in {Hms(last.Elapsed)}.\n\n" +
-                                 $"{last.Ok:N0} runs with data, {last.NoData:N0} without data, {last.Failed:N0} failed." +
-                                 (last.Message.Length > 0 ? "\n" + last.Message : "") + list[0].Note + "\n\nOpen the Results tab?";
-                    if (Win98MessageBox.Show(this, msg, "SPICA", MessageBoxButtons.YesNo, last.Failed > 0 ? Win98Icon.Warning : Win98Icon.Information) == DialogResult.Yes)
-                        ShowJobResults(last);
-                    return;
-                }
-
-                var sb = new StringBuilder($"The {list.Count} campaigns added here have ended.\n");
-                foreach (var (j, note) in list.Take(12))
-                {
-                    sb.Append("\n").Append(j.Name).Append(":  ");
-                    if (j.Status == JobStatus.Failed && j.Done == 0) sb.Append("failed - ").Append(j.Message);
-                    else sb.Append($"{(j.Status == JobStatus.Finished ? "finished" : j.Status == JobStatus.Stopped ? "stopped" : "failed")} in {Hms(j.Elapsed)}, " +
-                                   $"{j.Ok:N0} runs with data" + (j.Failed > 0 ? $", {j.Failed:N0} failed" : "") + (note.StartsWith("\nThe report") ? " (no report: see the log)" : ""));
-                }
-                if (list.Count > 12) sb.Append($"\n... and {list.Count - 12} more");
-                sb.Append("\n\nEach one opens from the Queue tab (double-click). Open the results of the last one now?");
-                bool bad = list.Any(e => e.Job.Status == JobStatus.Failed || e.Job.Failed > 0);
-                if (Win98MessageBox.Show(this, sb.ToString(), "SPICA", MessageBoxButtons.YesNo, bad ? Win98Icon.Warning : Win98Icon.Information) == DialogResult.Yes)
-                    ShowJobResults(last);
-            }
-            finally
-            {
-                finishBoxOpen = false;
-                if (ended.Count > 0) Post(ShowFinishBox);
-            }
-        }
-
-        /// <summary>The results of a campaign that ran on the remote PC: opened from the shared folder when they are there.</summary>
-        void ShowRemoteResults(RemoteJob r)
-        {
-            string dir = r.ResultsHere;
-            // looked for again now: the listener may name its folder differently from this PC
-            if (dir == null || !File.Exists(Path.Combine(dir, "results.csv")))
-            {
-                Cursor = Cursors.WaitCursor;
-                try { dir = RemoteState.Locate(r.Folder, remote.States.TryGetValue(r.Folder, out var st) ? st?.Input : null, r.Results) ?? dir; }
-                finally { Cursor = Cursors.Default; }
-            }
-            if (dir != null && File.Exists(Path.Combine(dir, "results.csv")))
-            {
-                if (r.Pending)
-                    Win98MessageBox.Show(this, "This campaign still runs on " + r.Machine + ": the results open as they are now (reopen them later for the rest).", "SPICA", MessageBoxButtons.OK, Win98Icon.Information);
-                OpenResultsFolder(dir);
-                return;
-            }
-            if (r.Results.Length == 0)
-            {
-                Win98MessageBox.Show(this, "It has no results yet.", "SPICA", MessageBoxButtons.OK, Win98Icon.Information);
-                return;
-            }
-            int c = Win98MessageBox.Choose(this, $"Its results are on {r.Machine}, in\n{r.Results}\n\n" +
-                    $"SPICA looked for that folder as written, inside the shared folder ({r.Folder}) and beside it, and did not find its results.csv. " +
-                    "Find it yourself (it is remembered), or, if the listener writes its results outside the watched folder, set them inside it on " +
-                    r.Machine + " (Tools > Listener, or SPICA-cli listen --out).", "SPICA", Win98Icon.Information, "&Find the Folder...", "Close");
-            if (c != 0) return;
-            using (var d = new FolderBrowserDialog { Description = $"The folder of {r.Name} (the one containing results.csv):", ShowNewFolderButton = false,
-                                                     SelectedPath = Directory.Exists(r.Folder) ? r.Folder : "" })
-            {
-                if (d.ShowDialog(this) != DialogResult.OK) return;
-                string pick = d.SelectedPath;
-                if (!File.Exists(Path.Combine(pick, "results.csv")))
-                {
-                    // the campaign's own folder may be one level down (results\name\stamp)
-                    pick = Directory.GetDirectories(pick).Where(x => File.Exists(Path.Combine(x, "results.csv"))).OrderByDescending(x => x).FirstOrDefault();
-                    if (pick == null)
-                    {
-                        Win98MessageBox.Show(this, "That folder has no results.csv.\nChoose the campaign folder (named like 20261024_085624).", "SPICA", MessageBoxButtons.OK, Win98Icon.Warning);
-                        return;
-                    }
-                }
-                r.ResultsHere = pick;
-                remote.Save();
-                OpenResultsFolder(pick);
-            }
-        }
-
-        void OnRemoteEnded(RemoteJob r)
-        {
-            string how = r.Status == RemoteStatus.Done ? "finished" : r.Status == RemoteStatus.Stopped ? "stopped" : "failed";
-            SetStatus($"{r.Name} {how} on {(r.Machine.Length > 0 ? r.Machine : "the remote PC")}" + (r.Status == RemoteStatus.Done ? $": {r.Ok:N0} runs with data. Open it from the Queue tab." : r.Message.Length > 0 ? ": " + r.Message : "."));
-            if (!closing) System.Media.SystemSounds.Asterisk.Play();
-            UpdateQueueButtons();
         }
 
         void OnJobDiscarded(QueueJob job, bool gone)
@@ -583,34 +363,15 @@ namespace Spica.UI
                 engine = null;
                 ClearMonitor();
             }
-            if (job == liveJob)
-            {
-                liveJob = null;
-                resultsView.SetData(null, false);
-            }
             UpdateCommandState();
             SetStatus(gone ? "Campaign discarded." : "Campaign stopped; some files could not be deleted.");
             if (!gone && !closing)
                 Post(() => Win98MessageBox.Show(this, "The campaign was stopped, but the folder could not be deleted completely:\n" + job.OutputDir, "SPICA", MessageBoxButtons.OK, Win98Icon.Warning));
-            Post(ShowFinishBox);
         }
 
-        static string AnalysisText(CampaignOptions o, EngineSnapshot s)
-        {
-            if (o.WcStage == 1) return $"Worst case, step 1 of 2: screening (nominal + each of {o.Mc.Sites.Count} tolerances at its edge); verification follows by itself";
-            if (o.WcStage == 2) return "Worst case, step 2 of 2: verification (every tolerance pushed the worst way for each measurement)";
-            if (o.Mc?.Design != null && o.Mc.Design.Count == 1 && o.Mc.Design[0].All(v => v == 0))
-                return "Nominal: one unit, every tolerance at its nominal value" + (o.CornerCount > 1 ? $" x {o.CornerCount} temperatures" : "");
-            if (o.Mc?.Design != null) return $"Worst case, all corners: {o.Runs:N0} combinations of {o.Mc.Sites.Count} tolerance edges";
-            if (o.Stop != null && o.Stop.Enabled)
-                return s.AutoStopped ? "Stopped early, the answer is known: " + (s.StopStatus ?? "")
-                     : "Monte Carlo, stops early (at most " + o.Runs.ToString("N0", CultureInfo.InvariantCulture) + " runs): " + (s.StopStatus ?? "waiting for the first results...");
-            return $"Monte Carlo: {o.Runs:N0} random units" + (o.CornerCount > 1 ? $" x {o.CornerCount} temperatures" : "");
-        }
-
+        /// <summary>Stops the campaign that runs (not its study: the study goes on with its other campaigns).</summary>
         void StopCampaign()
         {
-            if (StudyRunning && tabs.SelectedIndex != TabSetup) { StopStudy(); return; }
             var job = queue.Running;
             var run = job?.Engine;
             if (run == null) return;
@@ -618,35 +379,33 @@ namespace Spica.UI
             int waiting = queue.QueuedCount;
             string head = $"Stop {job.Name}?  {s.Done:N0} of {s.Total:N0} simulations are finished" +
                           (s.Running > 0 ? $", {s.Running:N0} are running now." : ".");
-            string tail = "A stopped campaign can be resumed later from Results > Open Results." +
+            string tail = "What a stopped campaign finished stays: its waveforms can be looked at." +
                           (waiting > 0 && !queue.Hold ? $"\nThe {(waiting == 1 ? "campaign that waits starts" : waiting + " campaigns that wait start")} when this one stops (tick \"Hold the queue\" first to keep them waiting)." : "");
             int choice;
             if (!s.Draining && s.Running > 0)
             {
                 choice = Win98MessageBox.Choose(this, head + "\n\n" +
-                    "Analyze now:  stop at once and open the finished runs (the running ones are lost).\n" +
-                    "Finish running:  start nothing new, wait for the running simulations, then analyze.\n" +
+                    "Stop now:  stop at once (the simulations running now are lost).\n" +
+                    "Finish running:  start nothing new, wait for the simulations running now.\n" +
                     "Discard:  stop and delete this campaign folder with everything in it.\n\n" + tail,
-                    "Stop Campaign", Win98Icon.Question, "&Analyze now", "&Finish running", "&Discard", "Keep running");
+                    "Stop Campaign", Win98Icon.Question, "&Stop now", "&Finish running", "&Discard", "Keep running");
             }
             else
             {
                 choice = Win98MessageBox.Choose(this, head + "\n\n" +
-                    "Analyze now:  stop at once and open the finished runs.\n" +
+                    "Stop now:  stop at once.\n" +
                     "Discard:  stop and delete this campaign folder with everything in it.\n\n" + tail,
-                    "Stop Campaign", Win98Icon.Question, "&Analyze now", "&Discard", "Keep running");
+                    "Stop Campaign", Win98Icon.Question, "&Stop now", "&Discard", "Keep running");
                 if (choice >= 1) choice++;      // same meaning as in the four-button box
             }
             if (job != queue.Running || job.Engine != run) return;      // it ended while the question was open
             switch (choice)
             {
                 case 0:
-                    job.AnalyzeOnFinish = true;
                     run.Cancel();
                     SetStatus("Stopping...");
                     break;
                 case 1:
-                    job.AnalyzeOnFinish = true;
                     run.StopAfterRunning();
                     SetStatus($"Stopping: waiting for {s.Running:N0} running simulations...");
                     break;
@@ -668,38 +427,9 @@ namespace Spica.UI
         void UpdateUi()
         {
             status.SetText(PaneClock, DateTime.Now.ToString("HH:mm"));
-            listener.Tick();
-            remote.Tick();
-            if (++meterTick % 4 == 0)
-            {
-                UpdateMeter();
-                UpdatePlan();
-                string pane = !listener.Active ? "Listener: off" : listener.PendingCount > 0 ? $"Listener: {listener.PendingCount} to run" : "Listener: on";
-                status.SetText(PaneListener, pane);
-                if (tbListener.Checked != listener.Active)
-                {
-                    tbListener.Checked = listener.Active;
-                    UpdateCommandState();
-                    UpdatePlan();
-                }
-            }
+            if (++meterTick % 4 == 0) UpdateMeter();
             UpdateQueueList();
             UpdateMonitor(false);
-
-            // Live Results: only with new runs, and at 20x the cost of the last refresh (at least 1 s), so the analysis
-            // never takes more than ~5 % of one core (100k runs cost 0.2 .. 0.6 s per refresh).
-            var live = LiveEngine;
-            if (tabs.SelectedIndex == TabResults && live != null && !live.IsFinished && !resultsView.LivePaused && DateTime.UtcNow >= nextLiveRefresh)
-            {
-                int done = live.Snapshot().Done;
-                if (done != liveDone)
-                {
-                    var sw = Stopwatch.StartNew();
-                    RefreshResults();
-                    liveDone = done;
-                    nextLiveRefresh = DateTime.UtcNow.AddSeconds(Math.Max(1, 20 * sw.Elapsed.TotalSeconds));
-                }
-            }
         }
 
         void LayoutNow()
@@ -760,11 +490,8 @@ namespace Spica.UI
             var o = engine.Options;
             var inv = CultureInfo.InvariantCulture;
 
-            bool can = resultsView.CanExport || s.Done > 0;
-            if (miExport.Enabled != can) miExport.Enabled = miReport.Enabled = tbReport.Enabled = can;
-
             string cap = job.Status == JobStatus.Running ? "Running now:" : job.Status == JobStatus.Finished ? "Finished:" : job.Status == JobStatus.Stopped ? "Stopped:" : "Failed:";
-            SetNow(cap, job.Name, AnalysisText(o, s));
+            SetNow(cap, job.Name, o.Analysis);
             progress.Maximum = Math.Max(1, s.Total);
             progress.Value = s.Done;
 
@@ -784,10 +511,10 @@ namespace Spica.UI
                     s.Failed > 0 ? BadColor : (Color?)null);
 
             stat["Instances"].Text = s.Config.Length > 0 ? s.Config : "-";
-            stat["Phase"].Text = s.Draining ? (s.AutoStopped ? $"Stopping early ({s.Running} finishing)" : $"Stopping ({s.Running} running)") : s.Cancelled ? "Stopped" : s.Finished ? "Finished" : PhaseText(s.Phase);
+            stat["Phase"].Text = s.Draining ? $"Stopping ({s.Running} running)" : s.Cancelled ? "Stopped" : s.Finished ? "Finished" : PhaseText(s.Phase);
             stat["Launch cost"].Text = double.IsNaN(s.OverheadSeconds) ? "-" : $"{s.OverheadSeconds.ToString("0.00", inv)} s per launch";
             stat["Peak memory"].Text = s.PeakMemory > 0 ? $"{s.PeakMemory / 1048576.0:0} MB per instance" : "-";
-            stat[".raw kept"].Text = o.KeepRaw ? FormatBytes(s.RawBytes) : "none (deleted after each run)";
+            stat[".raw kept"].Text = FormatBytes(s.RawBytes);
             stat[".raw forecast"].Text = double.IsNaN(s.RawForecast) ? "-" : FormatBytes((long)s.RawForecast) + (rawShort > 0 ? $"  ({FormatBytes(rawFree)} free)" : "");
             stat[".raw forecast"].ForeColor = rawShort > 0 ? BadColor : Color.Black;
 
@@ -847,13 +574,12 @@ namespace Spica.UI
             rawShort = 0;
             try
             {
-                string dir = queue.Running?.OutputDir ?? txtOut.Text.Trim();
-                if (dir.Length == 0) dir = Application.StartupPath;
+                string dir = queue.Running?.OutputDir ?? ResultsRoot() ?? Application.StartupPath;
                 var d = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(dir)));
                 rawFree = d.AvailableFreeSpace;
                 free = $"\nOutput drive {d.Name}: {FormatBytes(d.AvailableFreeSpace)} free of {FormatBytes(d.TotalSize)}";
                 var run = queue.Running?.Engine;
-                if (run != null && run.Options.KeepRaw)
+                if (run != null)
                 {
                     var s = run.Snapshot();
                     if (!s.Finished && !double.IsNaN(s.RawForecast))
@@ -873,7 +599,7 @@ namespace Spica.UI
             {
                 rawWarned = job;
                 string text = $"The .raw files of {job.Name} will not fit on the output drive: about {FormatBytes(rawShort)} more is needed " +
-                              $"({FormatBytes(rawFree)} free).\n\nStop it and run it again without \"Keep .raw waveform files\", save fewer signals, " +
+                              $"({FormatBytes(rawFree)} free).\n\nStop it and run it again saving fewer signals (Save, in the Simulate block), with fewer runs, " +
                               "or free some space. When the drive is full the remaining runs fail.";
                 SetStatus($"Warning: the .raw files of {job.Name} will not fit on the output drive ({FormatBytes(rawShort)} short).");
                 Post(() => Win98MessageBox.Show(this, text, "SPICA", MessageBoxButtons.OK, Win98Icon.Warning));

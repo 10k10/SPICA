@@ -63,7 +63,6 @@ namespace Spica.Core
         public void Set(string key, string value) => Values[key] = value ?? "";
 
         public int GetInt(string key, int def) => int.TryParse(Get(key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : def;
-        public double GetDouble(string key, double def) => double.TryParse(Get(key), NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : def;
         public bool GetBool(string key, bool def) => Values.TryGetValue(key, out var v) ? v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase) : def;
         public void Set(string key, int v) => Set(key, v.ToString(CultureInfo.InvariantCulture));
         public void Set(string key, double v) => Set(key, v.ToString("R", CultureInfo.InvariantCulture));
@@ -86,24 +85,14 @@ namespace Spica.Core
         public AppSettings() : base("SPICA.ini") { }
 
         public string LtspicePath { get => Get("LtspicePath"); set => Set("LtspicePath", value); }
-        public int Runs { get => GetInt("Runs", 1000); set => Set("Runs", value); }
-        public bool KeepRaw { get => GetBool("KeepRaw", true); set => Set("KeepRaw", value); }
-        /// <summary>Show the Setup and Qualification tabs of the versions before the Workbench.</summary>
-        public bool ClassicTabs { get => GetBool("ClassicTabs", false); set => Set("ClassicTabs", value); }
+        /// <summary>Where the studies' campaigns go; empty = beside the project (or the schematic), in &lt;name&gt;_SPICA.</summary>
+        public string ResultsFolder { get => Get("ResultsFolder"); set => Set("ResultsFolder", value); }
         /// <summary>Where the main window was when it last closed: "x,y,w,h" (empty: never), and whether it was maximized.</summary>
         public string WindowBounds { get => Get("WindowBounds"); set => Set("WindowBounds", value); }
         public bool WindowMaximized { get => GetBool("WindowMaximized", false); set => Set("WindowMaximized", value); }
-        public bool ClockReseed { get => GetBool("ClockReseed", true); set => Set("ClockReseed", value); }
-        public bool SaveSelectedOnly { get => GetBool("SaveSelectedOnly", true); set => Set("SaveSelectedOnly", value); }
         public bool AutoParallel { get => GetBool("AutoParallel", true); set => Set("AutoParallel", value); }
         public int ManualInstances { get => GetInt("ManualInstances", 0); set => Set("ManualInstances", value); }
         public int ManualThreads { get => GetInt("ManualThreads", 1); set => Set("ManualThreads", value); }
-
-        // the listener: campaigns dropped in a shared folder are queued and run here
-        public string ListenerInput { get => Get("ListenerInput"); set => Set("ListenerInput", value); }
-        public string ListenerOutput { get => Get("ListenerOutput"); set => Set("ListenerOutput", value); }
-        public bool ListenerEnabled { get => GetBool("ListenerEnabled", false); set => Set("ListenerEnabled", value); }
-        public string SendFolder { get => Get("SendFolder"); set => Set("SendFolder", value); }
 
         public List<string> RecentFiles
         {
@@ -122,17 +111,6 @@ namespace Spica.Core
             list.Insert(0, path);
             for (int i = 1; i <= 6; i++) Set("Recent" + i, i <= list.Count ? list[i - 1] : "");
         }
-
-        /// <summary>Remembered .save selection per schematic (by path).</summary>
-        public List<string> GetSaveSelection(string asc)
-        {
-            var v = Get("Save|" + asc.ToLowerInvariant(), null);
-            if (v == null) return null;
-            return v.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-        }
-
-        public void SetSaveSelection(string asc, IEnumerable<string> signals) =>
-            Set("Save|" + asc.ToLowerInvariant(), string.Join(" ", signals));
     }
 
     /// <summary>Best scheduler configuration found per (machine, circuit), used to warm-start.</summary>

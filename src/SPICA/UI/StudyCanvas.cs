@@ -25,18 +25,13 @@ namespace Spica.UI
 
         public static readonly Dictionary<PortType, Color> TypeColor = new Dictionary<PortType, Color>
         {
-            [PortType.Stimulus] = Color.FromArgb(14, 143, 168), [PortType.Circuit] = Color.FromArgb(31, 95, 191),
-            [PortType.Conditions] = Color.FromArgb(184, 134, 11), [PortType.Data] = Color.FromArgb(46, 139, 87),
-            [PortType.Table] = Color.FromArgb(138, 79, 191), [PortType.Ratings] = Color.FromArgb(160, 82, 45),
-            [PortType.Verdicts] = Color.FromArgb(192, 57, 43),
+            [PortType.Circuit] = Color.FromArgb(31, 95, 191), [PortType.Conditions] = Color.FromArgb(184, 134, 11),
         };
 
         public static readonly Dictionary<BlockFamily, Color> FamilyColor = new Dictionary<BlockFamily, Color>
         {
-            [BlockFamily.Stimulus] = Color.FromArgb(11, 114, 133), [BlockFamily.Circuit] = Color.FromArgb(31, 95, 191),
-            [BlockFamily.Variation] = Color.FromArgb(138, 109, 0), [BlockFamily.Simulation] = Color.FromArgb(0, 0, 128),
-            [BlockFamily.Collection] = Color.FromArgb(106, 61, 154), [BlockFamily.Evaluation] = Color.FromArgb(155, 28, 28),
-            [BlockFamily.External] = Color.FromArgb(122, 74, 30), [BlockFamily.Output] = Color.FromArgb(47, 79, 79),
+            [BlockFamily.Circuit] = Color.FromArgb(31, 95, 191), [BlockFamily.Analysis] = Color.FromArgb(138, 109, 0),
+            [BlockFamily.Simulation] = Color.FromArgb(0, 0, 128),
         };
 
         /// <summary>The app's own 16 px icon for a block kind.</summary>
@@ -45,21 +40,10 @@ namespace Spica.UI
             switch (kind)
             {
                 case BlockKind.Schematic: return Win98.Icon("open16");
-                case BlockKind.Candidates: return Win98.Icon("folder16");
-                case BlockKind.SupplyWaveform: case BlockKind.Spectrum: case BlockKind.Plots: return Win98.Icon("chart16");
-                case BlockKind.Fault: return Win98.Icon("stop16");
-                case BlockKind.Susceptibility: return Win98.Icon("remote16");
-                case BlockKind.Measure: return Win98.Icon("console16");
+                case BlockKind.Nominal: return Win98.Icon("check16");
                 case BlockKind.MonteCarlo: return Win98.Icon("clock16");
                 case BlockKind.WorstCase: return Win98.Icon("hw16");
-                case BlockKind.Combine: return Win98.Icon("queue16");
                 case BlockKind.Simulate: return Win98.Icon("run16");
-                case BlockKind.Stress: return Win98.Icon("memory16");
-                case BlockKind.Limits: case BlockKind.Derating: case BlockKind.Survival: case BlockKind.SusceptibilityCheck: case BlockKind.Spec: return Win98.Icon("check16");
-                case BlockKind.ErrorBudget: case BlockKind.Compare: case BlockKind.RequirementsMatrix: return Win98.Icon("results16");
-                case BlockKind.PartsDatabase: return Win98.Icon("disk16");
-                case BlockKind.Report: return Win98.Icon("doc16");
-                case BlockKind.Export: return Win98.Icon("save16");
                 default: return Win98.Icon("options16");
             }
         }
@@ -73,7 +57,7 @@ namespace Spica.UI
             return Head + Sub + Pad + rows * Row + Pad;
         }
 
-        static Rectangle Bounds(Block b) => new Rectangle(b.X, b.Y, BW, BlockHeight(b));
+        static Rectangle BlockRect(Block b) => new Rectangle(b.X, b.Y, BW, BlockHeight(b));
 
         static PointF PortPoint(Block b, bool input, int i) =>
             new PointF(b.X + (input ? 0 : BW), b.Y + Head + Sub + Pad + Row * i + Row / 2f);
@@ -94,27 +78,10 @@ namespace Spica.UI
         public Func<Block, string> Caption;
         /// <summary>What a block misses to run (a red border when not empty); null = nothing checked.</summary>
         public Func<Block, List<string>> Problems;
-        /// <summary>Whether a block kind runs in this version (the others are drawn faded).</summary>
-        public Func<string, bool> Runs = k => true;
         /// <summary>A double-click on a block: open its configurator.</summary>
         public event Action<Block> BlockOpened;
         readonly ToolTip tip = new ToolTip { InitialDelay = 300, AutoPopDelay = 20000 };
         string tipText = "";
-
-        /// <summary>A 16 px magnifying glass in the style of the app's icons (for Fit).</summary>
-        public static Image MagnifierIcon()
-        {
-            var bmp = new Bitmap(16, 16);
-            using (var g = Graphics.FromImage(bmp))
-            {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                using (var handle = new Pen(Color.FromArgb(96, 64, 32), 3f)) g.DrawLine(handle, 10, 10, 14, 14);
-                using (var glass = new SolidBrush(Color.FromArgb(200, 230, 255))) g.FillEllipse(glass, 1, 1, 10, 10);
-                using (var shine = new SolidBrush(Color.White)) g.FillEllipse(shine, 3, 3, 4, 3);
-                using (var rim = new Pen(Color.Black, 1.5f)) g.DrawEllipse(rim, 1, 1, 10, 10);
-            }
-            return bmp;
-        }
 
         /// <summary>State badges of a run (empty = none shown).</summary>
         public readonly Dictionary<int, BlockState> States = new Dictionary<int, BlockState>();
@@ -155,7 +122,7 @@ namespace Spica.UI
         public void FitAll()
         {
             if (study == null || study.Blocks.Count == 0 || Width < 50 || Height < 50) { zoom = 1; pan = new PointF(0, 0); Invalidate(); return; }
-            var r = study.Blocks.Select(Bounds).Aggregate(Rectangle.Union);
+            var r = study.Blocks.Select(BlockRect).Aggregate(Rectangle.Union);
             r.Inflate(30, 30);
             // never so small that the text cannot be read: a wide study then starts at its left edge, and pans
             // zoomed out the blocks keep a readable title (see DrawBlock), so a study can be fitted further out
@@ -169,7 +136,7 @@ namespace Spica.UI
         public void Reveal(Block b)
         {
             if (b == null) return;
-            var r = Bounds(b);
+            var r = BlockRect(b);
             var a = ToScreen(new PointF(r.X, r.Y)); var z = ToScreen(new PointF(r.Right, r.Bottom));
             if (a.X >= 0 && a.Y >= 0 && z.X <= Width && z.Y <= Height) return;
             pan = new PointF(Width / 2f - (r.X + r.Width / 2f) * zoom, Height / 2f - (r.Y + r.Height / 2f) * zoom);
@@ -201,12 +168,9 @@ namespace Spica.UI
         /// <summary>Zoomed out far enough that the small text cannot be read: blocks show their title large, nothing else.</summary>
         bool Far => zoom < 0.85f;
 
-        static Color Blend(Color a, Color b, double t) =>
-            Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
-
         // ------------------------------------------------------------------ hit testing
 
-        Block BlockAt(PointF w) => study?.Blocks.LastOrDefault(b => Bounds(b).Contains(Point.Round(w)));
+        Block BlockAt(PointF w) => study?.Blocks.LastOrDefault(b => BlockRect(b).Contains(Point.Round(w)));
 
         /// <summary>The port under a canvas point: the block, input or output, its index.</summary>
         bool PortAt(PointF w, out Block block, out bool input, out int index)
@@ -300,7 +264,6 @@ namespace Spica.UI
 
             foreach (var w in study.Wires) DrawWire(g, w);
             foreach (var b in study.Blocks) DrawBlock(g, b);
-            foreach (var w in study.Wires) DrawNetLabel(g, w);
 
             if (drag == Drag.Wire && dragBlock?.Spec != null)
             {
@@ -326,45 +289,14 @@ namespace Spica.UI
             using (var p = new Pen(TypeColor[type], sel ? 3.5f : 2.2f)) g.DrawBezier(p, c[0], c[1], c[2], c[3]);
         }
 
-        /// <summary>On a stimulus wire, the net it goes into (or the two nets of a fault), so the connection is visible.</summary>
-        void DrawNetLabel(Graphics g, Wire w)
-        {
-            var from = study[w.From];
-            if (from?.Spec == null || !WireEnds(w, out var a, out var b)) return;
-            if (from.Spec.Outputs.FirstOrDefault()?.Type != PortType.Stimulus) return;
-            string text = NetText(from);
-            if (text.Length == 0) return;
-            var mid = Bezier(Curve(a, b), 0.5f);
-            using (var font = Far ? new Font(Win98.Font.FontFamily, 7.5f / zoom) : (Font)Win98.Font.Clone())
-            {
-                var sz = g.MeasureString(text, font);
-                var r = new RectangleF(mid.X - sz.Width / 2 - 2, mid.Y - sz.Height / 2, sz.Width + 4, sz.Height);
-                using (var bg = new SolidBrush(Win98.InfoBack)) g.FillRectangle(bg, r);
-                using (var pen = new Pen(TypeColor[PortType.Stimulus])) g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height);
-                using (var br = new SolidBrush(Color.FromArgb(11, 79, 92))) g.DrawString(text, font, br, r.X + 2, r.Y);
-            }
-        }
-
-        public static string NetText(Block stim)
-        {
-            if (stim.Kind == BlockKind.Fault)
-            {
-                string a = stim.Get("From"), b = stim.Get("To");
-                return a.Length == 0 ? "" : $"{a} → {(b.Length == 0 ? "?" : b)}";
-            }
-            string net = stim.Get("Net");
-            return net.Length == 0 ? "net ?" : "net " + net;
-        }
-
         void DrawBlock(Graphics g, Block b)
         {
             var k = b.Spec;
-            var r = Bounds(b);
+            var r = BlockRect(b);
             bool sel = b == Selected;
             using (var sh = new SolidBrush(Color.FromArgb(128, 128, 128))) g.FillRectangle(sh, r.X + 3, r.Y + 3, r.Width, r.Height);
             using (var body = new SolidBrush(Color.FromArgb(244, 244, 244))) g.FillRectangle(body, r);
-            bool runs = k != null && Runs(b.Kind);
-            var headCol = k == null ? Color.Gray : runs ? FamilyColor[k.Family] : Blend(FamilyColor[k.Family], Color.FromArgb(160, 160, 160), 0.6);
+            var headCol = k == null ? Color.Gray : FamilyColor[k.Family];
             var missing = Problems?.Invoke(b);
             bool bad = missing != null && missing.Count > 0;
             using (var hb = new SolidBrush(headCol)) g.FillRectangle(hb, r.X, r.Y, r.Width, Head);
@@ -444,11 +376,6 @@ namespace Spica.UI
                     using (var fill = new SolidBrush(TypeColor[spec.Type])) g.FillEllipse(fill, p.X - 5, p.Y - 5, 10, 10);
                     g.DrawEllipse(edge, p.X - 5, p.Y - 5, 10, 10);
                     string label = spec.Name + (spec.Many ? "…" : "");
-                    if (spec.Type == PortType.Stimulus)
-                    {
-                        var nets = study.Upstream(b, spec.Name).Select(NetText).Where(t => t.Length > 0).ToList();
-                        label = nets.Count == 0 ? "stimulus (none)" : "stimulus: " + string.Join(", ", nets);
-                    }
                     g.DrawString(label, Win98.Font, black, new RectangleF(p.X + 8, p.Y - 7, BW - 16, Row), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
                 }
                 for (int i = 0; i < k.Outputs.Count; i++)
@@ -635,7 +562,7 @@ namespace Spica.UI
                 menu.Items.Add(new ToolStripMenuItem("Add a block here:") { Enabled = false });
                 foreach (BlockFamily f in Enum.GetValues(typeof(BlockFamily)))
                 {
-                    var sub = new ToolStripMenuItem(BlockKind.FamilyTitle(f));
+                    var sub = new ToolStripMenuItem(f.ToString());
                     foreach (var k in BlockKind.All.Where(x => x.Family == f))
                     {
                         var kind = k.Name;

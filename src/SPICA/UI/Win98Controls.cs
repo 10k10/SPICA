@@ -476,38 +476,12 @@ namespace Spica.UI
             TabStop = true;
         }
 
-        public IReadOnlyList<Win98TabPage> Pages => pages;
-
         public void AddPage(Win98TabPage p)
         {
             pages.Add(p);
             Controls.Add(p);
             p.Visible = pages.Count - 1 == selected;
             PerformLayout();
-        }
-
-        /// <summary>Shows these pages, in this order; the others are taken out but kept (not disposed). The page shown stays when it is still there.</summary>
-        public void SetPages(IList<Win98TabPage> list)
-        {
-            var current = selected >= 0 && selected < pages.Count ? pages[selected] : null;
-            foreach (var p in pages) Controls.Remove(p);
-            pages.Clear();
-            foreach (var p in list) { pages.Add(p); Controls.Add(p); }
-            int keep = current == null ? -1 : pages.IndexOf(current);
-            selected = keep >= 0 ? keep : 0;
-            for (int i = 0; i < pages.Count; i++) pages[i].Visible = i == selected;
-            PerformLayout();
-            Invalidate();
-            if (keep < 0) SelectedIndexChanged?.Invoke(this, EventArgs.Empty);
-        }
-
-        /// <summary>Takes every page out (they are disposed), e.g. to build them again.</summary>
-        public void ClearPages()
-        {
-            foreach (var p in pages) { Controls.Remove(p); p.Dispose(); }
-            pages.Clear();
-            selected = 0;
-            Invalidate();
         }
 
         public int SelectedIndex

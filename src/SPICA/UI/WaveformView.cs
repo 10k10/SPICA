@@ -12,23 +12,21 @@ using Spica.Core.Graph;
 namespace Spica.UI
 {
     /// <summary>A study that ran: its campaigns, its verdicts, its report (what the Results tab shows for it).</summary>
+    /// <summary>A study that ran: its campaigns, and what did not finish.</summary>
     public sealed class StudyRunData
     {
         public string Study = "";
         public DateTime Ended = DateTime.Now;
         public List<RunSet> Sets = new List<RunSet>();
-        public List<VerdictRecord> Verdicts = new List<VerdictRecord>();
         public List<string> Problems = new List<string>();
-        public List<string> PlotSignals = new List<string>();
-        public string Report;
     }
 
     /// <summary>
-    /// Results > a study > Waveforms: the signals of the study's .raw files, in the manner of LTspice.
-    /// - On the left, the cases and conditions (tick several to overlay them: temperatures, candidates), the runs,
-    ///   and the signals the .raw files hold; double-click a signal to add it to the selected pane.
-    /// - On the right, panes stacked on one time axis (zoom one, all follow); a criterion on a signal draws its
-    ///   window and limits, a supply waveform its programmed shape and its events.
+    /// Results > a study: the signals of its .raw files, in the manner of LTspice.
+    /// - On the left, the analyses (tick several to overlay them), the runs, and the signals the .raw files hold;
+    ///   double-click a signal to add it to the selected pane.
+    /// - On the right, panes stacked on one time axis (zoom one, all follow), cursors A and B with their readings.
+    ///   Several temperatures of one analysis are drawn in their own colours.
     /// </summary>
     public sealed class WaveformView : Panel
     {
@@ -51,7 +49,6 @@ namespace Spica.UI
         double curA = double.NaN, curB = double.NaN;     // the cursors (time), NaN = not placed
         List<Trace> lastTraces = new List<Trace>();
         readonly Label lblCursor;
-        string focusCriterion;      // the criterion of the verdict opened: only its window is shaded
         readonly Dictionary<string, List<string>> namesByDir = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>LTspice.exe, to open a .raw there.</summary>
@@ -70,7 +67,7 @@ namespace Spica.UI
             Dock = DockStyle.Fill;
 
             var left = new Panel { Dock = DockStyle.Left, Width = 250, BackColor = Win98.Face, Padding = new Padding(0, 0, 6, 0) };
-            var lblSets = new Label { Text = "Cases and conditions (tick to overlay):", Location = new Point(2, 2), AutoSize = true };
+            var lblSets = new Label { Text = "Analyses (tick several to overlay):", Location = new Point(2, 2), AutoSize = true };
             lbSets = new CheckedListBox { CheckOnClick = true, Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, HorizontalScrollbar = true };
             lbSets.ItemCheck += (s, e) => { if (!filling) BeginInvoke(new Action(() => { FillRuns(); FillSignals(); Draw(); })); };
             var lblRuns = new Label { Text = "&Runs:", AutoSize = true };
@@ -135,47 +132,28 @@ namespace Spica.UI
 
         List<RunSet> Checked => lbSets.CheckedIndices.Cast<int>().Select(i => data.Sets.Where(s => s.Dir != null).ElementAt(i)).ToList();
 
-        static string SetLabel(RunSet s) => $"{s.Variant.Label} · {s.Condition.Name}";
+        static string SetLabel(RunSet s) => s.Label;
 
-        /// <summary>The signal a stimulus drives in a case (V(in)), or null.</summary>
-        static string StimulusSignal(RunSet s)
-        {
-            var v = s.Variant;
-            if (v.Stimulus == null) return null;
-            return $"V({(v.Stimulus.IsFault ? v.MapNet(v.Stimulus.From) : v.MapNet(v.Stimulus.Net))})";
-        }
-
-        /// <summary>Shows a study: <paramref name="focus"/> ticked (or the first case), panes for its stimulus and the given signals.</summary>
-        public void ShowStudy(StudyRunData d, RunSet focus, IEnumerable<string> signals, string criterion = null)
+        /// <summary>
+        /// Shows a study's campaigns, <paramref name="focus"/> ticked (or the first). The panes and their signals stay as
+        /// they were, so a study run again shows the same plots.
+        /// </summary>
+        public void ShowStudy(StudyRunData d, RunSet focus = null)
         {
             data = d;
-            focusCriterion = criterion;
             filling = true;
             lbSets.Items.Clear();
             var sets = d.Sets.Where(s => s.Dir != null).ToList();
             foreach (var s in sets) lbSets.Items.Add(SetLabel(s), s == focus || (focus == null && s == sets.FirstOrDefault()));
             filling = false;
-            panes.Clear();
-            var f = focus ?? sets.FirstOrDefault();
-            var stim = f == null ? null : StimulusSignal(f);
-            if (stim != null) NewPane().Signals.Add(stim);
-            foreach (var s in (signals ?? new string[0]).Where(x => x != null && !x.Equals(stim, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase))
-                NewPane().Signals.Add(s);
             if (panes.Count == 0) NewPane();
-            active = panes.Count - 1;
+            active = Math.Min(active, panes.Count - 1);
             FillRuns();
             FillSignals();
             Draw();
         }
 
         Pane NewPane() { var p = new Pane(); panes.Add(p); return p; }
-
-        /// <summary>What tells a case apart from the others overlaid: its condition, its case, or both.</summary>
-        static string Distinct(List<RunSet> sets, RunSet s)
-        {
-            bool sameCase = sets.All(x => x.Variant.Label == s.Variant.Label), sameCond = sets.All(x => x.Condition.Name == s.Condition.Name);
-            return sameCase ? s.Condition.Name : sameCond ? s.Variant.Label : SetLabel(s);
-        }
 
         void AddSignals(bool newPane)
         {
@@ -206,7 +184,6 @@ namespace Spica.UI
             if (maxRuns <= 1) cbRuns.Items.Add("Run 1");
             else
             {
-                cbRuns.Items.Add("Worst run (closest to a limit)");
                 cbRuns.Items.Add($"All runs" + (maxRuns > MaxOverlay ? $" (first {MaxOverlay})" : ""));
                 for (int i = 1; i <= Math.Min(maxRuns, 500); i++) cbRuns.Items.Add("Run " + i);
             }
@@ -248,27 +225,29 @@ namespace Spica.UI
             public Dictionary<string, double[]> Y = new Dictionary<string, double[]>(StringComparer.OrdinalIgnoreCase);
         }
 
-        static double Margin(RunSet s, ResultSet.Row row)
-        {
-            var rs = s.Results;
-            double m = double.NaN;
-            foreach (var cr in s.Criteria)
-            {
-                if (!double.IsNaN(cr.Lo) && rs.Col(cr.MinMeas) >= 0) { double v = rs.Get(row, cr.MinMeas); if (!double.IsNaN(v)) m = double.IsNaN(m) ? v - cr.Lo : Math.Min(m, v - cr.Lo); }
-                if (!double.IsNaN(cr.Hi) && rs.Col(cr.MaxMeas) >= 0) { double v = rs.Get(row, cr.MaxMeas); if (!double.IsNaN(v)) m = double.IsNaN(m) ? cr.Hi - v : Math.Min(m, cr.Hi - v); }
-            }
-            return m;
-        }
-
+        /// <summary>The rows shown: one run (at every temperature it ran at), or the first runs of each temperature.</summary>
         List<ResultSet.Row> RowsOf(RunSet s)
         {
             var rows = s.Results.Rows.Where(r => r.Status == RunStatus.Ok).ToList();
             string pick = cbRuns.SelectedItem as string ?? "Run 1";
-            if (pick.StartsWith("Worst")) { var w = rows.Where(r => !double.IsNaN(Margin(s, r))).OrderBy(r => Margin(s, r)).FirstOrDefault() ?? rows.FirstOrDefault(); return w == null ? rows.Take(0).ToList() : new List<ResultSet.Row> { w }; }
-            if (pick.StartsWith("All")) return rows.Take(MaxOverlay).ToList();
+            if (pick.StartsWith("All")) return rows.GroupBy(r => r.Temp).SelectMany(g => g.Take(Math.Max(1, MaxOverlay / Math.Max(1, rows.Select(r => r.Temp).Distinct().Count())))).ToList();
             int n = int.TryParse(pick.Substring(4), out var k) ? k : 1;
-            return rows.Where(r => r.Run == n).Take(1).ToList();
+            return rows.Where(r => r.Run == n).ToList();
         }
+
+        /// <summary>A value with its SI prefix (1.234m, 12.00k).</summary>
+        static string Eng(double v)
+        {
+            if (double.IsNaN(v)) return "-";
+            if (v == 0) return "0";
+            string[] pre = { "f", "p", "n", "u", "m", "", "k", "M", "G" };
+            int e3 = (int)Math.Floor(Math.Log10(Math.Abs(v)) / 3);
+            e3 = Math.Max(-5, Math.Min(3, e3));
+            double m = v / Math.Pow(1000, e3);
+            return m.ToString(Math.Abs(m) >= 100 ? "0.0" : Math.Abs(m) >= 10 ? "0.00" : "0.000", System.Globalization.CultureInfo.InvariantCulture) + pre[e3 + 5];
+        }
+
+        static string TempText(double t) => double.IsNaN(t) ? "" : t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " °C";
 
         List<Trace> Load(List<RunSet> sets, List<string> signals, List<string> problems)
         {
@@ -320,7 +299,6 @@ namespace Spica.UI
             var traces = sets.Count == 0 || signals.Count == 0 ? new List<Trace>() : Load(sets, signals, problems);
             bool manySets = sets.Count > 1;
             double stop = traces.Where(t => t.X.Length > 0).Select(t => t.X[t.X.Length - 1]).DefaultIfEmpty(0).Max();
-            var focus = sets.FirstOrDefault();
 
             for (int pi = 0; pi < panes.Count; pi++)
             {
@@ -342,27 +320,8 @@ namespace Spica.UI
                 if (pane.Signals.Count == 0) continue;
                 ch.YLabel = pane.Signals.All(x => x.StartsWith("I", StringComparison.OrdinalIgnoreCase)) ? "A" : pane.Signals.All(x => x.StartsWith("V", StringComparison.OrdinalIgnoreCase)) ? "V" : "";
 
-                // the criteria on these signals (of the first case ticked): their window and limits
-                if (focus != null)
-                    foreach (var cr in focus.Criteria.Where(c => pane.Signals.Contains(c.Signal, StringComparer.OrdinalIgnoreCase)))
-                        if (cr.Window(focus.Case.Events, out double t1, out double t2))
-                        {
-                            // the criterion opened is shaded and drawn strong; the others are only their limit lines, lighter
-                            bool mainOne = focusCriterion == null ? focus.Criteria.Count(c => pane.Signals.Contains(c.Signal, StringComparer.OrdinalIgnoreCase)) == 1 : cr.Name == focusCriterion;
-                            if (mainOne) ch.Add(new ChartSeries { Kind = SeriesKind.Span, Label = $"{cr.Name}: {cr.RuleText()}", Color = Color.FromArgb(255, 255, 196), X = new[] { t1, t2 } });
-                            bool firstLine = true;
-                            foreach (var l in new[] { cr.Lo, cr.Hi }.Where(v => !double.IsNaN(v)))
-                            {
-                                ch.Add(new ChartSeries { Kind = SeriesKind.Line, Label = !mainOne && firstLine ? $"{cr.Name}: {cr.RuleText()}" : null, Color = mainOne ? Win98Chart.Maroon : Color.FromArgb(200, 140, 140), Dashed = true, Size = mainOne ? 2 : 1, X = new[] { t1, t2 }, Y = new[] { l, l } });
-                                firstLine = false;
-                            }
-                        }
-                // a supply waveform: its programmed shape under the signal it drives, and the event lines
-                if (focus?.Case?.Wave != null && pane.Signals.Contains(StimulusSignal(focus), StringComparer.OrdinalIgnoreCase))
-                    ch.Add(new ChartSeries { Kind = SeriesKind.Line, Label = "programmed", Color = Win98Chart.Silver, Size = 5, X = focus.Case.Wave.Select(p => p[0]).ToArray(), Y = focus.Case.Wave.Select(p => p[1]).ToArray() });
-                if (focus?.Case != null && focus.Variant.Stimulus != null && focus.Case.Events.End > focus.Case.Events.Start)
-                    ch.Add(new ChartSeries { Kind = SeriesKind.VLine, Label = "event start / end", InLegend = pi == 0, Color = Color.Gray, Dashed = true, X = new[] { focus.Case.Events.Start, focus.Case.Events.End } });
-
+                // one colour per signal; with several analyses overlaid, per analysis; with several temperatures, per temperature
+                int colour = 0;
                 for (int si = 0; si < pane.Signals.Count; si++)
                 {
                     string sig = pane.Signals[si];
@@ -370,13 +329,17 @@ namespace Spica.UI
                     {
                         var mine = traces.Where(t => t.Set == sets[k] && t.Y.ContainsKey(sig)).ToList();
                         if (mine.Count == 0) { if (!problems.Any(p => p.Contains(sig))) problems.Add($"{sig} is not in the .raw of {SetLabel(sets[k])}."); continue; }
-                        var col = Palette[(manySets ? k : si) % Palette.Length];
-                        bool first = true;
-                        foreach (var tr in mine)
+                        foreach (var g in mine.GroupBy(t => t.Row.Temp))
                         {
-                            string label = first ? sig + (manySets ? " · " + Distinct(sets, sets[k]) : "") + (mine.Count > 1 ? $" ({mine.Count} runs)" : "") : null;
-                            ch.Add(new ChartSeries { Kind = SeriesKind.Line, Label = label, Color = col, Size = mine.Count > 1 ? 3 : 2, X = tr.X, Y = tr.Y[sig] });
-                            first = false;
+                            var col = Palette[colour++ % Palette.Length];
+                            int n = g.Count();
+                            string label = sig + (manySets ? " · " + SetLabel(sets[k]) : "") + (mine.Select(t => t.Row.Temp).Distinct().Count() > 1 ? " · " + TempText(g.Key) : "") + (n > 1 ? $" ({n} runs)" : "");
+                            bool first = true;
+                            foreach (var tr in g)
+                            {
+                                ch.Add(new ChartSeries { Kind = SeriesKind.Line, Label = first ? label : null, Color = col, Size = n > 1 ? 3 : 2, X = tr.X, Y = tr.Y[sig] });
+                                first = false;
+                            }
                         }
                     }
                 }
@@ -409,14 +372,15 @@ namespace Spica.UI
             if (double.IsNaN(curA) && double.IsNaN(curB)) { lblCursor.Visible = false; return; }
             var sets = data == null ? new List<RunSet>() : Checked;
             var lines = new List<string>();
-            string E(double v) => double.IsNaN(v) ? "-" : ErrorBudget.Eng(v);
+            string E(double v) => Eng(v);
             lines.Add($"{"",-28} {"A at " + E(curA) + "s",16} {"B at " + E(curB) + "s",16} {"B - A",12}" + (!double.IsNaN(curA) && !double.IsNaN(curB) ? $"   Δt = {E(curB - curA)}s" : ""));
             foreach (var p in panes)
                 foreach (var sig in p.Signals)
-                    foreach (var tr in lastTraces.Where(t => t.Y.ContainsKey(sig)).GroupBy(t => t.Set).Select(g => g.First()))
+                    foreach (var tr in lastTraces.Where(t => t.Y.ContainsKey(sig)).GroupBy(t => (t.Set, t.Row.Temp)).Select(g => g.First()))
                     {
                         double a = At(tr, sig, curA), b = At(tr, sig, curB);
-                        string name = sig + (sets.Count > 1 ? " · " + Distinct(sets, tr.Set) : "");
+                        bool temps = lastTraces.Where(t => t.Set == tr.Set).Select(t => t.Row.Temp).Distinct().Count() > 1;
+                        string name = sig + (sets.Count > 1 ? " · " + SetLabel(tr.Set) : "") + (temps ? " · " + TempText(tr.Row.Temp) : "");
                         if (name.Length > 28) name = name.Substring(0, 27) + "…";
                         lines.Add($"{name,-28} {E(a),16} {E(b),16} {(double.IsNaN(a) || double.IsNaN(b) ? "" : E(b - a)),12}");
                     }
@@ -490,8 +454,20 @@ namespace Spica.UI
             return bmp;
         }
 
-        public int PaneCount => panes.Count;
-        public int SeriesCount => panes.Where(p => p.Chart != null).Sum(p => p.Chart.Series.Count(s => s.Kind == SeriesKind.Line && !s.Dashed && s.Label != "programmed"));
+        public int SeriesCount => panes.Where(p => p.Chart != null).Sum(p => p.Chart.Series.Count(s => s.Kind == SeriesKind.Line));
+
+        /// <summary>Puts signals on the panes (one pane each), as a double-click would (tests, and the first look at a study).</summary>
+        public void Plot(IEnumerable<string> signals)
+        {
+            panes.Clear();
+            foreach (var s in signals) NewPane().Signals.Add(s);
+            if (panes.Count == 0) NewPane();
+            active = panes.Count - 1;
+            Draw();
+        }
+
+        /// <summary>The signals the panes show.</summary>
+        public List<string> Plotted => panes.SelectMany(p => p.Signals).ToList();
 
         void SaveImage()
         {

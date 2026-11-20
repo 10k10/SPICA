@@ -7,14 +7,17 @@ using Spica.Core;
 
 namespace Spica.UI
 {
-    /// <summary>Tools > Options: what belongs to this PC and not to a campaign (where LTspice is, how many instances run).</summary>
+    /// <summary>
+    /// Tools > Options: how this PC simulates, for every study: where LTspice is (found by itself, or chosen), how many
+    /// instances run at once, and where the results go.
+    /// </summary>
     public sealed class OptionsForm : Win98Form
     {
         readonly AppSettings settings;
         readonly HardwareInfo hw;
-        readonly Win98TextField txtLtspice, txtInstances, txtThreads, txtRemote;
+        readonly Win98TextField txtLtspice, txtInstances, txtThreads, txtResults;
         readonly Win98RadioButton rbAuto, rbManual;
-        readonly Label lblVersion, lblRemote;
+        readonly Label lblVersion;
 
         public OptionsForm(AppSettings settings, HardwareInfo hw)
         {
@@ -27,15 +30,22 @@ namespace Spica.UI
             StartPosition = FormStartPosition.CenterParent;
             CaptionIcon = Win98.Icon("options16");
             const int W = 540;
-            ClientSize = new Size(W + 20 + Padding.Horizontal, 358 + Padding.Vertical);
+            ClientSize = new Size(W + 20 + Padding.Horizontal, 366 + Padding.Vertical);
             int x = Padding.Left + 10, y = Padding.Top + 10;
 
             var grpLt = new Win98GroupBox { Text = "LTspice", Location = new Point(x, y), Size = new Size(W, 74) };
-            txtLtspice = new Win98TextField { Location = new Point(70, 20), Width = W - 70 - 10 - 81 };
+            txtLtspice = new Win98TextField { Location = new Point(70, 20), Width = W - 70 - 10 - 81 - 6 - 75 };
+            var btnFind = new Win98Button { Text = "&Detect", Location = new Point(W - 10 - 75 - 6 - 75, 18) };
+            btnFind.Click += (s, e) =>
+            {
+                var found = Ltspice.Locate();
+                if (found != null) txtLtspice.Text = found;
+                else Win98MessageBox.Show(this, "LTspice was not found in the usual places. Choose LTspice.exe with Browse.", "Options", MessageBoxButtons.OK, Win98Icon.Information);
+            };
             var btnLt = new Win98Button { Text = "&Browse...", Location = new Point(W - 10 - 75, 18) };
             btnLt.Click += (s, e) => BrowseLtspice();
             lblVersion = new Label { Location = new Point(70, 46), Size = new Size(W - 80, 16), ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false };
-            grpLt.Controls.AddRange(new Control[] { Lbl("Program:", 10, 20), txtLtspice, btnLt, lblVersion });
+            grpLt.Controls.AddRange(new Control[] { Lbl("Program:", 10, 20), txtLtspice, btnFind, btnLt, lblVersion });
             txtLtspice.Box.TextChanged += (s, e) => ShowVersion();
 
             var grpPar = new Win98GroupBox { Text = "Parallel instances", Location = new Point(x, y + 82), Size = new Size(W, 132) };
@@ -55,23 +65,26 @@ namespace Spica.UI
             var lblWhen = new Label
             {
                 Location = new Point(28, 108), Size = new Size(W - 40, 16), ForeColor = Win98.Shadow, BackColor = Win98.Face,
-                Text = "Used by the campaigns added to the queue from now on; those already there keep theirs.",
+                Text = "Used by the campaigns put in the queue from now on; those already there keep theirs.",
             };
             grpPar.Controls.AddRange(new Control[] { rbAuto, rbManual, txtInstances, Lbl("instances  x", 130, 44), txtThreads, Lbl("threads each", 250, 44), lblHw, lblWhen });
 
-            var grpRemote = new Win98GroupBox { Text = "Remote PC (Run Remote)", Location = new Point(x, y + 222), Size = new Size(W, 80) };
-            txtRemote = new Win98TextField { Location = new Point(70, 20), Width = W - 70 - 10 - 81 };
-            var btnRemote = new Win98Button { Text = "B&rowse...", Location = new Point(W - 10 - 75, 18) };
-            btnRemote.Click += (s, e) => BrowseRemote();
-            lblRemote = new Label { Location = new Point(70, 46), Size = new Size(W - 80, 28), ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false };
-            grpRemote.Controls.AddRange(new Control[] { Lbl("Folder:", 10, 20), txtRemote, btnRemote, lblRemote });
-            txtRemote.Box.TextChanged += (s, e) => ShowRemote();
+            var grpResults = new Win98GroupBox { Text = "Results", Location = new Point(x, y + 222), Size = new Size(W, 88) };
+            txtResults = new Win98TextField { Location = new Point(70, 20), Width = W - 70 - 10 - 81 };
+            var btnResults = new Win98Button { Text = "B&rowse...", Location = new Point(W - 10 - 75, 18) };
+            btnResults.Click += (s, e) => BrowseResults();
+            var lblResults = new Label
+            {
+                Location = new Point(70, 46), Size = new Size(W - 80, 36), ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false,
+                Text = "Every study puts its campaigns in <folder>\\studies\\<study>. Empty: beside the project, in <name>_SPICA.\nKeep it short: LTspice cannot open files past 260 characters of path.",
+            };
+            grpResults.Controls.AddRange(new Control[] { Lbl("Folder:", 10, 20), txtResults, btnResults, lblResults });
 
             int by = ClientSize.Height - Padding.Bottom - 33;
             var btnOk = new Win98Button { Text = "OK", Location = new Point(ClientSize.Width - Padding.Right - 10 - 75 - 6 - 75, by) };
             btnOk.Click += (s, e) => Accept();
             var btnCancel = new Win98Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(ClientSize.Width - Padding.Right - 10 - 75, by) };
-            Controls.AddRange(new Control[] { grpLt, grpPar, grpRemote, btnOk, btnCancel });
+            Controls.AddRange(new Control[] { grpLt, grpPar, grpResults, btnOk, btnCancel });
             AcceptButton = btnOk;
             CancelButton = btnCancel;
 
@@ -81,31 +94,14 @@ namespace Spica.UI
             txtInstances.Text = (settings.ManualInstances > 0 ? settings.ManualInstances : hw.PhysicalCores).ToString(CultureInfo.InvariantCulture);
             txtThreads.Text = Math.Max(1, settings.ManualThreads).ToString(CultureInfo.InvariantCulture);
             txtInstances.Enabled = txtThreads.Enabled = rbManual.Checked;
-            txtRemote.Text = settings.SendFolder;
+            txtResults.Text = settings.ResultsFolder;
             ShowVersion();
-            ShowRemote();
         }
 
-        /// <summary>What the remote folder holds: a listener's status says which PC watches it.</summary>
-        void ShowRemote()
+        void BrowseResults()
         {
-            string dir = txtRemote.Text.Trim();
-            string text;
-            if (dir.Length == 0) text = "The shared folder a SPICA listener watches on the other PC (Tools > Listener there). It runs with the cores and options of that PC.";
-            else if (!Directory.Exists(dir)) text = "This folder cannot be reached now.";
-            else
-            {
-                var st = RemoteState.Read(dir);
-                text = st == null ? "No SPICA listener has written its status here yet."
-                     : $"Watched by SPICA {st.Spica} on {st.Machine}: " + (st.Alive ? "listening now." : "not listening (last sign of life " + st.Beat.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + ").");
-            }
-            lblRemote.Text = text;
-        }
-
-        void BrowseRemote()
-        {
-            using (var d = new FolderBrowserDialog { Description = "Shared folder a SPICA listener watches on the other PC:", SelectedPath = Directory.Exists(txtRemote.Text.Trim()) ? txtRemote.Text.Trim() : "", ShowNewFolderButton = false })
-                if (d.ShowDialog(this) == DialogResult.OK) txtRemote.Text = d.SelectedPath;
+            using (var d = new FolderBrowserDialog { Description = "Folder where the studies put their campaigns:", SelectedPath = Directory.Exists(txtResults.Text.Trim()) ? txtResults.Text.Trim() : "" })
+                if (d.ShowDialog(this) == DialogResult.OK) txtResults.Text = d.SelectedPath;
         }
 
         static Label Lbl(string text, int x, int y) => new Label { Text = text, Location = new Point(x, y + 3), AutoSize = true, BackColor = Win98.Face };
@@ -145,7 +141,7 @@ namespace Spica.UI
                 return;
             }
             settings.LtspicePath = lt;
-            settings.SendFolder = txtRemote.Text.Trim();
+            settings.ResultsFolder = txtResults.Text.Trim();
             settings.AutoParallel = rbAuto.Checked;
             if (rbManual.Checked) { settings.ManualInstances = inst; settings.ManualThreads = thr; }
             settings.Save();

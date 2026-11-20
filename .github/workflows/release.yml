@@ -36,10 +36,6 @@ jobs:
       - name: Build SPICA
         run: dotnet build src/SPICA/SPICA.csproj -c Release
 
-      # the same engine without a window: dist/SPICA-cli-<version>.exe
-      - name: Build SPICA command line
-        run: dotnet build src/SPICA.Cli/SPICA.Cli.csproj -c Release
-
       - name: Build smoke tests
         run: dotnet build tests/SPICA.Smoke/SPICA.Smoke.csproj -c Release
 
@@ -52,8 +48,6 @@ jobs:
             ## SPICA — Simulation Platform for Investigation, Compliance and Analysis
 
             Download `SPICA-<version>.exe` and run it. No installation needed — it is the whole app.
-            `SPICA-cli-<version>.exe` is the same engine for the command line (scripts, the workstation
-            listener): `SPICA-cli --help`.
             Settings (`SPICA.ini`) and profiles (`SPICA.profiles`) are written next to the exe.
 
             Requires Windows with .NET Framework 4.8 (built into Windows 10/11) and LTspice installed.

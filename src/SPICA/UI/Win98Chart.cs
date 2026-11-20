@@ -35,7 +35,6 @@ namespace Spica.UI
     public partial class Win98Chart : Control
     {
         public static readonly Color Navy = Color.FromArgb(0, 0, 128);
-        public static readonly Color Red = Color.FromArgb(255, 0, 0);
         public static readonly Color Maroon = Color.FromArgb(128, 0, 0);
         public static readonly Color Green = Color.FromArgb(0, 128, 0);
         public static readonly Color Teal = Color.FromArgb(0, 128, 128);

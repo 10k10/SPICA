@@ -38,7 +38,7 @@ namespace Spica.Core
         {
             var lib = new ModelLibrary();
             string ascDir = Path.GetDirectoryName(Path.GetFullPath(ascPath));
-            var r = new SourceBundle.Resolver(ascDir, null);
+            var r = new LibraryResolver(ascDir);
             lib.Index(netlist, null);
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var line in netlist)
@@ -54,7 +54,7 @@ namespace Spica.Core
             return lib;
         }
 
-        void Read(string file, SourceBundle.Resolver r, HashSet<string> seen, int depth, string includeRef, List<string> warnings)
+        void Read(string file, LibraryResolver r, HashSet<string> seen, int depth, string includeRef, List<string> warnings)
         {
             if (depth > 6 || !seen.Add(file)) return;
             List<string> lines;

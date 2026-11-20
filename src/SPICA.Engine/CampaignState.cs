@@ -10,7 +10,7 @@ namespace Spica.Core
 {
     /// <summary>
     /// campaign.state in a campaign folder: whether the campaign is running, was stopped or finished,
-    /// and how far it got. A folder left "Running" by a crash or a closed window can be resumed.
+    /// and how far it got. A folder left "Running" was cut short by a crash or a closed window.
     /// </summary>
     public sealed class CampaignState
     {
@@ -19,8 +19,6 @@ namespace Spica.Core
         public double ElapsedSeconds;
         public string CircuitHash = "";
         public DateTime? Started, Ended;      // wall clock: first start, and when it last finished or stopped
-
-        public bool Unfinished => !Status.Equals("Finished", StringComparison.OrdinalIgnoreCase) && Done < Jobs;
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         public static string PathIn(string folder) => Path.Combine(folder, "campaign.state");
@@ -65,28 +63,6 @@ namespace Spica.Core
             return s;
         }
 
-        /// <summary>The finished rows of a campaign folder as engine results, for resuming it.</summary>
-        public static List<RunResult> LoadResults(string folder, IList<double> corners)
-        {
-            var rs = ResultSet.Load(folder);
-            var list = new List<RunResult>();
-            foreach (var row in rs.Rows)
-            {
-                int corner = 0;
-                if (corners != null && corners.Count > 0)
-                {
-                    corner = -1;
-                    for (int i = 0; i < corners.Count; i++)
-                        if (Math.Abs(corners[i] - row.Temp) <= 1e-9 * Math.Max(1, Math.Abs(corners[i]))) { corner = i; break; }
-                    if (corner < 0) continue;      // a temperature the setup does not have: simulate again
-                }
-                var r = new RunResult { Run = row.Run, Corner = corner, Temp = row.Temp, Status = row.Status, Note = row.Note ?? "", Values = new Dictionary<string, string>() };
-                for (int i = 0; i < rs.Meas.Count; i++)
-                    if (!string.IsNullOrEmpty(row.Text[i])) r.Values[rs.Meas[i]] = row.Text[i];
-                list.Add(r);
-            }
-            return list;
-        }
     }
 
     static class NativeMethods

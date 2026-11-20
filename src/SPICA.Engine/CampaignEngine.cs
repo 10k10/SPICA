@@ -19,31 +19,18 @@ namespace Spica.Core
         public int Runs;
         public List<string> SaveSignals;      // null = no .save (LTspice saves everything)
         public bool KeepRaw = true;
-        public bool ClockReseed = true;
         public RunScheduler.Config? Manual;
 
         public List<double> Corners;          // fixed temperatures: every run is simulated at each (null = one pass)
-        public bool RandomTemp;               // per-run temperature, flat between TempMin and TempMax
-        public double TempMin = -40, TempMax = 90;
         public McPlan Mc;                     // SPICA's paired sample generator (null = LTspice's mc())
         public uint Seed;
-        public SpicaProject Setup;            // copied into the campaign folder as campaign.spica
-        public List<RunResult> Resume;        // runs already done in OutputDir (resuming an interrupted campaign)
-        public double PriorSeconds;           // wall time of the earlier sessions of a resumed campaign
-        public StopRule Stop;                 // early stop when the answer is known (null = run all)
-        public string Stage;                  // logged at start instead of the resume line (e.g. worst-case verification)
-        public int WcStage;                   // worst case by sensitivity: 1 = screening, 2 = verification (0 = not)
+        public string Analysis = "";          // what is run, in a few words (logged, and in the queue)
 
         public int CornerCount => Corners != null && Corners.Count > 0 ? Corners.Count : 1;
         public int Jobs => Runs * CornerCount;
 
-        /// <summary>The temperature of a run (NaN when the schematic's own temperature is used).</summary>
-        public double TempOf(int run, int corner)
-        {
-            if (Corners != null && Corners.Count > 0) return Corners[corner];
-            if (RandomTemp) return TempMin + (TempMax - TempMin) * McPlan.Uniform01(Seed, McPlan.TempStream, run);
-            return double.NaN;
-        }
+        /// <summary>The temperature of a corner (NaN when the schematic's own temperature is used).</summary>
+        public double TempOf(int corner) => Corners != null && Corners.Count > 0 ? Corners[corner] : double.NaN;
     }
 
     public enum RunStatus { Ok, NoData, Failed }
@@ -80,8 +67,7 @@ namespace Spica.Core
         public long RawBytes;
         public double RawForecast = double.NaN;
         public List<WorkerView> Workers = new List<WorkerView>();
-        public bool Finished, Cancelled, Draining, AutoStopped;
-        public string StopStatus;             // auto-stop progress (null = no auto-stop)
+        public bool Finished, Cancelled, Draining;
         public int Running;                   // simulations inside chunks that are running now
         public string FatalError;
         public int Done => Ok + NoData + Failed;
@@ -141,14 +127,14 @@ namespace Spica.Core
         RunScheduler sched;
         StreamWriter logFile;
         string chunksDir, iniPath;
-        int pendingCount, resumedCount, chunkSeq, workerSeq, activeWorkers, blockedCount;
+        int pendingCount, chunkSeq, workerSeq, activeWorkers, blockedCount;
         long rawBytes;
         DateTime lastLaunch = DateTime.MinValue, lastSave = DateTime.MinValue;
         double saveInterval = 1;      // seconds between progress saves; grows with the cost of a save
         volatile bool cancel, draining, dirty;
         bool finished, saveWarned;
         string fatal;
-        DateTime started = DateTime.Now;      // when the campaign first started (kept when it is resumed)
+        readonly DateTime started = DateTime.Now;
 
         public CampaignEngine(CampaignOptions options, HardwareInfo hardware, ProfileStore profileStore)
         {
@@ -169,68 +155,37 @@ namespace Spica.Core
 
         public void Start()
         {
-            bool resuming = opt.Resume != null;
             Directory.CreateDirectory(opt.OutputDir);
             chunksDir = Path.Combine(opt.OutputDir, "chunks");
             Directory.CreateDirectory(chunksDir);
-            logFile = new StreamWriter(Path.Combine(opt.OutputDir, "campaign.log"), resuming, Encoding.UTF8) { AutoFlush = true };
-            iniPath = Ltspice.WritePrivateIni(Path.Combine(opt.OutputDir, "LTspice.private.ini"), opt.ClockReseed);
-
-            if (resuming)
-            {
-                // failed runs are simulated again; chunk numbers continue after the existing files
-                foreach (var r in opt.Resume)
-                    if (r.Status != RunStatus.Failed && r.Run >= 1 && r.Run <= opt.Runs && r.Corner >= 0 && r.Corner < opt.CornerCount)
-                        results[r.Corner * opt.Runs + r.Run] = r;
-                resumedCount = results.Count;
-                chunkSeq = ExistingChunkCount();
-                Log("");
-            }
+            logFile = new StreamWriter(Path.Combine(opt.OutputDir, "campaign.log"), false, Encoding.UTF8) { AutoFlush = true };
+            iniPath = Ltspice.WritePrivateIni(Path.Combine(opt.OutputDir, "LTspice.private.ini"), true);
             BuildPending();
-            // auto-stop: the first chunks cover the minimum runs; later ones follow the rule's own estimate
-            if (opt.Stop != null && opt.Stop.Enabled) stopRemaining = Math.Max(1, opt.Stop.MinRuns * opt.CornerCount - results.Count);
 
             Log($"SPICA campaign: {opt.Runs} runs of {Path.GetFileName(opt.AscPath)}" +
                 (opt.CornerCount > 1 ? $" x {opt.CornerCount} temperatures = {opt.Jobs} simulations" : ""));
-            if (opt.Stage != null) Log(opt.Stage);
-            else if (resuming) Log($"Resuming: {resumedCount} of {opt.Jobs} simulations already done, {pendingCount} to go.");
-            if (opt.Stop != null && opt.Stop.Enabled) Log($"Auto-stop: {opt.Stop.Describe()}; at most {opt.Runs} runs.");
+            if (opt.Analysis.Length > 0) Log(opt.Analysis);
             Log($"Machine: {hw}");
             Log($"LTspice: {opt.LtspiceExe} ({Ltspice.Version(opt.LtspiceExe)})");
             Log($"Seed: {opt.Seed}");
             if (opt.Mc != null)
             {
-                Log($"MC generator: SPICA paired samples, {opt.Mc.Sites.Count} random sites (same unit at every temperature, reproducible from the seed).");
+                Log($"Generator: SPICA's own, {opt.Mc.Sites.Count} tolerance sites (same unit at every temperature, reproducible from the seed).");
                 foreach (var s in opt.Mc.Sites) Log($"  site {s.Index}: {s.Label} = {s.Original}");
                 if (opt.Mc.Inlined.Count > 0) Log($"  .func inlined at each call: {string.Join(", ", opt.Mc.Inlined)}");
                 foreach (var t in opt.Mc.TakenOver) Log("  drawn by SPICA: " + t);
                 foreach (var w in opt.Mc.Warnings) Log("  WARNING " + w);
             }
-            else Log(opt.ClockReseed ? "MC generator: LTspice mc(), reseeded from the clock (private ini), launches staggered."
-                                     : "MC generator: LTspice mc(), NOT reseeded - chunks will repeat the same random sequence!");
+            else Log("Generator: LTspice mc(), reseeded from the clock (private ini), launches staggered.");
             if (opt.Corners != null && opt.Corners.Count > 0)
-                Log("Temperature: corners " + string.Join(", ", opt.Corners.Select(t => t.ToString("0.###", CultureInfo.InvariantCulture))) + " °C");
-            else if (opt.RandomTemp)
-                Log($"Temperature: random per run, flat {opt.TempMin:0.###} .. {opt.TempMax:0.###} °C");
-            if ((opt.Corners != null || opt.RandomTemp) && opt.Netlist.TempLines.Any())
+            {
+                Log("Temperature: " + string.Join(", ", opt.Corners.Select(t => t.ToString("0.###", CultureInfo.InvariantCulture))) + " °C");
                 foreach (var t in opt.Netlist.TempLines) Log($"Replaced by SPICA's temperature: {t}");
+            }
             Log(opt.SaveSignals == null ? ".save: everything (no .save directive)"
                                         : $".save: {opt.SaveSignals.Count} signals -> {string.Join(" ", opt.SaveSignals.Take(12))}{(opt.SaveSignals.Count > 12 ? " ..." : "")}");
             foreach (var s in opt.Netlist.RemovedSteps) Log($"Removed from netlist: {s}");
             if (opt.Netlist.IsOpAnalysis) Log(".op analysis: each chunk gets a dummy first .step so .meas report one row per run.");
-
-            if (opt.Setup != null)
-            {
-                try
-                {
-                    var copy = opt.Setup.Clone();
-                    copy.Seed = opt.Seed;
-                    copy.Save(Path.Combine(opt.OutputDir, "campaign.spica"));
-                }
-                catch (Exception ex) { Log("Could not write campaign.spica: " + ex.Message); }
-            }
-            if (resuming && CampaignState.Load(opt.OutputDir)?.Started is DateTime first) started = first;
-            WriteBundle();
 
             var warm = profiles.Find(hw.MachineKey, opt.Netlist.CircuitHash());
             sched = new RunScheduler(hw, Math.Max(1, pendingCount), warm, opt.Manual, Log);
@@ -261,46 +216,7 @@ namespace Spica.Core
 
         public bool IsFinished { get { lock (sync) return finished; } }
 
-        bool Stopped => cancel || (draining && Unallocated > 0 && !autoStopped);
-
-        // ------------------------------------------------------------------ auto-stop
-
-        const double AutoStopChunkSeconds = 30;
-        volatile bool autoStopped;
-        string stopStatus;
-        int stopRemaining = int.MaxValue;     // simulations the stop rule still expects to need
-        int stopCheckedAt = -1;
-        DateTime nextStopCheck = DateTime.MinValue;
-
-        /// <summary>Every 2 s with new results: is the answer known? Then finish what runs and stop.</summary>
-        void CheckStop()
-        {
-            if (opt.Stop == null || !opt.Stop.Enabled || draining || cancel || DateTime.UtcNow < nextStopCheck) return;
-            nextStopCheck = DateTime.UtcNow.AddSeconds(2);
-            List<RunResult> list;
-            lock (sync)
-            {
-                if (results.Count == stopCheckedAt) return;
-                stopCheckedAt = results.Count;
-                list = results.Values.ToList();
-            }
-            var specs = opt.Setup;
-            var check = opt.Stop.Evaluate(list, opt.Netlist.MeasNames, m => specs?.Spec(m), opt.CornerCount,
-                c => opt.Corners != null && c < opt.Corners.Count ? opt.Corners[c].ToString("0.###", CultureInfo.InvariantCulture) + " °C" : "corner " + (c + 1));
-            lock (sync)
-            {
-                stopStatus = check.Status;
-                int least = Enumerable.Range(0, opt.CornerCount).Min(c => list.Count(r => r.Corner == c));
-                long rem = check.RunsNeeded >= int.MaxValue ? int.MaxValue : (long)Math.Max(0, check.RunsNeeded - least) * opt.CornerCount;
-                // runs handed out but not finished count as already on their way
-                stopRemaining = (int)Math.Max(0, Math.Min(int.MaxValue, rem - (opt.Jobs - Unallocated - results.Count)));
-                if (!check.Done || draining) return;
-                autoStopped = true;
-                draining = true;
-            }
-            Log($"Auto-stop: the answer is known after {list.Count} simulations ({check.Status}). Finishing the running ones, starting nothing new.");
-            foreach (var line in check.Lines) Log("  " + line);
-        }
+        bool Stopped => cancel || (draining && Unallocated > 0);
 
         // ------------------------------------------------------------------ controller
 
@@ -329,7 +245,6 @@ namespace Spica.Core
                         if (activeWorkers == 0 && (Unallocated == 0 || draining)) break;
                     }
                     SaveProgress(false);
-                    CheckStop();
                     Thread.Sleep(200);
                 }
             }
@@ -468,22 +383,6 @@ namespace Spica.Core
             return best;
         }
 
-        int ExistingChunkCount()
-        {
-            int max = 0;
-            try
-            {
-                foreach (var f in Directory.GetFiles(chunksDir, "chunk*.net"))
-                {
-                    string n = Path.GetFileName(f);
-                    int us = n.IndexOf('_');
-                    if (us > 5 && int.TryParse(n.Substring(5, us - 5), NumberStyles.Integer, CultureInfo.InvariantCulture, out int id)) max = Math.Max(max, id);
-                }
-            }
-            catch { }
-            return max;
-        }
-
         Plan TakeChunk()
         {
             if (cancel || draining) return null;
@@ -498,12 +397,7 @@ namespace Spica.Core
                 if (pending.Count == 0) return null;
                 int ri = NextRange();
                 var range = pending[ri];
-                // auto-stop: short chunks, and no more than the runs still expected to be needed
-                bool auto = opt.Stop != null && opt.Stop.Enabled;
-                int n = auto ? sched.NextChunkSize(Math.Min(Unallocated, Math.Max(sched.Current.Instances, stopRemaining)), AutoStopChunkSeconds)
-                             : sched.NextChunkSize(Unallocated);
-                double x = sched.SecondsPerRun;
-                if (auto && x > 0) n = Math.Max(n, (int)Math.Min(Unallocated, Math.Max(1, 5 / x)));   // >= ~5 s: launches stay cheap
+                int n = sched.NextChunkSize(Unallocated);
                 n = Math.Max(1, Math.Min(n, Math.Min(range[1], CornerEnd(range[0])) - range[0] + 1));
                 p = new Plan { First = range[0], Last = range[0] + n - 1 };
                 cornerAlloc[CornerOf(range[0])] += n;
@@ -564,7 +458,7 @@ namespace Spica.Core
                             results[j] = rr;
                             dirty = true;
                         }
-                    if (++workerErrors >= 20 && results.Count == resumedCount)
+                    if (++workerErrors >= 20 && results.Count == 0)
                     {
                         fatal = "Every LTspice instance fails before running: " + ex.Message;
                         Log(fatal);
@@ -625,7 +519,6 @@ namespace Spica.Core
                 First = first, Last = last, Threads = p.Threads, Save = opt.SaveSignals, BaseDir = ascDir,
                 Mc = opt.Mc, Seed = opt.Seed,
                 FixedTemp = corners ? opt.Corners[corner] : (double?)null,
-                TempOfRun = opt.RandomTemp && !corners ? (Func<int, double>)(r => opt.TempOf(r, 0)) : null,
             };
             File.WriteAllText(net, opt.Netlist.BuildChunk(spec), opt.Netlist.Encoding);
 
@@ -795,7 +688,7 @@ namespace Spica.Core
         RunResult NewResult(int job, int chunk)
         {
             int run = RunOf(job), corner = CornerOf(job);
-            return new RunResult { Run = run, Corner = corner, Temp = opt.TempOf(run, corner), Chunk = chunk, Values = new Dictionary<string, string>() };
+            return new RunResult { Run = run, Corner = corner, Temp = opt.TempOf(corner), Chunk = chunk, Values = new Dictionary<string, string>() };
         }
 
         string Describe(Plan p)
@@ -829,16 +722,7 @@ namespace Spica.Core
                 WriteState(stopped ? "Stopped" : "Finished");
 
                 var snap = Snapshot();
-                if (!autoStopped && !stopped && opt.Stop != null && opt.Stop.Enabled)
-                {
-                    nextStopCheck = DateTime.MinValue;    // judge the final results, not the last 2-second check
-                    CheckStop();
-                }
-                if (autoStopped) Log($"Auto-stop: {snap.Done} of at most {opt.Jobs} simulations were needed.");
-                else if (!stopped && opt.Stop != null && opt.Stop.Enabled && stopStatus != null)
-                    Log($"Auto-stop: the maximum number of runs was reached before the answer was settled: {stopStatus}. " +
-                        "A result this close to the requirement needs many more runs to call, or a design change.");
-                Log(stopped ? $"Campaign stopped after {snap.Elapsed:hh\\:mm\\:ss}: {snap.Done} of {snap.Total} simulations done ({snap.Ok} ok, {snap.Failed} failed). It can be resumed from File > Open Results."
+                Log(stopped ? $"Campaign stopped after {snap.Elapsed:hh\\:mm\\:ss}: {snap.Done} of {snap.Total} simulations done ({snap.Ok} ok, {snap.Failed} failed)."
                             : $"Campaign finished in {snap.Elapsed:hh\\:mm\\:ss}: {snap.Ok} ok, {snap.NoData} without data, {snap.Failed} failed.");
                 Log($"Results: {Path.Combine(opt.OutputDir, "results.csv")}");
             }
@@ -849,7 +733,7 @@ namespace Spica.Core
         }
 
         /// <summary>
-        /// Writes results.csv and campaign.state while the campaign runs, so a crash can be resumed. The whole file is
+        /// Writes results.csv and campaign.state while the campaign runs, so what ran survives a crash. The whole file is
         /// rewritten, so the interval is 20 times the cost of the last save (1 .. 30 s): saving stays under ~5 % of one
         /// core however many runs there are (100k runs take ~0.2 s to write).
         /// </summary>
@@ -882,19 +766,6 @@ namespace Spica.Core
             }
         }
 
-        /// <summary>The snapshot of what is simulated and where (written once: a resumed campaign keeps the first).</summary>
-        void WriteBundle()
-        {
-            if (SourceBundle.Find(opt.OutputDir) != null) return;
-            try
-            {
-                var warnings = new List<string>();
-                Log("Sources: " + SourceBundle.Write(SourceBundle.PathFor(opt.OutputDir, opt.AscPath), opt, hw, started, warnings));
-                foreach (var w in warnings) Log("  WARNING " + w);
-            }
-            catch (Exception ex) { Log("Could not write the sources bundle: " + ex.Message); }
-        }
-
         void WriteState(string status)
         {
             try
@@ -902,9 +773,9 @@ namespace Spica.Core
                 var s = new CampaignState
                 {
                     Status = status,
-                    Jobs = autoStopped && status == "Finished" ? results.Count : opt.Jobs,
+                    Jobs = opt.Jobs,
                     Done = results.Count,
-                    ElapsedSeconds = opt.PriorSeconds + clock.Elapsed.TotalSeconds,
+                    ElapsedSeconds = clock.Elapsed.TotalSeconds,
                     CircuitHash = opt.Netlist.CircuitHash(),
                     Started = started,
                     Ended = status == "Running" ? (DateTime?)null : DateTime.Now,
@@ -986,11 +857,10 @@ namespace Spica.Core
             sb.AppendLine($"Schematic      : {opt.AscPath}");
             sb.AppendLine($"Runs requested : {opt.Runs}" + (opt.CornerCount > 1 ? $" x {opt.CornerCount} temperatures = {opt.Jobs} simulations" : ""));
             sb.AppendLine($"Seed           : {opt.Seed}{(opt.Mc != null ? " (SPICA paired samples)" : " (LTspice mc())")}");
-            if (opt.Corners != null && opt.Corners.Count > 0) sb.AppendLine("Temperature    : corners " + string.Join(", ", opt.Corners.Select(t => t.ToString("0.###", inv))) + " °C");
-            else if (opt.RandomTemp) sb.AppendLine($"Temperature    : random flat {opt.TempMin.ToString("0.###", inv)} .. {opt.TempMax.ToString("0.###", inv)} °C");
+            if (opt.Analysis.Length > 0) sb.AppendLine($"Analysis       : {opt.Analysis}");
+            if (opt.Corners != null && opt.Corners.Count > 0) sb.AppendLine("Temperature    : " + string.Join(", ", opt.Corners.Select(t => t.ToString("0.###", inv))) + " °C");
             sb.AppendLine($"Completed      : {snap.Ok} ok, {snap.NoData} no data, {snap.Failed} failed" +
-                          (stopped ? $" (stopped: {snap.Done} of {snap.Total} simulations)" : "") +
-                          (resumedCount > 0 ? $" ({resumedCount} from earlier sessions)" : ""));
+                          (stopped ? $" (stopped: {snap.Done} of {snap.Total} simulations)" : ""));
             sb.AppendLine($"Wall time      : {snap.Elapsed:hh\\:mm\\:ss}");
             sb.AppendLine($"Machine        : {hw}");
             sb.AppendLine($"Final config   : {sched.Current} ({sched.State})");
@@ -1031,7 +901,7 @@ namespace Spica.Core
                 var s = new EngineSnapshot
                 {
                     Total = opt.Jobs,
-                    Elapsed = clock.Elapsed + TimeSpan.FromSeconds(opt.PriorSeconds),
+                    Elapsed = clock.Elapsed,
                     Chunks = chunkSeq,
                     Allocated = opt.Jobs - Unallocated,
                     Finished = finished,
@@ -1039,10 +909,7 @@ namespace Spica.Core
                     Draining = draining && !finished,
                     FatalError = fatal,
                     RawBytes = rawBytes,
-                    AutoStopped = autoStopped,
-                    StopStatus = stopStatus,
                 };
-                if (autoStopped && finished) s.Total = results.Count;
                 s.Running = finished ? 0 : Math.Max(0, s.Allocated - results.Count);   // handed out, not finished yet
                 foreach (var r in results.Values)
                 {

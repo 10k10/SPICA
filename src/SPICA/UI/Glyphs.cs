@@ -14,33 +14,6 @@ namespace Spica.UI
             return bmp;
         }
 
-        /// <summary>A 16 px icon at 32 px, its pixels doubled (the look of the app's 32 px icons).</summary>
-        public static Image Big(Image small)
-        {
-            var bmp = new Bitmap(32, 32);
-            using (var g = Graphics.FromImage(bmp))
-            {
-                g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                g.PixelOffsetMode = PixelOffsetMode.Half;
-                g.DrawImage(small, new Rectangle(0, 0, 32, 32));
-            }
-            return bmp;
-        }
-
-        /// <summary>A magnifying glass (Fit).</summary>
-        public static Image Magnifier()
-        {
-            var bmp = New16(out var g);
-            using (g)
-            {
-                using (var handle = new Pen(Color.FromArgb(96, 64, 32), 3f)) g.DrawLine(handle, 10, 10, 14, 14);
-                using (var glass = new SolidBrush(Color.FromArgb(200, 230, 255))) g.FillEllipse(glass, 1, 1, 10, 10);
-                using (var shine = new SolidBrush(Color.White)) g.FillEllipse(shine, 3, 3, 4, 3);
-                using (var rim = new Pen(Color.Black, 1.5f)) g.DrawEllipse(rim, 1, 1, 10, 10);
-            }
-            return bmp;
-        }
-
         /// <summary>A plain green arrow (Add to Queue).</summary>
         public static Image Play()
         {

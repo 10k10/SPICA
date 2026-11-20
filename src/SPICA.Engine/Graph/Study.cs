@@ -7,18 +7,17 @@ using System.Text;
 namespace Spica.Core.Graph
 {
     /// <summary>What a wire carries. A wire only joins two ports of the same type (docs/ARCHITECTURE.md, section 3).</summary>
-    public enum PortType { Stimulus, Circuit, Conditions, Data, Table, Ratings, Verdicts }
+    public enum PortType { Circuit, Conditions }
 
-    /// <summary>A port of a block kind: its name, its type, whether it takes several wires and whether it may stay empty.</summary>
+    /// <summary>A port of a block kind: its name, its type, and whether it takes several wires.</summary>
     public sealed class PortSpec
     {
         public string Name;
         public PortType Type;
-        public bool Many;          // an input that takes any number of wires (Candidates, Combine, Report...)
-        public bool Optional;      // an input that may stay unconnected
+        public bool Many;          // an input that takes any number of wires (Simulate's analyses)
 
-        public PortSpec(string name, PortType type, bool many = false, bool optional = false)
-        { Name = name; Type = type; Many = many; Optional = optional; }
+        public PortSpec(string name, PortType type, bool many = false)
+        { Name = name; Type = type; Many = many; }
     }
 
     /// <summary>One block of a study: its kind, where it sits on the canvas and its properties (ordered; a key may repeat).</summary>
@@ -36,9 +35,6 @@ namespace Spica.Core.Graph
             foreach (var kv in Props) if (kv.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) return kv.Value;
             return def;
         }
-
-        public IEnumerable<string> GetAll(string key) =>
-            Props.Where(kv => kv.Key.Equals(key, StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Value);
 
         /// <summary>Sets the first value of a key (adds it when missing).</summary>
         public Block Set(string key, string value)
@@ -174,9 +170,6 @@ namespace Spica.Core.Graph
         public IEnumerable<Block> Upstream(Block b, string port) =>
             Wires.Where(w => w.To == b.Id && w.ToPort.Equals(port, StringComparison.OrdinalIgnoreCase)).Select(w => this[w.From]).Where(x => x != null);
 
-        public IEnumerable<Block> Downstream(Block b) =>
-            Wires.Where(w => w.From == b.Id).Select(w => this[w.To]).Where(x => x != null).Distinct();
-
         /// <summary>
         /// Everything that stops the study from running: unknown kinds, wires to missing blocks or ports or of the wrong
         /// type, several wires into a single input, loops, inputs left empty.
@@ -201,8 +194,8 @@ namespace Spica.Core.Graph
                 foreach (var i in b.Spec.Inputs)
                 {
                     int n = Wires.Count(w => w.To == b.Id && w.ToPort.Equals(i.Name, StringComparison.OrdinalIgnoreCase));
-                    if (n == 0 && !i.Optional) Bad(b.Id, $"{b.Kind}: input {i.Name} ({i.Type}) is not wired");
-                    if (n > 1 && !i.Many) Bad(b.Id, $"{b.Kind}: input {i.Name} takes one wire, it has {n}");
+                    if (n == 0) Bad(b.Id, $"input {i.Name} ({i.Type}) is not wired");
+                    if (n > 1 && !i.Many) Bad(b.Id, $"input {i.Name} takes one wire, it has {n}");
                 }
             if (Order() == null) Bad(0, "the wires make a loop");
             return list;
@@ -226,30 +219,6 @@ namespace Spica.Core.Graph
             return order.Count == Blocks.Count ? order : null;
         }
 
-        /// <summary>Places the blocks in columns by depth (stimuli and sources on the left), for studies made without the editor.</summary>
-        public void AutoLayout(int colWidth = 250, int rowHeight = 110, int left = 40, int top = 40)
-        {
-            var order = Order() ?? Blocks.ToList();
-            var depth = new Dictionary<int, int>();
-            foreach (var b in order)
-                depth[b.Id] = Wires.Where(w => w.To == b.Id && depth.ContainsKey(w.From)).Select(w => depth[w.From] + 1).DefaultIfEmpty(0).Max();
-            // a source that only feeds later blocks (Nominal, Parts Database...) sits just left of the first one it feeds
-            for (int i = order.Count - 1; i >= 0; i--)
-            {
-                var b = order[i];
-                if (Wires.Any(w => w.To == b.Id)) continue;
-                var next = Wires.Where(w => w.From == b.Id && depth.ContainsKey(w.To)).Select(w => depth[w.To] - 1).DefaultIfEmpty(depth[b.Id]).Min();
-                depth[b.Id] = Math.Max(depth[b.Id], next);
-            }
-            foreach (var col in order.GroupBy(b => depth[b.Id]).OrderBy(g => g.Key))
-            {
-                int row = 0;
-                // in each column, blocks follow the average height of what feeds them, so wires cross less
-                var placed = col.OrderBy(b => Wires.Where(w => w.To == b.Id).Select(w => this[w.From]?.Y ?? 0).DefaultIfEmpty(int.MaxValue).Average()).ThenBy(b => b.Id);
-                foreach (var b in placed) { b.X = left + col.Key * colWidth; b.Y = top + row++ * rowHeight; }
-            }
-        }
-
         public Study Clone()
         {
             var s = new Study { Name = Name, Note = Note };
@@ -268,14 +237,14 @@ namespace Spica.Core.Graph
         {
             sb.AppendLine();
             sb.AppendLine($"[Study {Name}]");
-            if (Note.Length > 0) sb.AppendLine("Note=" + ReportOptions.Escape(Note));
+            if (Note.Length > 0) sb.AppendLine("Note=" + Escape(Note));
             foreach (var w in Wires) sb.AppendLine("Wire=" + w);
             foreach (var b in Blocks.OrderBy(x => x.Id))
             {
                 sb.AppendLine($"[Block {b.Id}]");
                 sb.AppendLine("Kind=" + b.Kind);
                 sb.AppendLine($"At={b.X.ToString(CultureInfo.InvariantCulture)},{b.Y.ToString(CultureInfo.InvariantCulture)}");
-                foreach (var kv in b.Props) sb.AppendLine($"{kv.Key}={ReportOptions.Escape(kv.Value)}");
+                foreach (var kv in b.Props) sb.AppendLine($"{kv.Key}={Escape(kv.Value)}");
             }
         }
 
@@ -285,7 +254,7 @@ namespace Spica.Core.Graph
             if (block == null)
             {
                 if (key.Equals("Wire", StringComparison.OrdinalIgnoreCase) && Wire.TryParse(val, out var w)) Wires.Add(w);
-                else if (key.Equals("Note", StringComparison.OrdinalIgnoreCase)) Note = ReportOptions.Unescape(val);
+                else if (key.Equals("Note", StringComparison.OrdinalIgnoreCase)) Note = Unescape(val);
                 return;
             }
             if (key.Equals("Kind", StringComparison.OrdinalIgnoreCase)) block.Kind = BlockKind.Find(val)?.Name ?? val;
@@ -294,7 +263,23 @@ namespace Spica.Core.Graph
                 var xy = val.Split(',');
                 if (xy.Length == 2) { int.TryParse(xy[0].Trim(), out block.X); int.TryParse(xy[1].Trim(), out block.Y); }
             }
-            else block.Add(key, ReportOptions.Unescape(val));
+            else block.Add(key, Unescape(val));
+        }
+
+        /// <summary>Several lines on one setup line: \n for a line break, \\ for a backslash.</summary>
+        public static string Escape(string s) =>
+            (s ?? "").Replace("\\", "\\\\").Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\\n");
+
+        public static string Unescape(string s)
+        {
+            s = s ?? "";
+            var sb = new StringBuilder();
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] == '\\' && i + 1 < s.Length && (s[i + 1] == 'n' || s[i + 1] == '\\')) { sb.Append(s[i + 1] == 'n' ? "\r\n" : "\\"); i++; }
+                else sb.Append(s[i]);
+            }
+            return sb.ToString();
         }
     }
 }

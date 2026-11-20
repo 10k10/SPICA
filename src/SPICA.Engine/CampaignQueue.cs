@@ -11,258 +11,130 @@ namespace Spica.Core
     {
         static readonly object Gate = new object();     // LTspice writes the .net beside the schematic: one conversion at a time
 
-        /// <param name="redirected">library references taken from a source bundle unzipped beside the schematic</param>
-        /// <param name="preferShipped">
-        /// use the netlist of the source bundle the schematic came in, without asking LTspice: a campaign sent by
-        /// another PC runs as it was netlisted there, whatever symbols and library paths this PC has
-        /// </param>
-        /// <param name="shipped">the netlist came from the bundle (asked for, or because LTspice could not convert the schematic here)</param>
-        public static Netlist Load(string ltspiceExe, string ascPath, out int redirected, bool preferShipped, out bool shipped)
+        public static Netlist Load(string ltspiceExe, string ascPath)
         {
             lock (Gate)
             {
-                var parsed = preferShipped ? SourceBundle.ShippedNetlist(ascPath) : null;
-                if (parsed == null)
-                {
-                    try
-                    {
-                        string tmp = Path.Combine(Path.GetTempPath(), "SPICA");
-                        Directory.CreateDirectory(tmp);
-                        string ini = Ltspice.WritePrivateIni(Path.Combine(tmp, "convert.ini"), true);
-                        string text = Ltspice.ConvertSchematic(ltspiceExe, ascPath, ini, out var enc);
-                        parsed = Netlist.Parse(text, ascPath, enc);
-                    }
-                    catch
-                    {
-                        parsed = preferShipped ? null : SourceBundle.ShippedNetlist(ascPath);
-                        if (parsed == null) throw;
-                    }
-                    shipped = false;
-                }
-                else shipped = true;
-                redirected = SourceBundle.Redirect(parsed);
-                return parsed;
+                string tmp = Path.Combine(Path.GetTempPath(), "SPICA");
+                Directory.CreateDirectory(tmp);
+                string ini = Ltspice.WritePrivateIni(Path.Combine(tmp, "convert.ini"), true);
+                string text = Ltspice.ConvertSchematic(ltspiceExe, ascPath, ini, out var enc);
+                return Netlist.Parse(text, ascPath, enc);
             }
         }
-
-        public static Netlist Load(string ltspiceExe, string ascPath, out int redirected) => Load(ltspiceExe, ascPath, out redirected, false, out _);
     }
 
-    /// <summary>Everything a campaign needs, frozen when it is put in the queue: later edits of the setup do not reach it.</summary>
+    /// <summary>How the tolerances are set in a campaign.</summary>
+    public enum RunKind
+    {
+        /// <summary>One run, every tolerance SPICA drives at its nominal value.</summary>
+        Nominal,
+        /// <summary>N units drawn from the tolerances.</summary>
+        MonteCarlo,
+        /// <summary>The nominal unit, then every combination of the tolerance edges (2^n runs).</summary>
+        WorstCase,
+    }
+
+    /// <summary>Everything a campaign needs, frozen when it is put in the queue: later edits of the study do not reach it.</summary>
     public sealed class CampaignRequest
     {
+        public string Name = "";
         public string LtspiceExe, AscPath;
-        public string OutputRoot;               // one sub-folder per campaign is created here when it starts
+        public string OutputDir;                // the campaign folder (made when it starts)
         public Netlist Netlist;
-        public SpicaProject Project;
-        public RunScheduler.Config? Manual;
-        public string ResumeDir;                // an unfinished campaign folder to complete
-        public List<RunResult> Resume;          // the runs already finished in that folder
-        public double PriorSeconds;
-        public uint Seed;                       // 0 = the project's seed (0 there = a new one)
-        public bool NominalOnly;                // one run with every tolerance at its nominal value (qualification)
+        public RunScheduler.Config? Manual;     // null = SPICA finds the instances and threads
 
-        public CampaignRequest Clone() => (CampaignRequest)MemberwiseClone();
+        public RunKind Kind = RunKind.Nominal;
+        public int Runs = 1;                    // Monte Carlo
+        public uint Seed;                       // 0 = a new seed
+        public bool Paired;                     // Monte Carlo with SPICA's generator: the same units at every temperature
+        public double Sigma = 3;                // worst case: gaussian tolerances pushed to +/- this many sigma
+        public List<double> Temps;              // null or empty = the schematic's own temperature
+        public List<string> Save;               // signals to keep in the .raw; null or empty = everything
     }
 
-    /// <summary>Turns a setup into the options of a campaign, with the checks that used to sit behind the Start button.</summary>
+    /// <summary>Turns a request into the options of a campaign, or says why it cannot run.</summary>
     public static class CampaignBuilder
     {
-        /// <param name="confirm">asks a yes/no question (text, is it a warning); null = go on without asking</param>
-        /// <param name="error">why there is no campaign; null when the user answered No to a question</param>
-        public static CampaignOptions Build(CampaignRequest r, Func<string, bool, bool> confirm, out string error)
+        public static CampaignOptions Build(CampaignRequest r, out string error)
         {
             error = null;
-            var project = r.Project;
             var netlist = r.Netlist;
-            bool Ask(string text, bool warning = false) => confirm == null || confirm(text, warning);
-
-            if (!File.Exists(r.LtspiceExe ?? "")) { error = "LTspice.exe was not found."; return null; }
-            int runs = project.Runs;
-            if (runs < 1 || runs > 10_000_000) { error = "Enter a number of runs between 1 and 10,000,000."; return null; }
+            if (!File.Exists(r.LtspiceExe ?? "")) { error = "LTspice.exe was not found: set it in Tools > Options."; return null; }
             if (r.Manual.HasValue && (r.Manual.Value.Instances < 1 || r.Manual.Value.Threads < 1))
             {
-                error = "Enter the number of instances and threads per instance (1 or more).";
+                error = "The instances and threads per instance (Tools > Options) must be 1 or more.";
                 return null;
             }
-
-            List<double> corners = null;
-            if (project.Temp == TempMode.Corners)
-            {
-                corners = project.Corners.Distinct().ToList();
-                if (corners.Count == 0 || corners.Any(t => t < -273 || t > 1000))
-                {
-                    error = "Enter the temperature corners in °C, separated by commas (e.g. -40, 25, 90).";
-                    return null;
-                }
-            }
-            if (project.Temp == TempMode.Random && !(project.TempMax > project.TempMin))
-            {
-                error = "Enter a random temperature range with min < max (°C).";
-                return null;
-            }
+            List<double> temps = r.Temps?.Distinct().ToList();
+            if (temps != null && temps.Any(t => t < -273 || t > 1000)) { error = "A temperature is out of range (-273 .. 1000 °C)."; return null; }
+            if (temps != null && temps.Count == 0) temps = null;
+            int cc = temps?.Count ?? 1;
+            string at = cc > 1 ? $" at {cc} temperatures" : temps != null ? $" at {temps[0].ToString("0.###", CultureInfo.InvariantCulture)} °C" : "";
 
             McPlan plan = null;
-            bool wc = project.WorstCase != WcMethod.Off && !r.NominalOnly;
-            if (r.NominalOnly)
+            int runs;
+            string analysis;
+            switch (r.Kind)
             {
-                // the nominal unit: SPICA's generator with one design row of zeros (as run 1 of a worst case)
-                plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
-                plan.Design = new List<double[]> { new double[plan.Sites.Count] };
-                runs = 1;
-            }
-            else if (project.Paired || wc)
-            {
-                plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
-                if (wc && (plan.Sites.Count == 0 || netlist.MeasNames.Count == 0))
-                {
-                    error = plan.Sites.Count == 0
-                        ? "Worst case needs tolerances SPICA can drive: mc(), gauss() or flat() outside .subckt definitions. None were found."
-                        : "Worst case needs .meas statements: there is nothing to find the extremes of.";
-                    return null;
-                }
-                if (!wc && plan.Sites.Count == 0 &&
-                    !Ask("Paired samples are on, but SPICA found no mc()/gauss()/flat() it can take over in this schematic" +
-                         (plan.Warnings.Count > 0 ? " (random values inside .subckt definitions stay with LTspice)" : "") + ".\nRun anyway?")) return null;
-            }
-
-            // worst case: the runs are fixed combinations of tolerance edges instead of random units
-            var setup = project;
-            bool randomTemp = project.Temp == TempMode.Random;
-            int wcStage = 0;
-            string stage = null;
-            if (wc)
-            {
-                int n = plan.Sites.Count;
-                double k = project.WcSigma;
-                var method = WorstCase.Resolve(project.WorstCase, n);
-                if (method == WcMethod.Corners && n > WorstCase.MaxCornerSites)
-                {
-                    error = $"{n} tolerances: all corners would need 2^{n} = {Math.Pow(2, n):N0} runs per temperature.\nChoose Sensitivity or Auto.";
-                    return null;
-                }
-                if (randomTemp)
-                {
-                    // a random temperature has no edge: its two limits become corners
-                    corners = new List<double> { project.TempMin, project.TempMax };
-                    randomTemp = false;
-                    setup = project.Clone();
-                    setup.Temp = TempMode.Corners;
-                    setup.Corners = new List<double>(corners);
-                }
-                int cc = corners != null && corners.Count > 0 ? corners.Count : 1;
-                string temps = cc > 1 ? $" at {cc} temperatures" : "";
-                if (method == WcMethod.Corners)
-                {
-                    plan.Design = WorstCase.CornerDesign(plan.Sites, k);
-                    stage = $"Worst case, all corners: nominal + 2^{n} combinations of {n} tolerance edges = {plan.Design.Count} runs{temps}.";
-                }
-                else
-                {
-                    var screen = WorstCase.ScreenDesign(plan.Sites, k);
-                    if (r.Resume != null && Screened(r.Resume, n, cc))
+                case RunKind.Nominal:
+                    // SPICA's generator with one design row of zeros: every tolerance it can drive at its nominal value
+                    plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
+                    plan.Design = new List<double[]> { new double[plan.Sites.Count] };
+                    runs = 1;
+                    analysis = "Nominal" + at;
+                    break;
+                case RunKind.WorstCase:
+                    plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
+                    int n = plan.Sites.Count;
+                    if (n == 0) { error = "Worst case needs tolerances SPICA can drive: mc(), gauss() or flat() outside .subckt definitions. This schematic has none."; return null; }
+                    if (n > WorstCase.MaxCornerSites) { error = $"{n} tolerances: every combination of their edges would be 2^{n} = {Math.Pow(2, n):N0} runs per temperature. Use Monte Carlo."; return null; }
+                    plan.Design = WorstCase.CornerDesign(plan.Sites, r.Sigma);
+                    runs = plan.Design.Count;
+                    analysis = $"Worst case: nominal + 2^{n} combinations of {n} tolerance edges = {runs} runs" + at;
+                    break;
+                default:
+                    if (r.Runs < 1 || r.Runs > 10_000_000) { error = "Monte Carlo runs must be 1 .. 10,000,000."; return null; }
+                    runs = r.Runs;
+                    if (r.Paired)
                     {
-                        var verify = WorstCase.VerifyDesign(r.Resume, netlist.MeasNames, plan.Sites, k, cc);
-                        if (verify.Count == 0)
-                        {
-                            error = "The screening runs gave no usable .meas values, so the worst-case directions are unknown.";
-                            return null;
-                        }
-                        plan.Design = screen.Concat(verify).ToList();
-                        wcStage = 2;
-                        stage = $"Worst case, step 2 of 2 (verification): {verify.Count} runs with every tolerance pushed the way that moves a measurement up or down{temps}.";
+                        plan = McPlan.Build(netlist.Lines, netlist.SourcePath);
+                        if (plan.Sites.Count == 0) plan = null;      // nothing SPICA can draw: LTspice's mc() as written
                     }
-                    else
-                    {
-                        plan.Design = screen;
-                        wcStage = 1;
-                        stage = $"Worst case, step 1 of 2 (screening): nominal + each of the {n} tolerances alone at its upper edge = {n + 1} runs{temps}.";
-                    }
-                }
-                runs = plan.Design.Count;
+                    analysis = $"Monte Carlo, {runs:N0} runs" + at;
+                    break;
             }
-
-            if (netlist.MeasNames.Count == 0 && !Ask("This schematic has no .meas statements, so the results table will be empty.\nRun anyway?")) return null;
-            if (!project.Paired && !r.NominalOnly && !project.ClockReseed &&
-                !Ask("Without clock reseeding every LTspice instance repeats the SAME random sequence, so chunks produce duplicate runs.\nContinue anyway?", true)) return null;
-            if (!project.Paired && !r.NominalOnly && corners != null && corners.Count > 1 &&
-                !Ask("Temperature corners without paired samples simulate DIFFERENT units at each temperature,\nso per-unit drift and 'pass at all temperatures' cannot be computed.\nContinue anyway?")) return null;
 
             List<string> save = null;
-            if (project.SaveSelected)
+            if (r.Save != null && r.Save.Count > 0)
             {
+                // what the .meas need, then the signals asked for that the circuit has
                 save = new List<string>(netlist.RequiredSignals);
                 var have = new HashSet<string>(save, StringComparer.OrdinalIgnoreCase);
-                var known = new HashSet<string>(netlist.Nodes.Select(n => $"V({n})").Concat(netlist.Currents), StringComparer.OrdinalIgnoreCase);
-                foreach (var s in project.Signals) if (known.Contains(s) && have.Add(s)) save.Add(s);
-                if (save.Count == 0)
+                var known = new HashSet<string>(netlist.Nodes.Select(x => $"V({x})").Concat(netlist.Currents), StringComparer.OrdinalIgnoreCase);
+                foreach (var s in r.Save)
                 {
-                    if (!Ask("No signals are selected, so LTspice will save everything.\nContinue?")) return null;
-                    save = null;
+                    if (!known.Contains(s)) { error = $"The schematic has no signal {s} to save."; return null; }
+                    if (have.Add(s)) save.Add(s);
                 }
             }
 
-            string root = (r.OutputRoot ?? "").Trim();
-            if (r.ResumeDir == null && root.Length == 0) root = DefaultRoot(r.AscPath);
-            try
-            {
-                // the campaign folder itself is made when the campaign starts; the drive is checked now, while someone can answer
-                string probe = r.ResumeDir ?? root;
-                var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(probe)));
-                if (project.KeepRaw && confirm != null && drive.IsReady && drive.AvailableFreeSpace < 2L * (1L << 30) &&
-                    !Ask($"Only {drive.AvailableFreeSpace / 1048576} MB free on {drive.Name}. .raw files can grow quickly.\nContinue?", true)) return null;
-            }
-            catch (Exception ex) when (!(ex is ArgumentException))
-            {
-                error = "Cannot use the output folder:\n" + ex.Message;
-                return null;
-            }
-            catch (ArgumentException) { }       // a network share has no DriveInfo: nothing to check
-
-            uint seed = r.Seed != 0 ? r.Seed : project.Seed;
-            if (seed == 0) seed = (uint)(Guid.NewGuid().GetHashCode() & 0x7FFFFFFF) | 1;
+            uint seed = r.Seed != 0 ? r.Seed : (uint)(Guid.NewGuid().GetHashCode() & 0x7FFFFFFF) | 1;
             return new CampaignOptions
             {
                 LtspiceExe = r.LtspiceExe,
                 AscPath = r.AscPath,
-                OutputDir = r.ResumeDir,          // a new campaign gets its folder when it starts
+                OutputDir = r.OutputDir,
                 Netlist = netlist,
                 Runs = runs,
                 SaveSignals = save,
-                KeepRaw = project.KeepRaw,
-                ClockReseed = project.ClockReseed,
+                KeepRaw = true,              // the waveforms are what the results show
                 Manual = r.Manual,
-                Corners = corners,
-                RandomTemp = randomTemp,
-                TempMin = project.TempMin,
-                TempMax = project.TempMax,
+                Corners = temps,
                 Mc = plan,
                 Seed = seed,
-                Setup = setup,
-                Resume = r.Resume,
-                PriorSeconds = r.PriorSeconds,
-                Stop = wc || r.NominalOnly ? null : project.Stop.Clone(),
-                Stage = r.NominalOnly ? "Nominal: every tolerance SPICA drives at its nominal value." : stage,
-                WcStage = wcStage,
+                Analysis = analysis,
             };
-        }
-
-        public static string DefaultRoot(string ascPath) =>
-            Path.Combine(Path.GetDirectoryName(ascPath), Path.GetFileNameWithoutExtension(ascPath) + "_SPICA");
-
-        /// <summary>Worst case by sensitivity: are the screening runs (nominal + one per tolerance) done at every temperature?</summary>
-        public static bool Screened(IList<RunResult> done, int sites, int corners) =>
-            done.Count(r => r.Status != RunStatus.Failed && r.Run >= 1 && r.Run <= sites + 1 && r.Corner < corners) >= (sites + 1) * corners;
-
-        /// <summary>What a campaign runs, in a few words (queue list, summaries).</summary>
-        public static string Describe(CampaignOptions o)
-        {
-            string temps = o.CornerCount > 1 ? $" x {o.CornerCount} temperatures" : o.RandomTemp ? ", random temperature" : "";
-            if (o.WcStage == 1) return $"Worst case by sensitivity: {o.Mc.Sites.Count + 1} screening runs{temps}, then verification";
-            if (o.WcStage == 2) return $"Worst case by sensitivity: verification{temps}";
-            if (o.Mc?.Design != null && o.Mc.Design.Count == 1 && o.Mc.Design[0].All(v => v == 0)) return $"Nominal{temps}";
-            if (o.Mc?.Design != null) return $"Worst case, all corners: {o.Runs:N0} runs{temps}";
-            return (o.Stop != null && o.Stop.Enabled ? $"Monte Carlo, up to {o.Runs:N0} runs (stops early)" : $"Monte Carlo, {o.Runs:N0} runs") + temps;
         }
 
         /// <summary>Wall time of a campaign from the run times saved for its circuit on this machine; NaN when it never ran here.</summary>
@@ -270,16 +142,9 @@ namespace Spica.Core
         {
             ProfileStore.Profile p;
             try { p = profiles.Find(hw.MachineKey, o.Netlist.CircuitHash()); } catch { p = null; }
-            int jobs = o.Jobs - (o.Resume?.Count(x => x.Status != RunStatus.Failed) ?? 0);
-            return EstimateSeconds(p, jobs, o.Manual?.Instances ?? 0);
-        }
-
-        /// <param name="instances">0 = as many as the saved profile used</param>
-        public static double EstimateSeconds(ProfileStore.Profile p, int jobs, int instances)
-        {
             if (p == null || !(p.SecondsPerRun > 0)) return double.NaN;
-            if (jobs <= 0) return 0;
-            int inst = Math.Min(Math.Max(1, instances > 0 ? instances : p.Instances), jobs);
+            int jobs = o.Jobs;
+            int inst = Math.Min(Math.Max(1, o.Manual?.Instances > 0 ? o.Manual.Value.Instances : p.Instances), jobs);
             double sim = jobs * p.SecondsPerRun;
             double launches = Math.Max(inst, Math.Ceiling(sim / RunScheduler.ChunkSeconds));
             double overhead = double.IsNaN(p.OverheadSeconds) ? 0 : Math.Max(0, p.OverheadSeconds);
@@ -294,22 +159,19 @@ namespace Spica.Core
     {
         public int Id;
         public string Name = "";
-        public string Source = "This PC";
         public CampaignRequest Request;
-        public CampaignOptions Options;         // of the step that runs now (a worst case by sensitivity has two)
+        public CampaignOptions Options;
         public CampaignEngine Engine;           // while it runs
         public JobStatus Status = JobStatus.Queued;
         public string Message = "";             // how it ended, when that needs words
-        public DateTime Added = DateTime.Now;
         public DateTime? Started, Ended;
         public string OutputDir;                // known once it starts
         public int Total, Done, Ok, NoData, Failed;
         public TimeSpan Elapsed;
         public double EstimateSeconds = double.NaN;
-        public bool AnalyzeOnFinish, DiscardOnFinish;   // what the Stop dialog asked for
-        public object Tag;                      // the listener's ledger entry
+        public bool DiscardOnFinish;            // stopped with "delete what it simulated"
 
-        public string Analysis => Options != null ? CampaignBuilder.Describe(Options) : "";
+        public string Analysis => Options?.Analysis ?? "";
         public bool Pending => Status == JobStatus.Queued || Status == JobStatus.Running;
     }
 
@@ -337,8 +199,7 @@ namespace Spica.Core
         public QueueJob Running { get; private set; }
         public int QueuedCount => jobs.Count(j => j.Status == JobStatus.Queued);
 
-        /// <summary>A job started; true = the second step of a worst case (same campaign, same folder).</summary>
-        public event Action<QueueJob, bool> Started;
+        public event Action<QueueJob> Started;
         /// <summary>A job ended (finished, stopped or failed). Its engine is still attached during the call.</summary>
         public event Action<QueueJob> Finished;
         /// <summary>A job was stopped and its folder deleted; false = some files could not be deleted.</summary>
@@ -354,17 +215,15 @@ namespace Spica.Core
             set { hold = value; if (!hold) StartNext(); Changed?.Invoke(); }
         }
 
-        public QueueJob Add(CampaignRequest request, CampaignOptions options, string source = "This PC", object tag = null, string name = null)
+        public QueueJob Add(CampaignRequest request, CampaignOptions options)
         {
             var j = new QueueJob
             {
                 Id = nextId++,
-                Name = name ?? Path.GetFileNameWithoutExtension(request.AscPath),
-                Source = source,
+                Name = request.Name.Length > 0 ? request.Name : Path.GetFileNameWithoutExtension(request.AscPath),
                 Request = request,
                 Options = options,
                 Total = options.Jobs,
-                Tag = tag,
                 EstimateSeconds = CampaignBuilder.EstimateSeconds(options, hw, profiles),
             };
             jobs.Add(j);
@@ -425,16 +284,12 @@ namespace Spica.Core
             return t;
         }
 
-        /// <summary>Seconds a new job would wait if it were added now.</summary>
-        public double WaitSecondsForNew() => WaitSeconds(null);
-
         public double RemainingSeconds(QueueJob j)
         {
             if (j.Engine == null) return double.NaN;
             var s = j.Engine.Snapshot();
             double eta = s.EtaSeconds;
             if (double.IsNaN(eta) && !double.IsNaN(j.EstimateSeconds)) eta = Math.Max(0, j.EstimateSeconds - s.Elapsed.TotalSeconds);
-            // a worst case by sensitivity still has its verification runs to do: a few more, not estimated
             return eta;
         }
 
@@ -446,7 +301,7 @@ namespace Spica.Core
                 if (next == null) return;
                 if (Launch(next))
                 {
-                    Started?.Invoke(next, false);
+                    Started?.Invoke(next);
                     return;
                 }
                 Finished?.Invoke(next);       // could not start: reported like any other failure, then the next one
@@ -458,7 +313,6 @@ namespace Spica.Core
             var o = j.Options;
             try
             {
-                if (string.IsNullOrEmpty(o.OutputDir)) o.OutputDir = NewFolder(j.Request.OutputRoot, j.Request.AscPath);
                 j.OutputDir = o.OutputDir;
                 var e = new CampaignEngine(o, hw, profiles);
                 e.Finished += () => post(() => OnEngineFinished(j, e));
@@ -478,15 +332,6 @@ namespace Spica.Core
             if (j.Started == null) j.Started = DateTime.Now;
             Running = j;
             return true;
-        }
-
-        static string NewFolder(string root, string ascPath)
-        {
-            if (string.IsNullOrWhiteSpace(root)) root = CampaignBuilder.DefaultRoot(ascPath);
-            string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-            string dir = Path.Combine(root, stamp);
-            for (int i = 2; Directory.Exists(dir); i++) dir = Path.Combine(root, stamp + "_" + i);
-            return dir;
         }
 
         void OnEngineFinished(QueueJob j, CampaignEngine e)
@@ -510,37 +355,8 @@ namespace Spica.Core
                 return;
             }
 
-            var o = e.Options;
-            string note = null;
-            if (o.WcStage == 1 && !snap.Cancelled && snap.FatalError == null && !j.AnalyzeOnFinish)
-            {
-                var done = e.GetResults();
-                if (CampaignBuilder.Screened(done, o.Mc.Sites.Count, o.CornerCount))
-                {
-                    // worst case by sensitivity: the screening told which way each tolerance pushes; now verify
-                    var r2 = j.Request.Clone();
-                    r2.ResumeDir = o.OutputDir;
-                    r2.Resume = done;
-                    r2.PriorSeconds = snap.Elapsed.TotalSeconds;
-                    r2.Seed = o.Seed;
-                    var o2 = CampaignBuilder.Build(r2, null, out note);
-                    if (o2 != null)
-                    {
-                        j.Options = o2;
-                        Running = null;
-                        if (Launch(j))
-                        {
-                            Started?.Invoke(j, true);
-                            Changed?.Invoke();
-                            return;
-                        }
-                        note = j.Message;
-                    }
-                }
-            }
-
             j.Status = snap.FatalError != null ? JobStatus.Failed : snap.Cancelled ? JobStatus.Stopped : JobStatus.Finished;
-            j.Message = snap.FatalError ?? note ?? (snap.AutoStopped ? "Stopped early: " + (snap.StopStatus ?? "the answer is known") : "");
+            j.Message = snap.FatalError ?? "";
             j.Ended = DateTime.Now;
             Running = null;
             Finished?.Invoke(j);

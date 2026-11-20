@@ -62,7 +62,6 @@ namespace Spica.Core.Graph
         public bool Waiting { get; private set; }
 
         public StudyRunner Register(string kind, IBlockExecutor ex) { executors[kind] = ex; return this; }
-        public bool Has(string kind) => executors.ContainsKey(kind);
 
         /// <summary>
         /// Starts the study; false when it cannot start (the issues are logged). With no waiting block it has run to

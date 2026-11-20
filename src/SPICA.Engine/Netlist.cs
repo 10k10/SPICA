@@ -25,7 +25,6 @@ namespace Spica.Core
         public readonly List<string> ExistingSaves = new List<string>();
         public readonly List<string> RemovedSteps = new List<string>();
         public string Analysis = "";
-        public List<string> OpAmpInstances = new List<string>();  // "U1 = OPA4991": SPICA op-amp models in use
 
         public static Netlist Parse(string text, string sourcePath, Encoding enc)
         {
@@ -38,20 +37,6 @@ namespace Spica.Core
                     n.Lines.Add(raw);
             }
             n.Analyze();
-            n.OpAmpInstances = OpAmps.Augment(n.Lines);   // their tolerances and, if needed, the library
-            return n;
-        }
-
-        /// <summary>
-        /// The same circuit with other lines (a qualification test's source, .tran and .meas): analysed again,
-        /// the op-amp models already in the lines are kept as they are.
-        /// </summary>
-        public Netlist WithLines(IEnumerable<string> lines)
-        {
-            var n = new Netlist { SourcePath = SourcePath, Encoding = Encoding };
-            n.Lines.AddRange(lines);
-            n.Analyze();
-            n.OpAmpInstances = new List<string>(OpAmpInstances);
             return n;
         }
 
@@ -234,7 +219,7 @@ namespace Spica.Core
         {
             var sb = new StringBuilder();
             bool ended = false;
-            bool ownTemp = c.FixedTemp.HasValue || c.TempOfRun != null;
+            bool ownTemp = c.FixedTemp.HasValue;
             foreach (var line in c.Mc != null ? c.Mc.Lines : Lines)
             {
                 var t = line.TrimStart();
@@ -293,11 +278,6 @@ namespace Spica.Core
             sb.Append($".options threads={Math.Max(1, c.Threads)}\r\n");
             c.Mc?.AppendParams(sb, c.Seed, c.First, c.Last);
             if (c.FixedTemp.HasValue) sb.Append(".temp ").Append(c.FixedTemp.Value.ToString("R", inv)).Append("\r\n");
-            else if (c.TempOfRun != null)
-            {
-                McPlan.AppendTable(sb, "spica_temp", c.First, c.Last, c.TempOfRun);
-                sb.Append(".temp {spica_temp}\r\n");
-            }
             if (c.Save != null && c.Save.Count > 0)
             {
                 for (int i = 0; i < c.Save.Count; i += 10)
@@ -356,7 +336,6 @@ namespace Spica.Core
         public IList<string> Save;            // null = no .save (LTspice saves everything)
         public string BaseDir;
         public double? FixedTemp;             // temperature corner of this chunk
-        public Func<int, double> TempOfRun;   // per-run random temperature
         public McPlan Mc;                     // SPICA's sample generator (null = LTspice's own mc())
         public uint Seed;
     }

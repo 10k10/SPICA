@@ -278,7 +278,5 @@ namespace Spica.UI
             Invalidate();
         }
 
-        [DllImport("user32.dll")] static extern bool MessageBeep(uint type);
-        protected static void Beep(uint type = 0) => MessageBeep(type);
     }
 }
