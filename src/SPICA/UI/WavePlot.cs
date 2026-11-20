@@ -222,7 +222,13 @@ namespace Spica.UI
                     Theme.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
                 if (view.HasValue) BeginInvoke(new Action(ResetZoom));
             }
-            if (Chosen) using (var p = new Pen(Theme.Chosen, 3)) e.Graphics.DrawRectangle(p, 1, 1, Width - 3, Height - 3);
+            // the pane chosen: a thin frame, the theme's colour softened toward the window
+            if (Chosen)
+            {
+                var c = Theme.Chosen; var b = Theme.Back;
+                using (var p = new Pen(Color.FromArgb((c.R * 2 + b.R) / 3, (c.G * 2 + b.G) / 3, (c.B * 2 + b.B) / 3), 1))
+                    e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
+            }
         }
 
         void Render(Graphics g, Rectangle bounds, bool screen)
@@ -385,14 +391,11 @@ namespace Spica.UI
             }
             if (XLabel.Length > 0)
                 TextRenderer.DrawText(g, XLabel, AxisFont, new Rectangle(plot.Left, plot.Bottom + 21, plot.Width, 18), th.Text, TextFormatFlags.HorizontalCenter);
+            // the unit of the values, level, above their axis
             if (YLabel.Length > 0)
             {
-                var st = g.Save();
-                g.TranslateTransform(bounds.Left + 3, plot.Top + plot.Height / 2f);
-                g.RotateTransform(-90);
-                var sz = g.MeasureString(YLabel, AxisFont);
-                using (var b = new SolidBrush(th.Text)) g.DrawString(YLabel, AxisFont, b, -sz.Width / 2, 0);
-                g.Restore(st);
+                var sz = TextRenderer.MeasureText(YLabel, AxisFont);
+                TextRenderer.DrawText(g, YLabel, AxisFont, new Point(plot.Left - 6 - sz.Width, plot.Top - sz.Height - 2), th.Text);
             }
         }
 
