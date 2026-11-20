@@ -70,7 +70,14 @@ namespace Spica.UI
 
         public ChartSeries Add(ChartSeries s) { Series.Add(s); Invalidate(); return s; }
 
-        protected override void OnPaint(PaintEventArgs e) => Render(e.Graphics, ClientRectangle, true);
+        /// <summary>A navy frame around the chart on the screen (the pane chosen); not in the pictures saved.</summary>
+        public bool Framed;
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Render(e.Graphics, ClientRectangle, true);
+            if (Framed) using (var p = new Pen(Win98.Navy, 3)) e.Graphics.DrawRectangle(p, 1, 1, Width - 3, Height - 3);
+        }
 
 
         public Bitmap ToBitmap(int w, int h)

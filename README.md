@@ -55,8 +55,9 @@ The studies that ran, each with its analyses, are on the left. On the right, the
 LTspice:
 
 - tick one or several analyses to overlay them; choose one run, or all of them;
-- double-click a signal to put it in the pane chosen, or New Pane for a pane of its own; every pane shares the
-  time axis (zoom one, all follow; double-click resets);
+- tick a signal to draw it in the pane chosen (the one with the navy frame; click a pane to choose it), clear the
+  tick to take it away; New Pane adds an empty pane, chosen, for the next signals; Remove Pane takes the chosen
+  one away. Every pane shares the time axis (zoom one, all follow; double-click resets);
 - several temperatures of an analysis are drawn in their own colours;
 - click a pane for cursor A, Shift+click for cursor B: what every signal reads there, and B - A;
 - Save Image writes the panes as a PNG; Open in LTspice opens the `.raw`.

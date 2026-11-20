@@ -41,7 +41,7 @@ namespace Spica.UI
         readonly CheckedListBox lbSets;
         readonly ComboBox cbRuns;
         readonly TextBox txtFilter;
-        readonly ListBox lbSignals;
+        readonly CheckedListBox lbSignals;
         readonly Panel stack;
         readonly Label lblInfo;
         readonly List<Pane> panes = new List<Pane>();
@@ -75,48 +75,53 @@ namespace Spica.UI
             var lblRuns = new Label { Text = "&Runs:", AutoSize = true };
             cbRuns = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Win98.Font };
             cbRuns.SelectedIndexChanged += (s, e) => { if (!filling) Draw(); };
-            var lblSig = new Label { Text = "&Signals in the .raw (double-click or Add: into the pane chosen; Ctrl/Shift for several):", AutoSize = false, Height = 28 };
+            // the signals: ticked = drawn. A tick puts the signal in the pane chosen (navy frame), clearing it takes it out
+            var lblSig = new Label { Text = "&Signals: tick to plot in the pane chosen (navy frame), clear to remove. Click a pane to choose it.", AutoSize = false, Height = 42 };
             txtFilter = new TextBox { Font = Win98.Font, BorderStyle = BorderStyle.Fixed3D };
             txtFilter.TextChanged += (s, e) => FillSignals();
-            lbSignals = new ListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, SelectionMode = SelectionMode.MultiExtended };
-            lbSignals.DoubleClick += (s, e) => AddSignals(false);
-            var btnAdd = new Win98Button { Text = "&Add", Width = 58 };
-            var btnNew = new Win98Button { Text = "New &Pane", Width = 72 };
-            var btnRemove = new Win98Button { Text = "Re&move Pane", Width = 86 };
-            var btnClear = new Win98Button { Text = "&Clear Pane", Width = 76 };
-            var btnLt = new Win98Button { Text = "Open in &LTspice", Width = 110 };
+            lbSignals = new CheckedListBox { Font = Win98.Font, IntegralHeight = false, BorderStyle = BorderStyle.Fixed3D, CheckOnClick = true };
+            lbSignals.ItemCheck += (s, e) =>
+            {
+                if (filling) return;
+                string sig = (string)lbSignals.Items[e.Index];
+                bool on = e.NewValue == CheckState.Checked;
+                BeginInvoke(new Action(() => Show(sig, on)));
+            };
+            var btnNew = new Win98Button { Text = "New &Pane", Width = 100 };
+            var btnRemove = new Win98Button { Text = "Re&move Pane", Width = 100 };
             var btnSave = new Win98Button { Text = "Sa&ve Image...", Width = 100 };
-            btnAdd.Click += (s, e) => AddSignals(false);
-            btnNew.Click += (s, e) => AddSignals(true);
-            var btnTake = new Win98Button { Text = "Remove &Signal", Width = 100 };
-            btnTake.Click += (s, e) =>
+            var btnLt = new Win98Button { Text = "Open in &LTspice", Width = 100 };
+            var btnCur = new Win98Button { Text = "Clear C&ursors", Width = 100 };
+            var tip = new ToolTip();
+            tip.SetToolTip(btnNew, "An empty pane under the others, chosen: the next signals ticked go there");
+            tip.SetToolTip(btnRemove, "Take the pane chosen away, with its signals");
+            btnNew.Click += (s, e) => { NewPane(); active = panes.Count - 1; Draw(); };
+            btnRemove.Click += (s, e) =>
             {
                 if (active >= panes.Count) return;
-                foreach (var sig in lbSignals.SelectedItems.Cast<string>()) panes[active].Signals.RemoveAll(x => x.Equals(sig, StringComparison.OrdinalIgnoreCase));
+                panes.RemoveAt(active);
+                if (panes.Count == 0) NewPane();
+                active = Math.Min(active, panes.Count - 1);
                 Draw();
             };
-            var btnCur = new Win98Button { Text = "Clear C&ursors", Width = 100 };
             btnCur.Click += (s, e) => { curA = curB = double.NaN; ShowCursors(); };
-            btnRemove.Click += (s, e) => { if (panes.Count > 1 && active < panes.Count) { panes.RemoveAt(active); active = Math.Max(0, active - 1); Draw(); } };
-            btnClear.Click += (s, e) => { if (active < panes.Count) { panes[active].Signals.Clear(); Draw(); } };
             btnLt.Click += (s, e) => OpenInLtspice();
             btnSave.Click += (s, e) => SaveImage();
-            left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, btnAdd, btnNew, btnRemove, btnClear, btnLt, btnSave, btnTake, btnCur });
+            left.Controls.AddRange(new Control[] { lblSets, lbSets, lblRuns, cbRuns, lblSig, txtFilter, lbSignals, btnNew, btnRemove, btnSave, btnLt, btnCur });
             left.Resize += (s, e) =>
             {
                 int w = left.Width - 10, h = left.Height;
-                lbSets.SetBounds(2, 18, w, Math.Max(60, h / 4));
+                lbSets.SetBounds(2, 18, w, Math.Max(60, h / 5));
                 lblRuns.Location = new Point(2, lbSets.Bottom + 9);
                 cbRuns.SetBounds(42, lbSets.Bottom + 6, w - 40, 21);
-                lblSig.SetBounds(2, cbRuns.Bottom + 8, w, 28);
+                lblSig.SetBounds(2, cbRuns.Bottom + 8, w, 42);
                 txtFilter.SetBounds(2, lblSig.Bottom, w, 20);
-                int bottomButtons = 4 * 27 + 4;
+                int bottomButtons = 3 * 27 + 4;
                 lbSignals.SetBounds(2, txtFilter.Bottom + 4, w, Math.Max(40, h - txtFilter.Bottom - 8 - bottomButtons));
                 int by = lbSignals.Bottom + 6;
-                btnAdd.Location = new Point(2, by); btnNew.Location = new Point(btnAdd.Right + 4, by); btnClear.Location = new Point(btnNew.Right + 4, by);
-                btnRemove.Location = new Point(2, by + 27); btnSave.Location = new Point(btnRemove.Right + 4, by + 27);
-                btnTake.Location = new Point(2, by + 54); btnCur.Location = new Point(btnTake.Right + 4, by + 54);
-                btnLt.Location = new Point(2, by + 81);
+                btnNew.Location = new Point(2, by); btnRemove.Location = new Point(btnNew.Right + 4, by);
+                btnSave.Location = new Point(2, by + 27); btnLt.Location = new Point(btnSave.Right + 4, by + 27);
+                btnCur.Location = new Point(2, by + 54);
             };
 
             stack = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Win98.Face };
@@ -157,23 +162,28 @@ namespace Spica.UI
 
         Pane NewPane() { var p = new Pane(); panes.Add(p); return p; }
 
-        void AddSignals(bool newPane)
+        /// <summary>A signal into the pane chosen (on), or out of every pane (off).</summary>
+        public void Show(string sig, bool on)
         {
-            var sel = lbSignals.SelectedItems.Cast<string>().ToList();
-            if (sel.Count == 0) return;
-            if (newPane || panes.Count == 0) { NewPane(); active = panes.Count - 1; }
-            var p = panes[Math.Min(active, panes.Count - 1)];
-            foreach (var sig in sel) if (!p.Signals.Contains(sig, StringComparer.OrdinalIgnoreCase)) p.Signals.Add(sig);
+            if (string.IsNullOrEmpty(sig)) return;
+            if (on)
+            {
+                if (panes.Count == 0) { NewPane(); active = 0; }
+                var p = panes[Math.Min(active, panes.Count - 1)];
+                if (!p.Signals.Contains(sig, StringComparer.OrdinalIgnoreCase)) p.Signals.Add(sig);
+            }
+            else foreach (var p in panes) p.Signals.RemoveAll(x => x.Equals(sig, StringComparison.OrdinalIgnoreCase));
             Draw();
         }
 
-        void AddSignal(string sig, bool newPane)
+        /// <summary>The ticks of the signal list as what the panes draw.</summary>
+        void SyncTicks()
         {
-            if (string.IsNullOrEmpty(sig)) return;
-            if (newPane || panes.Count == 0) { NewPane(); active = panes.Count - 1; }
-            var p = panes[Math.Min(active, panes.Count - 1)];
-            if (!p.Signals.Contains(sig, StringComparer.OrdinalIgnoreCase)) p.Signals.Add(sig);
-            Draw();
+            filling = true;
+            var shown = new HashSet<string>(Plotted, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < lbSignals.Items.Count; i++)
+                if (lbSignals.GetItemChecked(i) != shown.Contains((string)lbSignals.Items[i])) lbSignals.SetItemChecked(i, shown.Contains((string)lbSignals.Items[i]));
+            filling = false;
         }
 
         void FillRuns()
@@ -211,10 +221,13 @@ namespace Spica.UI
             var all = Checked.SelectMany(NamesIn).Distinct(StringComparer.OrdinalIgnoreCase)
                              .Where(x => f.Length == 0 || x.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
                              .OrderBy(x => x.StartsWith("V(", StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            filling = true;
             lbSignals.BeginUpdate();
             lbSignals.Items.Clear();
             foreach (var s in all) lbSignals.Items.Add(s);
             lbSignals.EndUpdate();
+            filling = false;
+            SyncTicks();
         }
 
         // ------------------------------------------------------------------ data
@@ -294,7 +307,10 @@ namespace Spica.UI
 
         void DrawCore()
         {
-            foreach (var p in panes) if (p.Chart != null) { stack.Controls.Remove(p.Chart); p.Chart.Dispose(); p.Chart = null; }
+            // every chart drawn before goes, also those of panes no longer in the list (Plot, Remove Pane): one left over
+            // would lie on top of the new ones and take their clicks
+            foreach (var c in stack.Controls.OfType<Win98Chart>().ToList()) { stack.Controls.Remove(c); c.Dispose(); }
+            foreach (var p in panes) p.Chart = null;
             var sets = Checked;
             var signals = panes.SelectMany(p => p.Signals).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var problems = new List<string>();
@@ -306,8 +322,9 @@ namespace Spica.UI
             {
                 var pane = panes[pi];
                 int paneIndex = pi;
-                var ch = new Win98Chart { Title = pane.Signals.Count == 0 ? "(empty pane: double-click a signal on the left)" : string.Join(", ", pane.Signals), YLabel = "" };
+                var ch = new Win98Chart { Title = pane.Signals.Count == 0 ? "(empty pane: tick a signal on the left)" : string.Join(", ", pane.Signals), YLabel = "" };
                 ch.TitleColor = pi == active ? Win98.Navy : Color.FromArgb(80, 80, 80);
+                ch.Framed = pi == active && panes.Count > 1;
                 ch.MouseClick += (s, e) =>
                 {
                     if (e.Button != MouseButtons.Left) return;
@@ -316,7 +333,17 @@ namespace Spica.UI
                     if ((ModifierKeys & Keys.Shift) != 0) curB = t; else curA = t;
                     ShowCursors();
                 };
-                ch.MouseDown += (s, e) => { if (active != paneIndex) { active = paneIndex; foreach (var q in panes) if (q.Chart != null) { q.Chart.TitleColor = q == panes[active] ? Win98.Navy : Color.FromArgb(80, 80, 80); q.Chart.Invalidate(); } } };
+                ch.MouseDown += (s, e) =>
+                {
+                    if (active == paneIndex) return;
+                    active = paneIndex;
+                    foreach (var q in panes.Where(x => x.Chart != null))
+                    {
+                        q.Chart.TitleColor = q == panes[active] ? Win98.Navy : Color.FromArgb(80, 80, 80);
+                        q.Chart.Framed = q == panes[active];
+                        q.Chart.Invalidate();
+                    }
+                };
                 pane.Chart = ch;
                 stack.Controls.Add(ch);
                 if (pane.Signals.Count == 0) continue;

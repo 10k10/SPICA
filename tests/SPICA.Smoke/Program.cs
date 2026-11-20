@@ -300,7 +300,7 @@ static class Program
             w.Tab = 2;
             var wv = (Spica.UI.WaveformView)w.Get("waveView");
             var sets = w.Wave<CheckedListBox>("lbSets");
-            var signals = w.Wave<ListBox>("lbSignals").Items.Cast<string>().ToList();
+            var signals = w.Wave<CheckedListBox>("lbSignals").Items.Cast<string>().ToList();
             Check(wv.Visible && sets.Items.Count == 3, "three analyses to look at: " + string.Join(", ", sets.Items.Cast<object>()));
             Check(signals.Contains("V(bulk)") && signals.Contains("V(in)"), "the .raw holds every signal: " + string.Join(" ", signals));
             Check(wv.Plotted.Contains("V(bulk)") && wv.SeriesCount >= 2, $"the first look plots what the .meas use: {string.Join(", ", wv.Plotted)}; {wv.SeriesCount} traces");
@@ -352,19 +352,38 @@ static class Program
             poll.Stop();
             w.Pump(20);
             var wv = (Spica.UI.WaveformView)w.Get("waveView");
-            var names = w.Wave<ListBox>("lbSignals").Items.Cast<string>().ToList();
+            var list = w.Wave<CheckedListBox>("lbSignals");
+            var names = list.Items.Cast<string>().ToList();
             Check(wv.Plotted.SequenceEqual(new[] { "I(Rload)", "I(Cout)", "V(out)" }), "the first look plots the signals the user saved: " + string.Join(" ", wv.Plotted));
+            var stack0 = (Panel)typeof(Spica.UI.WaveformView).GetField("stack", Flags).GetValue(wv);
+            Check(stack0.Controls.Count == 3, $"one chart per pane, nothing left over underneath: {stack0.Controls.Count} charts");
             Check(names.Count == 5, "listed: the saved ones and the ones the .meas read: " + string.Join(" ", names));
-            foreach (var sig in names)
-            {
-                int before = wv.SeriesCount;
-                typeof(Spica.UI.WaveformView).GetMethod("AddSignal", Flags).Invoke(wv, new object[] { sig, true });
-                w.Pump(5);
-                Check(wv.SeriesCount > before, $"{sig} added: {before} -> {wv.SeriesCount} traces");
-            }
+            Check(list.CheckedItems.Cast<string>().OrderBy(x => x).SequenceEqual(wv.Plotted.OrderBy(x => x)), "the ticks are what is drawn: " + string.Join(" ", list.CheckedItems.Cast<string>()));
             var stack = (Panel)typeof(Spica.UI.WaveformView).GetField("stack", Flags).GetValue(wv);
-            var last = stack.Controls.Cast<Control>().OrderBy(c => c.Top).Last();
-            Check(last.Top >= 0 && last.Bottom <= stack.ClientSize.Height + 2, $"the pane added last is in view ({last.Top}..{last.Bottom} of {stack.ClientSize.Height})");
+            var charts = new Func<List<Spica.UI.Win98Chart>>(() => stack.Controls.OfType<Spica.UI.Win98Chart>().OrderBy(c => c.Top).ToList());
+            // a tick puts the signal in the pane chosen (the last one, framed), in view
+            int before = wv.SeriesCount;
+            list.SetItemChecked(names.IndexOf("V(p)"), true);
+            w.Pump(5);
+            var framed = charts().Single(c => c.Framed);
+            Check(wv.SeriesCount == before + 1 && framed.Title.Contains("V(p)") && framed.Top >= 0 && framed.Bottom <= stack.ClientSize.Height + 2,
+                  $"ticked V(p): drawn in the framed pane, in view ({framed.Title}, {framed.Top}..{framed.Bottom} of {stack.ClientSize.Height})");
+            // New Pane, then a tick: the signal gets a pane of its own
+            typeof(Spica.UI.WaveformView).GetMethod("NewPane", Flags).Invoke(wv, null);
+            typeof(Spica.UI.WaveformView).GetField("active", Flags).SetValue(wv, charts().Count);
+            list.SetItemChecked(names.IndexOf("I(D1)"), true);
+            w.Pump(5);
+            Check(charts().Count == 4 && charts().Last().Title == "I(D1)", "New Pane, then I(D1) ticked: a pane of its own (" + string.Join(" | ", charts().Select(c => c.Title)) + ")");
+            // a tick cleared: the signal goes
+            list.SetItemChecked(names.IndexOf("V(p)"), false);
+            w.Pump(5);
+            Check(!wv.Plotted.Contains("V(p)"), "V(p) cleared: no longer drawn (" + string.Join(" | ", charts().Select(c => c.Title)) + ")");
+            // a click on a pane chooses it
+            var firstChart = charts().First();
+            typeof(Control).GetMethod("OnMouseDown", Flags).Invoke(firstChart, new object[] { new MouseEventArgs(MouseButtons.Left, 1, 50, 50, 0) });
+            list.SetItemChecked(names.IndexOf("V(p)"), true);
+            w.Pump(5);
+            Check(charts().First().Title.Contains("V(p)"), "a click on the first pane, then V(p) ticked: it goes there (" + charts().First().Title + ")");
             Console.WriteLine(bad == 0 ? "SAVE SELECTION: all ok" : $"SAVE SELECTION: {bad} wrong");
             w.Shot(w.Form, "all");
             close();
