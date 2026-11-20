@@ -66,6 +66,9 @@ waveforms, in the manner of LTspice:
   zooms, the middle button pans, a double-click or Reset Zoom shows the whole simulation again;
 - under the panes, every trace's value at the cursors and the difference, and its average, RMS, min, max and
   peak-to-peak between the cursors (or over the time shown); with both cursors, Δt and 1/Δt;
+- every trace has its unit, from the dimensions of what it reads, as in LTspice: V(out)*I(R1) is in W,
+  V(out)/I(R1) in Ω, V(out)*V(out) in V², db() in dB, a sum of different units in none. A pane with two units
+  gets a second axis on the right, with its own scale; with more, one axis and no unit;
 - several temperatures of an analysis are drawn in their own colours;
 - right-click a pane, Style: Pale Yellow (the default), Engineering, Paper, Amber, Recorder, Sepia, Graphite, Slate, LTspice,
   Oscilloscope or Blueprint (kept for next time).

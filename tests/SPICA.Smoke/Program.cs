@@ -150,6 +150,13 @@ static class Program
         o = Build(new CampaignRequest { Kind = RunKind.MonteCarlo, Runs = 10, Save = new List<string> { "V(nowhere)" } }, host.Net, out var e4);
         Check(o == null && e4.Contains("V(nowhere)"), "a signal the circuit does not have is refused: " + e4);
 
+        // the units of traces, by their dimensions, as LTspice gives them
+        foreach (var (expr, unit) in new[] { ("V(out)", "V"), ("I(R1)", "A"), ("2*V(out)", "V"), ("V(a,b)", "V"), ("V(out)*I(R1)", "W"), ("V(out)/I(R1)", "Ω"),
+                                             ("I(R1)/V(out)", "S"), ("V(out)*V(out)", "V²"), ("V(out)-V(in)", "V"), ("V(out)+I(R1)", ""), ("abs(I(D1))", "A"),
+                                             ("sqrt(V(a)*V(b))", "V"), ("pow(I(R1),2)*1k", "A²"), ("db(V(out)/V(in))", "dB"), ("V(out)/V(in)", ""), ("V(out)*I(R1)/I(R2)", "V"),
+                                             ("1/I(R1)", "1/A"), ("V(out)*1e-3+2", "V"), ("max(V(a),V(b))", "V"), ("exp(V(out))", "") })
+            Check(Spica.UI.TraceUnit.Of(expr) == unit, $"{expr} is in {(unit.Length > 0 ? unit : "no unit")}: {Spica.UI.TraceUnit.Of(expr)}");
+
         // the project file
         var p = new SpicaProject { Schematic = Path.Combine(dir, "holdup.asc") };
         p.Studies.Add(st);
@@ -358,7 +365,7 @@ static class Program
             w.Pump(5);
             var meas = w.Wave<Spica.UI.Win98ListView>("lvMeasure");
             var row = meas.Items.Cast<ListViewItem>().FirstOrDefault(x => x.Text.StartsWith("V(bulk)"));
-            Check(bulk.pl.Cursors.Count == 1 && row != null && row.SubItems[1].Text != "-", "a click on V(bulk)'s name puts cursor 1 on it, and it reads " + row?.SubItems[1].Text);
+            Check(bulk.pl.Cursors.Count == 1 && row != null && row.SubItems[2].Text != "-", "a click on V(bulk)'s name puts cursor 1 on it, and it reads " + row?.SubItems[2].Text);
             w.Shot(w.Form, "worstcase");
 
             // the same study again: from the cache, at once
@@ -405,7 +412,7 @@ static class Program
             Check(names.Count == 5, "listed: the saved ones and the ones the .meas read: " + string.Join(" ", names));
             // the measurements are there at once, before any zoom
             var meas0 = w.Wave<Spica.UI.Win98ListView>("lvMeasure");
-            Check(meas0.Items.Count > 0 && meas0.Items.Cast<ListViewItem>().All(x => x.SubItems[4].Text != "-"), "the measurements are there at once: average " + (meas0.Items.Count > 0 ? meas0.Items[0].SubItems[4].Text : "none"));
+            Check(meas0.Items.Count > 0 && meas0.Items.Cast<ListViewItem>().All(x => x.SubItems[5].Text != "-"), "the measurements are there at once: average " + (meas0.Items.Count > 0 ? meas0.Items[0].SubItems[5].Text : "none"));
             Check(w.Plots().All(pl => pl.Traces.All(t => t.Label == null || !t.Label.Contains(","))), "a pane names its traces once, in their colours (no title)");
             // a click on a signal plots it in the pane chosen (the last one), in view
             wv.Add("V(p)");
@@ -439,8 +446,8 @@ static class Program
             var rOut = meas.Items.Cast<ListViewItem>().First(x => x.Text == "V(out)");
             var rTwice = meas.Items.Cast<ListViewItem>().First(x => x.Text == "2*V(out)");
             double Num(string t) => double.Parse(t.Replace("µ", "e-6").Replace("m", "e-3").Replace("k", "e3"), System.Globalization.CultureInfo.InvariantCulture);
-            Check(Math.Abs(Num(rTwice.SubItems[4].Text) - 2 * Num(rOut.SubItems[4].Text)) < 0.01 * Math.Abs(Num(rTwice.SubItems[4].Text)),
-                  $"its average is twice V(out)'s: {rTwice.SubItems[4].Text} vs {rOut.SubItems[4].Text}; RMS {rTwice.SubItems[5].Text}, p-p {rTwice.SubItems[8].Text}");
+            Check(Math.Abs(Num(rTwice.SubItems[5].Text) - 2 * Num(rOut.SubItems[5].Text)) < 0.01 * Math.Abs(Num(rTwice.SubItems[5].Text)),
+                  $"its average is twice V(out)'s: {rTwice.SubItems[5].Text} vs {rOut.SubItems[5].Text}; RMS {rTwice.SubItems[6].Text}, p-p {rTwice.SubItems[9].Text}");
             w.Shot(w.Form, "cursors");
             w.ClickLabel(0, twice);
             w.Pump(5);
@@ -508,6 +515,14 @@ static class Program
             Check(mixed.YLabel == "V" && mixed.RightLabel == "A" && mixed.Traces.Where(t => t.Right).All(t => ((string)t.Tag).StartsWith("I(")) && w.Plots().All(pl => pl.RightRoom),
                   $"V and A in one pane: V on the left, A on the right ({mixed.YLabel} / {mixed.RightLabel}); every pane keeps the room");
             System.IO.File.Delete(saved);
+            // power beside a current: W on its own right axis
+            var cout = w.Plots().Select((pl, i) => (pl, i)).First(x => x.pl.Traces.Count > 0 && x.pl.Traces.All(t => (string)t.Tag == "I(Cout)"));
+            w.ChoosePane(cout.i);
+            wv.Add("V(out)*I(Rload)");
+            w.Pump(5);
+            var pw = w.Plots()[cout.i];
+            Check(pw.YLabel == "A" && pw.RightLabel == "W", $"V(out)*I(Rload) beside I(Cout): A on the left, W on the right ({pw.YLabel} / {pw.RightLabel})");
+            w.Shot(w.Form, "power");
             // the Add Trace window: its label clear of the field
             var shot = new System.Windows.Forms.Timer { Interval = 300 };
             shot.Tick += (s2, e2) =>

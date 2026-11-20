@@ -164,8 +164,8 @@ namespace Spica.UI
             lblMeasure = new Label { Dock = DockStyle.Top, Height = 18, UseMnemonic = false, BackColor = Win98.Face };
             lvMeasure = new Win98ListView { MultiSelect = false };
             lvMeasure.CellColor = (row, col) => col == 0 && row < measureColors.Count ? measureColors[row] : (Color?)null;
-            foreach (var (t, w) in new[] { ("Trace", 200), ("Cursor 1", 80), ("Cursor 2", 80), ("2 - 1", 80), ("Average", 80), ("RMS", 80), ("Min", 80), ("Max", 80), ("Peak-peak", 80) })
-                lvMeasure.Columns.Add(t, w, t == "Trace" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
+            foreach (var (t, w) in new[] { ("Trace", 200), ("Unit", 50), ("Cursor 1", 80), ("Cursor 2", 80), ("2 - 1", 80), ("Average", 80), ("RMS", 80), ("Min", 80), ("Max", 80), ("Peak-peak", 80) })
+                lvMeasure.Columns.Add(t, w, t == "Trace" || t == "Unit" ? HorizontalAlignment.Left : HorizontalAlignment.Right);
             bottom.Controls.Add(new Win98Well(lvMeasure) { Dock = DockStyle.Fill });
             bottom.Controls.Add(lblMeasure);
 
@@ -428,12 +428,8 @@ namespace Spica.UI
             ViewChanged?.Invoke();
         }
 
-        /// <summary>The unit of a trace: V when it reads only voltages (V(out), 2*V(out), V(a,b)), A when only currents, else none.</summary>
-        static string UnitOf(string expr)
-        {
-            var kinds = SignalRef.Matches(expr).Cast<Match>().Select(m => char.ToUpperInvariant(m.Groups[1].Value[0])).Distinct().ToList();
-            return kinds.Count != 1 ? "" : kinds[0] == 'V' ? "V" : kinds[0] == 'I' ? "A" : "";
-        }
+        /// <summary>The unit of a trace, from the dimensions of what it reads (V(out)*I(R1): W).</summary>
+        static string UnitOf(string expr) => TraceUnit.Of(expr);
 
         static string TempText(double t) => double.IsNaN(t) ? "" : t.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " °C";
 
@@ -736,7 +732,7 @@ namespace Spica.UI
                 {
                     double v1 = cur1.On ? At(t, cur1.X) : double.NaN, v2 = cur2.On ? At(t, cur2.X) : double.NaN;
                     Window(t, a, b, out double avg, out double rms, out double min, out double max);
-                    lvMeasure.Items.Add(new ListViewItem(new[] { t.Label, F(v1), F(v2), double.IsNaN(v1) || double.IsNaN(v2) ? "" : F(v2 - v1), F(avg), F(rms), F(min), F(max), F(max - min) }));
+                    lvMeasure.Items.Add(new ListViewItem(new[] { t.Label, UnitOf((string)t.Tag), F(v1), F(v2), double.IsNaN(v1) || double.IsNaN(v2) ? "" : F(v2 - v1), F(avg), F(rms), F(min), F(max), F(max - min) }));
                     // on the white table, a light colour (the dark styles) goes darker so that it can be read
                     var c = t.Color;
                     double lum = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255;
