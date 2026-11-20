@@ -34,9 +34,7 @@ namespace Spica.Core.Graph
         {
             r.Register(BlockKind.Schematic, new Exec(ctx => Schematic(ctx, host)));
             r.Register(BlockKind.Temperature, new Exec(ctx => ctx.Out("temperature", new List<TempSpec> { ReadTemperature(ctx.Block) })));
-            r.Register(BlockKind.Nominal, new Exec(Nominal));
-            r.Register(BlockKind.MonteCarlo, new Exec(MonteCarlo));
-            r.Register(BlockKind.WorstCase, new Exec(WorstCaseBlock));
+            r.Register(BlockKind.Tolerances, new Exec(ctx => ctx.Out("tolerances", new List<Condition> { ReadTolerances(ctx.Block) })));
             r.Register(BlockKind.Simulate, new Exec(ctx => Simulate(ctx, host)));
             return r;
         }
@@ -114,19 +112,45 @@ namespace Spica.Core.Graph
             throw new Exception($"Unknown mode '{mode}': List, Corners or Random.");
         }
 
-        /// <summary>The temperature wired into an analysis (null: none, the schematic's own).</summary>
-        static TempSpec TempIn(BlockContext ctx) => ctx.All<TempSpec>("temperature").FirstOrDefault();
-
-        /// <summary>A condition at the temperature wired in: its points, or one drawn per unit (Monte Carlo only).</summary>
-        static Condition At(Condition c, TempSpec t, bool drawn)
+        /// <summary>A Tolerances block's set, by its mode; throws with what is wrong in its settings.</summary>
+        public static Condition ReadTolerances(Block b)
         {
-            if (t == null) return c;
-            if (t.Random != null && !drawn)
-                throw new Exception($"A temperature drawn at random goes with Monte Carlo units only: {c.Name} has none to draw it for. Use a list or the corners.");
-            c.Temps = new List<double>(t.Points);
-            c.RandomTemp = t.Random;
-            c.Name += " at " + t.Text;
-            return c;
+            string mode = b.Get("Mode", BlockKind.Nominal);
+            if (mode.Equals(BlockKind.Nominal, StringComparison.OrdinalIgnoreCase)) return new Condition { Name = "Nominal", Kind = RunKind.Nominal };
+            if (mode.Equals(BlockKind.MonteCarlo, StringComparison.OrdinalIgnoreCase))
+            {
+                double runs = Num(b.Get("Runs"));
+                if (!(runs >= 1) || runs > 10_000_000 || runs != Math.Floor(runs)) throw new Exception("Enter the number of units (Runs): a whole number from 1 to 10,000,000.");
+                double seed = Num(b.Get("Seed"), 0);
+                if (!(seed >= 0) || seed > uint.MaxValue || seed != Math.Floor(seed)) throw new Exception("The seed must be a whole number, 0 or more (0 = a new one each time).");
+                return new Condition { Name = $"Monte Carlo {runs:0}", Kind = RunKind.MonteCarlo, Runs = (int)runs, Seed = (uint)seed, Paired = b.Get("Paired") == "1" };
+            }
+            if (mode.Equals(BlockKind.WorstCase, StringComparison.OrdinalIgnoreCase))
+            {
+                double k = Num(b.Get("Sigma"), 3);
+                if (!(k > 0) || k > 10) throw new Exception("Sigma must be above 0 and at most 10.");
+                return new Condition { Name = "Worst Case", Kind = RunKind.WorstCase, Sigma = k };
+            }
+            throw new Exception($"Unknown mode '{mode}': Nominal, Monte Carlo or Worst Case.");
+        }
+
+        /// <summary>
+        /// What a Simulate runs: every set of tolerances wired in at every temperature wired in (none: nominal; the
+        /// schematic's temperature). A temperature drawn goes only with Monte Carlo units, each unit at its own.
+        /// </summary>
+        public static List<Condition> Matrix(List<Condition> tolerances, List<TempSpec> temps)
+        {
+            if (tolerances.Count == 0) tolerances = new List<Condition> { new Condition { Name = "Nominal", Kind = RunKind.Nominal } };
+            var at = temps.Count == 0 ? new List<TempSpec> { null } : temps;
+            var list = new List<Condition>();
+            foreach (var c in tolerances)
+                foreach (var t in at)
+                {
+                    if (t?.Random != null && c.Kind != RunKind.MonteCarlo)
+                        throw new Exception($"A temperature drawn at random ({t.Text}) goes with Monte Carlo units only, each unit at its own: {c.Name} has none. Use a list or the corners.");
+                    list.Add(c.At(t));
+                }
+            return list;
         }
 
         // ------------------------------------------------------------------ circuit
@@ -137,31 +161,6 @@ namespace Spica.Core.Graph
             if (asc.Length == 0) asc = host.DefaultSchematic ?? "";
             if (asc.Length == 0 || !File.Exists(asc)) throw new Exception(asc.Length == 0 ? "Choose the schematic (File)." : "The schematic is not there: " + asc);
             ctx.Out("circuit", new List<Circuit> { new Circuit { Name = Path.GetFileNameWithoutExtension(asc), Asc = asc, Netlist = host.NetlistFor(asc) } });
-        }
-
-        // ------------------------------------------------------------------ analyses
-
-        static void Nominal(BlockContext ctx) =>
-            ctx.Out("conditions", new List<Condition> { At(new Condition { Name = "Nominal", Kind = RunKind.Nominal }, TempIn(ctx), false) });
-
-        static void MonteCarlo(BlockContext ctx)
-        {
-            var b = ctx.Block;
-            double runs = Num(b.Get("Runs"));
-            if (!(runs >= 1) || runs > 10_000_000 || runs != Math.Floor(runs)) throw new Exception("Runs must be a whole number from 1 to 10,000,000.");
-            double seed = Num(b.Get("Seed"), 0);
-            if (!(seed >= 0) || seed > uint.MaxValue || seed != Math.Floor(seed)) throw new Exception("The seed must be a whole number, 0 or more (0 = a new one each time).");
-            ctx.Out("conditions", new List<Condition>
-            {
-                At(new Condition { Name = $"Monte Carlo {runs:0}", Kind = RunKind.MonteCarlo, Runs = (int)runs, Seed = (uint)seed, Paired = b.Get("Paired") == "1" }, TempIn(ctx), true),
-            });
-        }
-
-        static void WorstCaseBlock(BlockContext ctx)
-        {
-            double k = Num(ctx.Block.Get("Sigma"), 3);
-            if (!(k > 0) || k > 10) throw new Exception("Sigma must be above 0 and at most 10.");
-            ctx.Out("conditions", new List<Condition> { At(new Condition { Name = "Worst Case", Kind = RunKind.WorstCase, Sigma = k }, TempIn(ctx), false) });
         }
 
         // ------------------------------------------------------------------ simulation
@@ -186,9 +185,8 @@ namespace Spica.Core.Graph
         static void Simulate(BlockContext ctx, IStudyHost host)
         {
             var circuits = ctx.All<Circuit>("circuit");
-            var conds = ctx.All<Condition>("conditions");
             if (circuits.Count == 0) throw new Exception("Nothing to simulate: no circuit came in.");
-            if (conds.Count == 0) throw new Exception("No analysis came in.");
+            var conds = Matrix(ctx.All<Condition>("conditions"), ctx.All<TempSpec>("conditions"));
             var save = ctx.Block.Get("Save").Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             string root = Path.Combine(host.StudyFolder(ctx.Study), "s" + ctx.Block.Id);
             var sets = new List<RunSet>();

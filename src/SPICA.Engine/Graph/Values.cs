@@ -27,7 +27,7 @@ namespace Spica.Core.Graph
         public int Count => Random != null ? 1 : Math.Max(1, Points.Count);
     }
 
-    /// <summary>One analysis a circuit runs under: how the tolerances are set, and at which temperatures.</summary>
+    /// <summary>One analysis a circuit runs under: how the tolerances are set (a Tolerances block), and at which temperatures (a Temperature block).</summary>
     public sealed class Condition
     {
         public string Name = "nominal";
@@ -38,6 +38,16 @@ namespace Spica.Core.Graph
         public double Sigma = 3;
         public List<double> Temps = new List<double>();     // empty = the schematic's own temperature
         public TempDraw RandomTemp;                         // or one drawn for each run
+
+        /// <summary>This set of tolerances at a temperature (null: the schematic's own).</summary>
+        public Condition At(TempSpec t)
+        {
+            var c = (Condition)MemberwiseClone();
+            c.Temps = t == null ? new List<double>() : new List<double>(t.Points);
+            c.RandomTemp = t?.Random;
+            if (t != null) c.Name += " at " + t.Text;
+            return c;
+        }
 
         public string Key => string.Join("|", Kind, Runs, Seed, Paired, Sigma.ToString("R", CultureInfo.InvariantCulture),
                                          string.Join(";", Temps.Select(t => t.ToString("R", CultureInfo.InvariantCulture)))) +

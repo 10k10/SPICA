@@ -1,8 +1,8 @@
 # SPICA — Simulation Platform for Investigation, Compliance and Analysis
 
 Portable Windows app (C# / .NET Framework 4.8 / WinForms, Windows 98 look) for studying a circuit on LTspice.
-A study is drawn as a graph of blocks: the schematic, the conditions (the temperature; nominal, Monte Carlo or
-worst-case tolerances), and the simulation that runs them. SPICA runs it as many parallel LTspice batch instances, tuned to the machine, and shows
+A study is drawn as a graph of blocks: the schematic, the conditions (the tolerances: nominal, Monte Carlo or
+worst case; the temperature), and the simulation that runs them. SPICA runs it as many parallel LTspice batch instances, tuned to the machine, and shows
 the waveforms of every run.
 
 `dist/SPICA-<version>.exe` is the whole app. Copy it anywhere; its settings (`SPICA.ini`) and the run times it
@@ -28,7 +28,7 @@ one piece at a time.
   - Drag the empty canvas to pan, use the wheel to zoom, press Space to fit the study.
   - Drag from an output to an input of the same colour to wire them; a wire of the wrong type, or one that would
     make a loop, is refused with the reason. Right-click a port to add a block that fits it, already wired.
-  - Ports are named by what they carry, inputs and outputs alike; "…" takes several wires, a hollow port may stay
+  - Ports are named by what they carry, inputs and outputs alike; "…" takes several wires, a port of two colours takes both kinds, a hollow one may stay
     empty. Under each block's title: what it is set to, and how many runs it makes.
   - Del removes the block or wire selected.
 - **Right:** while a block is selected, its settings. Changes apply at once.
@@ -40,13 +40,11 @@ and runs nothing.
 | Family | Block | What it does |
 |---|---|---|
 | Circuit | **Schematic** | An `.asc`, simulated as drawn. Empty: the project's own schematic. |
-| Conditions | **Temperature** | The temperatures an analysis runs at. *List*: the ones typed (`-55; 25; 85`). *Corners*: the edges of a range and its nominal (empty: the edges only). *Random*: one drawn for each Monte Carlo unit, uniform over a range or normal (mean, sigma). |
-| | **Nominal** | One unit, every tolerance at its nominal value. |
-| | **Monte Carlo** | N units drawn from the tolerances (runs, seed, paired). |
-| | **Worst Case** | The nominal unit, then every combination of the tolerance edges: 1 + 2^n units. |
-| Simulation | **Simulate** | Runs the circuit under every condition wired into it, one campaign each. Save: the signals kept in the `.raw`; the ones the schematic's `.meas` read are always kept (ticked, marked `(.meas)`); none other ticked: all. |
+| Conditions | **Tolerances** | How the parts vary. *Nominal*: one unit, every tolerance at its nominal value. *Monte Carlo*: N units drawn from them (runs, seed, paired). *Worst Case*: the nominal unit, then every combination of the tolerance edges, 1 + 2^n units. |
+| | **Temperature** | The temperatures the circuit runs at. *List*: the ones typed (`-55; 25; 85`). *Corners*: the edges of a range and its nominal (empty: the edges only). *Random*: one drawn for each Monte Carlo unit, uniform over a range or normal (mean, sigma). |
+| Simulation | **Simulate** | Runs every set of tolerances wired into its Conditions at every temperature wired in, one campaign each; its caption shows the matrix (`2 campaigns · 18 runs`). Nothing wired: nominal, at the schematic's temperature. Save: the signals kept in the `.raw`; the ones the schematic's `.meas` read are always kept (ticked, marked `(.meas)`); none other ticked: all. |
 
-The tolerance blocks take a **Temperature** (optional: none wired, the schematic's own). How the two combine:
+Both conditions go into the same input of the Simulate. How they combine:
 
 | Tolerances | × fixed temperatures (List, Corners: k) | × drawn (Random) |
 |---|---|---|
@@ -54,8 +52,8 @@ The tolerance blocks take a **Temperature** (optional: none wired, the schematic
 | Monte Carlo of N | N × k runs, the same units at each (paired) | N runs, each unit at its own temperature |
 | Worst Case | (1 + 2^n) × k runs: the temperature is one more edge | refused: use Corners |
 
-One Temperature block may feed several analyses. A project of an older version, with the temperatures typed into
-the analyses, opens with a Temperature block wired into each.
+Different temperatures for different tolerances (nominal at 25 °C, worst case over -55 .. 125 °C): two Simulate
+blocks, both fed by the same Schematic.
 
 Running a study again reuses what already ran: a campaign whose netlist and analysis did not change comes from
 the results on disk at once. Change a block and only what it feeds runs again (the tree marks it ⚡).

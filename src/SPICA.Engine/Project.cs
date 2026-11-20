@@ -66,8 +66,8 @@ namespace Spica.Core
         }
 
         /// <summary>
-        /// Reads a project. Sections it does not know (the settings of the versions before 0.10) are skipped; a block
-        /// of a kind this version does not have stays in its study, marked unknown, so nothing is lost silently.
+        /// Reads a project. Sections it does not know are skipped; a block of a kind it does not know stays in its
+        /// study, marked unknown, to be removed.
         /// </summary>
         public static SpicaProject Load(string path)
         {
@@ -125,12 +125,9 @@ namespace Spica.Core
                     }
                     continue;
                 }
-                // [Project], or [Campaign] in the files of the versions before 0.10
-                if ((section.Equals("Project", StringComparison.OrdinalIgnoreCase) || section.Equals("Campaign", StringComparison.OrdinalIgnoreCase)) &&
-                    key.Equals("Schematic", StringComparison.OrdinalIgnoreCase))
+                if (section.Equals("Project", StringComparison.OrdinalIgnoreCase) && key.Equals("Schematic", StringComparison.OrdinalIgnoreCase))
                     p.Schematic = Absolute(path, val);
             }
-            foreach (var st in p.Studies) st.Migrate();
             p.Dirty = false;
             return p;
         }

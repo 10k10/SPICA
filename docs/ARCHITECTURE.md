@@ -6,32 +6,31 @@ the history up to 0.9.3-dev) and comes back one piece at a time, on demand, buil
 
 ## 1. What a study is
 
-A study is a graph of blocks joined by typed wires, drawn left to right: the circuit and the analyses on the
+A study is a graph of blocks joined by typed wires, drawn left to right: the circuit and the conditions on the
 left, the simulation that runs them on the right. The graph is where every analysis starts; the Queue and the
 Results tabs are views common to every study.
 
 | Wire type | Carries | Producer |
 |---|---|---|
 | **Circuit** | a schematic and its netlist | Schematic |
-| **Temperature** | the temperatures an analysis runs at: fixed points, or one drawn per unit | Temperature |
-| **Conditions** | analyses: how the tolerances are set (nominal, N Monte Carlo units, worst-case edges) and at which temperatures | Nominal, Monte Carlo, Worst Case |
+| **Tolerances** | how the parts vary: nominal, N Monte Carlo units, or the worst-case edges | Tolerances |
+| **Temperature** | the temperatures the circuit runs at: fixed points, or one drawn per unit | Temperature |
 
-A wire only joins ports of the same type, and a graph cannot loop. An input takes one wire unless it says it
-takes several (Simulate's conditions), and must be wired unless it is optional (an analysis's temperature: none
-wired, the schematic's own). Ports are shown by their type, inputs and outputs alike.
+A wire joins an output to an input that takes its type, and a graph cannot loop. Simulate's Conditions input takes
+both kinds of condition, Tolerances and Temperature, as many wires as wanted, or none. Any other input takes one
+wire and must be wired. Ports are shown by their type, inputs and outputs alike.
 
 | Block | Ports | Properties |
 |---|---|---|
 | Schematic | → Circuit | File (empty: the project's schematic) |
+| Tolerances | → Tolerances | Mode (Nominal, Monte Carlo, Worst Case); Runs, Seed, Paired (Monte Carlo); Sigma (Worst Case) |
 | Temperature | → Temperature | Mode (List, Corners, Random), Distribution (Uniform, Normal), Points, Min, Nominal, Max, Sigma |
-| Nominal | Temperature (optional) → Conditions | |
-| Monte Carlo | Temperature (optional) → Conditions | Runs, Seed, Paired |
-| Worst Case | Temperature (optional) → Conditions | Sigma |
-| Simulate | Circuit + Conditions (several) → (results) | Save |
+| Simulate | Circuit + Conditions (Tolerances or Temperature, several, optional) → (results) | Save |
 
-A temperature drawn at random goes with Monte Carlo units only (each unit at its own); fixed temperatures cross
-with any analysis (every unit at each). Simulate turns each (circuit, analysis) into one campaign in the queue. Its results (the campaign folders) go to
-the Results tab.
+A block's mode says which of its settings it uses; the others are kept and not shown. Simulate runs every set of
+tolerances wired in at every temperature wired in, one campaign in the queue each (no tolerances: nominal; no
+temperature: the schematic's own). A temperature drawn at random goes with Monte Carlo units only, each unit at
+its own. Its results (the campaign folders) go to the Results tab.
 
 ## 2. Principles
 
@@ -56,22 +55,27 @@ the Results tab.
 Schematic=holdup.asc
 [Study holdup]
 Wire=1.circuit -> 3.circuit
-Wire=2.conditions -> 3.conditions
-Wire=4.temperature -> 2.temperature
+Wire=2.tolerances -> 3.conditions
+Wire=4.temperature -> 3.conditions
 [Block 1]
 Kind=Schematic
 At=40,40
 File=holdup.asc
 [Block 2]
-Kind=Nominal
+Kind=Tolerances
 At=40,170
+Mode=Monte Carlo
+Runs=100
+Seed=0
+Paired=1
+Sigma=3
 [Block 3]
 Kind=Simulate
 At=320,100
 Save=
 [Block 4]
 Kind=Temperature
-At=-200,170
+At=40,300
 Mode=List
 Points=25; 85
 ```
@@ -79,10 +83,9 @@ Points=25; 85
 After the studies, a `[Results <study>]` section keeps each study's last run and its view: `Ended`, one `Set=label|
 reused|folder` per campaign (relative to the project when beside it), `Pane=trace|trace...` per pane, `Runs`.
 
-`Kind` and `At` are the block's own keys; every other key is a property. A temperature typed into an analysis
-(before the Temperature block) is turned into a Temperature block wired into it when the project opens. A property may hold several lines
-(`\n`). A project of an older version opens: its schematic and its studies are read, its other sections are
-skipped, and a block of a kind this version does not have stays in the study, marked unknown, until removed.
+`Kind` and `At` are the block's own keys; every other key is a property. A property may hold several lines
+(`\n`). Sections the reader does not know are skipped; a block of a kind it does not know stays in its study,
+marked unknown, until removed. Projects of earlier versions are not converted.
 
 ## 4. Code layout
 

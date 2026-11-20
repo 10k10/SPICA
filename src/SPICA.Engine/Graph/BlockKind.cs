@@ -39,22 +39,42 @@ namespace Spica.Core.Graph
                 k = new BlockKind { Name = name, Family = fam, Title = title, Summary = summary };
                 all.Add(k);
             }
-            public Def In(string n, PortType t, bool many = false, bool optional = false) { k.Inputs.Add(new PortSpec(n, t, many, optional)); return this; }
-            public Def Out(string n, PortType t) { k.Outputs.Add(new PortSpec(n, t)); return this; }
+            public Def In(string n, PortType[] t, bool many = false, bool optional = false, string label = null) { k.Inputs.Add(new PortSpec(n, t, many, optional, label)); return this; }
+            public Def In(string n, PortType t) => In(n, new[] { t });
+            public Def Out(string n, PortType t) { k.Outputs.Add(new PortSpec(n, new[] { t })); return this; }
             public Def P(string key, string def = "") { k.Defaults.Add(new KeyValuePair<string, string>(key, def)); return this; }
         }
 
-        public const string Schematic = "Schematic", Temperature = "Temperature", Nominal = "Nominal", MonteCarlo = "MonteCarlo", WorstCase = "WorstCase",
-                            Simulate = "Simulate";
+        public const string Schematic = "Schematic", Tolerances = "Tolerances", Temperature = "Temperature", Simulate = "Simulate";
+
+        /// <summary>The Tolerances block's modes (its Mode setting).</summary>
+        public const string Nominal = "Nominal", MonteCarlo = "Monte Carlo", WorstCase = "Worst Case";
 
         /// <summary>The Temperature block's modes and distributions (its Mode and Distribution settings).</summary>
         public const string TempList = "List", TempCorners = "Corners", TempRandom = "Random", Uniform = "Uniform", Normal = "Normal";
+
+        static bool Is(string a, string b) => a.Equals(b, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Whether a setting is one the block's mode uses (the inspector shows only those; the others are kept).</summary>
+        public static bool Uses(Block b, string key)
+        {
+            string mode = b.Get("Mode");
+            if (b.Kind == Tolerances)
+                switch (key)
+                {
+                    case "Runs": case "Seed": case "Paired": return Is(mode, MonteCarlo);
+                    case "Sigma": return Is(mode, WorstCase);
+                    default: return true;
+                }
+            if (b.Kind == Temperature) return TempUses(b, key);
+            return true;
+        }
 
         /// <summary>
         /// The settings of a Temperature block its mode uses (the others are kept, unused): List its points; Corners the
         /// range and its nominal; Random uniform the range; Random normal the mean (Nominal) and deviation (Sigma).
         /// </summary>
-        public static bool TempUses(Block b, string key)
+        static bool TempUses(Block b, string key)
         {
             string mode = b.Get("Mode", TempList);
             bool normal = b.Get("Distribution", Uniform).Equals(Normal, StringComparison.OrdinalIgnoreCase);
@@ -72,24 +92,20 @@ namespace Spica.Core.Graph
 
         static BlockKind()
         {
-            const PortType C = PortType.Circuit, K = PortType.Conditions, T = PortType.Temperature;
+            const PortType C = PortType.Circuit, K = PortType.Tolerances, T = PortType.Temperature;
 
             new Def(Schematic, BlockFamily.Circuit, "Schematic", "An LTspice schematic (.asc), simulated as drawn.")
                 .Out("circuit", C).P("File");
 
-            // the conditions: the temperature, and how the tolerances are set (each takes a temperature)
-            new Def(Temperature, BlockFamily.Conditions, "Temperature", "The temperatures an analysis runs at: a list, the corners of a range, or one drawn at random for each Monte Carlo unit.")
+            // the conditions, two independent ones: how the parts vary, and the temperature
+            new Def(Tolerances, BlockFamily.Conditions, "Tolerances", "How the parts vary: every tolerance at its nominal value, N units drawn from them (Monte Carlo), or every combination of their edges (worst case, 1 + 2^n units).")
+                .Out("tolerances", K).P("Mode", Nominal).P("Runs", "100").P("Seed", "0").P("Paired", "1").P("Sigma", "3");
+            new Def(Temperature, BlockFamily.Conditions, "Temperature", "The temperatures the circuit runs at: a list, the corners of a range, or one drawn at random for each Monte Carlo unit.")
                 .Out("temperature", T).P("Mode", TempList).P("Distribution", Uniform).P("Points", "-55; 25; 85").P("Min", "-40").P("Nominal", "25").P("Max", "85")
                 .P("Sigma", "20");
-            new Def(Nominal, BlockFamily.Conditions, "Nominal", "One unit with every tolerance at its nominal value, at each temperature.")
-                .In("temperature", T, optional: true).Out("conditions", K);
-            new Def(MonteCarlo, BlockFamily.Conditions, "Monte Carlo", "N units drawn from the tolerances, each at every temperature (or at its own, drawn).")
-                .In("temperature", T, optional: true).Out("conditions", K).P("Runs", "100").P("Seed", "0").P("Paired", "0");
-            new Def(WorstCase, BlockFamily.Conditions, "Worst Case", "The nominal unit, then every combination of the tolerance edges (1 + 2^n units), at each temperature.")
-                .In("temperature", T, optional: true).Out("conditions", K).P("Sigma", "3");
 
-            new Def(Simulate, BlockFamily.Simulation, "Simulate", "Runs LTspice: the circuit under every condition wired in, as queue campaigns; reuses earlier results of the same netlist.")
-                .In("circuit", C).In("conditions", K, many: true).P("Save");
+            new Def(Simulate, BlockFamily.Simulation, "Simulate", "Runs LTspice: every set of tolerances wired in at every temperature wired in, one queue campaign each. None wired: nominal, at the schematic's temperature. Reuses earlier results of the same netlist.")
+                .In("circuit", C).In("conditions", new[] { K, T }, many: true, optional: true, label: "Conditions").P("Save");
         }
     }
 }

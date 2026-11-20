@@ -7,18 +7,27 @@ using System.Text;
 namespace Spica.Core.Graph
 {
     /// <summary>What a wire carries. A wire only joins two ports of the same type (docs/ARCHITECTURE.md, section 3).</summary>
-    public enum PortType { Circuit, Conditions, Temperature }
+    public enum PortType { Circuit, Tolerances, Temperature }
 
-    /// <summary>A port of a block kind: its name, its type, whether it takes several wires, whether it may stay empty.</summary>
+    /// <summary>
+    /// A port of a block kind: its name, the types it carries (an input may take several: Simulate's conditions take
+    /// tolerances and temperatures), whether it takes several wires, whether it may stay empty.
+    /// </summary>
     public sealed class PortSpec
     {
         public string Name;
-        public PortType Type;
-        public bool Many;          // an input that takes any number of wires (Simulate's conditions)
-        public bool Optional;      // an input that may be left unwired (an analysis's temperature: the schematic's own)
+        public PortType[] Types;
+        public bool Many;          // an input that takes any number of wires
+        public bool Optional;      // an input that may be left unwired
+        public string Label;       // how it is shown; null: its type
 
-        public PortSpec(string name, PortType type, bool many = false, bool optional = false)
-        { Name = name; Type = type; Many = many; Optional = optional; }
+        public PortSpec(string name, PortType[] types, bool many = false, bool optional = false, string label = null)
+        { Name = name; Types = types; Many = many; Optional = optional; Label = label; }
+
+        /// <summary>The type of an output (the first of an input's).</summary>
+        public PortType Type => Types[0];
+        public bool Takes(PortType t) => Types.Contains(t);
+        public string Text => Label ?? Type.ToString();
     }
 
     /// <summary>One block of a study: its kind, where it sits on the canvas and its properties (ordered; a key may repeat).</summary>
@@ -142,9 +151,9 @@ namespace Spica.Core.Graph
             if (from == to) return "A block cannot be wired to itself.";
             var o = string.IsNullOrEmpty(fromPort) ? (a.Outputs.Count == 1 ? a.Outputs[0] : null) : a.Output(fromPort);
             if (o == null) return $"{from.Kind} has no output {fromPort}.";
-            var i = string.IsNullOrEmpty(toPort) ? b.Inputs.FirstOrDefault(p => p.Type == o.Type) : b.Input(toPort);
-            if (i == null) return $"{to.Kind} takes no {o.Type} input.";
-            if (i.Type != o.Type) return $"{o.Type} cannot go into {to.Kind}.{i.Name}, which takes {i.Type}.";
+            var i = string.IsNullOrEmpty(toPort) ? b.Inputs.FirstOrDefault(p => p.Takes(o.Type)) : b.Input(toPort);
+            if (i == null) return $"{to.Spec.Title} takes no {o.Type}.";
+            if (!i.Takes(o.Type)) return $"{o.Type} cannot go into {to.Spec.Title}'s {i.Text}.";
             if (Reaches(to.Id, from.Id)) return "That wire would make a loop.";
             if (Wires.Any(w => w.From == from.Id && w.FromPort == o.Name && w.To == to.Id && w.ToPort == i.Name)) return "These ports are already wired.";
             if (!i.Many) Wires.RemoveAll(w => w.To == to.Id && w.ToPort.Equals(i.Name, StringComparison.OrdinalIgnoreCase));
@@ -189,14 +198,14 @@ namespace Spica.Core.Graph
                 var o = a.Spec.Output(w.FromPort); var i = b.Spec.Input(w.ToPort);
                 if (o == null) { Bad(a.Id, $"wire {w}: {a.Kind} has no output {w.FromPort}"); continue; }
                 if (i == null) { Bad(b.Id, $"wire {w}: {b.Kind} has no input {w.ToPort}"); continue; }
-                if (o.Type != i.Type) Bad(b.Id, $"wire {w}: {o.Type} into an input of type {i.Type}");
+                if (!i.Takes(o.Type)) Bad(b.Id, $"wire {w}: {o.Type} into its {i.Text}");
             }
             foreach (var b in Blocks.Where(x => x.Spec != null))
                 foreach (var i in b.Spec.Inputs)
                 {
                     int n = Wires.Count(w => w.To == b.Id && w.ToPort.Equals(i.Name, StringComparison.OrdinalIgnoreCase));
-                    if (n == 0 && !i.Optional) Bad(b.Id, $"its {i.Type} input is not wired");
-                    if (n > 1 && !i.Many) Bad(b.Id, $"its {i.Type} input takes one wire, it has {n}");
+                    if (n == 0 && !i.Optional) Bad(b.Id, $"its {i.Text} input is not wired");
+                    if (n > 1 && !i.Many) Bad(b.Id, $"its {i.Text} input takes one wire, it has {n}");
                 }
             if (Order() == null) Bad(0, "the wires make a loop");
             return list;
@@ -218,23 +227,6 @@ namespace Spica.Core.Graph
                     if (--indeg[w.To] == 0) ready.Add(w.To);
             }
             return order.Count == Blocks.Count ? order : null;
-        }
-
-        /// <summary>
-        /// Brings a study read from an older version up to this one: a temperature typed into an analysis (before 0.10's
-        /// Temperature block) becomes a Temperature block wired into it.
-        /// </summary>
-        public void Migrate()
-        {
-            foreach (var b in Blocks.ToList())
-            {
-                if (b.Spec?.Input("temperature") == null) continue;
-                string t = b.Get("Temperature").Trim();
-                b.Props.RemoveAll(kv => kv.Key.Equals("Temperature", StringComparison.OrdinalIgnoreCase));
-                if (t.Length == 0) continue;
-                var tb = Add(BlockKind.Temperature, b.X - 240, b.Y).Set("Mode", "List").Set("Points", t);
-                Connect(tb, b, "temperature", "temperature");
-            }
         }
 
         public Study Clone()

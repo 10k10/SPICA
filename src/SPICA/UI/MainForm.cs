@@ -307,7 +307,7 @@ namespace Spica.UI
         {
             var st = new Study { Name = Path.GetFileNameWithoutExtension(asc) };
             var sch = st.Add(BlockKind.Schematic, 40, 40).Set("File", asc);
-            var nom = st.Add(BlockKind.Nominal, 40, 170);
+            var nom = st.Add(BlockKind.Tolerances, 40, 170);
             var sim = st.Add(BlockKind.Simulate, 320, 100);
             st.Connect(sch, sim);
             st.Connect(nom, sim);

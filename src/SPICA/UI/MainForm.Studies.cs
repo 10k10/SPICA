@@ -171,7 +171,8 @@ namespace Spica.UI
             ports.Count == 0 ? "nothing" : string.Join(", ", ports.Select(PortWords).Distinct());
 
         /// <summary>A port in words: its type, and whether it takes several wires or may stay empty.</summary>
-        static string PortWords(PortSpec p) => p.Type + (p.Many ? " (several)" : "") + (p.Optional ? " (optional)" : "");
+        static string PortWords(PortSpec p) =>
+            p.Text + (p.Types.Length > 1 ? " (" + string.Join(" or ", p.Types) + ")" : "") + (p.Many ? ", several" : "") + (p.Optional ? ", optional" : "");
 
         void ShowBlockInfo(BlockKind k)
         {
@@ -409,20 +410,10 @@ namespace Spica.UI
                 case BlockKind.Temperature:
                     Check(() => StudyExecutors.ReadTemperature(b));
                     break;
-                case BlockKind.Nominal:
-                    if (TempOf(st, b)?.Random != null) list.Add(DrawnNeedsUnits);
-                    break;
-                case BlockKind.MonteCarlo:
-                    double runs = StudyExecutors.Num(b.Get("Runs"));
-                    if (!(runs >= 1) || runs != Math.Floor(runs) || runs > 10_000_000) list.Add("enter the number of runs (a whole number, 1 or more)");
-                    double seed = StudyExecutors.Num(b.Get("Seed"), 0);
-                    if (!(seed >= 0) || seed != Math.Floor(seed) || seed > uint.MaxValue) list.Add("the seed must be a whole number, 0 or more");
-                    break;
-                case BlockKind.WorstCase:
-                    double k = StudyExecutors.Num(b.Get("Sigma"), 3);
-                    if (!(k > 0) || k > 10) list.Add("sigma must be above 0 and at most 10");
-                    if (TempOf(st, b)?.Random != null) list.Add(DrawnNeedsUnits);
-                    if (nl != null)
+                case BlockKind.Tolerances:
+                    Condition c = null;
+                    Check(() => c = StudyExecutors.ReadTolerances(b));
+                    if (c?.Kind == RunKind.WorstCase && nl != null)
                     {
                         int n = ToleranceSites(nl);
                         if (n == 0) list.Add("the schematic has no tolerance SPICA can drive (mc(), gauss() or flat() outside .subckt)");
@@ -430,6 +421,9 @@ namespace Spica.UI
                     }
                     break;
                 case BlockKind.Simulate:
+                    // a temperature drawn needs Monte Carlo units: every set of tolerances wired in goes with every temperature
+                    var (tols, temps) = ConditionsOf(st, b);
+                    try { StudyExecutors.Matrix(tols, temps); } catch (Exception ex) { list.Add(ex.Message); }
                     if (nl != null)
                     {
                         var known = new HashSet<string>(nl.Nodes.Select(x => $"V({x})").Concat(nl.Currents), StringComparer.OrdinalIgnoreCase);
@@ -440,14 +434,31 @@ namespace Spica.UI
             return list;
         }
 
-        const string DrawnNeedsUnits = "a temperature drawn at random goes with Monte Carlo units only: wire a list or the corners into it";
-
-        /// <summary>The temperatures wired into an analysis, as its Temperature block reads now (null: none wired, or not set up).</summary>
-        static TempSpec TempOf(Study st, Block b)
+        /// <summary>The conditions wired into a Simulate, as their blocks read now (a block not set up is left out: it says so itself).</summary>
+        static (List<Condition>, List<TempSpec>) ConditionsOf(Study st, Block sim)
         {
-            var tb = st?.Upstream(b, "temperature").FirstOrDefault();
-            if (tb == null) return null;
-            try { return StudyExecutors.ReadTemperature(tb); } catch { return null; }
+            var tols = new List<Condition>();
+            var temps = new List<TempSpec>();
+            foreach (var u in st?.Upstream(sim, "conditions") ?? Enumerable.Empty<Block>())
+                try
+                {
+                    if (u.Kind == BlockKind.Tolerances) tols.Add(StudyExecutors.ReadTolerances(u));
+                    else if (u.Kind == BlockKind.Temperature) temps.Add(StudyExecutors.ReadTemperature(u));
+                }
+                catch { }
+            return (tols, temps);
+        }
+
+        /// <summary>The units a set of tolerances makes (worst case: when the schematic is read); 0 when not known.</summary>
+        long UnitsOf(Condition c, Study st)
+        {
+            switch (c.Kind)
+            {
+                case RunKind.MonteCarlo: return c.Runs;
+                case RunKind.WorstCase:
+                    return NetlistOf(st) is Netlist nl && ToleranceSites(nl) is int n && n > 0 && n <= WorstCase.MaxCornerSites ? 1L + (1L << n) : 0;
+                default: return 1;
+            }
         }
 
         static List<string> SaveList(Block b) => b.Get("Save").Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
@@ -458,10 +469,8 @@ namespace Spica.UI
         string BlockCaption(Block b)
         {
             string P(string k) => b.Get(k).Trim();
-            string Runs(long n) => $"{n:N0} run{(n == 1 ? "" : "s")}";
+            string N(long n, string what) => $"{n:N0} {what}{(n == 1 ? "" : "s")}";
             var st = CurrentStudy;
-            var t = TempOf(st, b);
-            int k = t?.Count ?? 1;
             switch (b.Kind)
             {
                 case BlockKind.Schematic:
@@ -469,18 +478,26 @@ namespace Spica.UI
                     return file.Length > 0 ? Path.GetFileName(file) : "no file chosen";
                 case BlockKind.Temperature:
                     try { return StudyExecutors.ReadTemperature(b).Text; } catch { return "not set up"; }
-                case BlockKind.Nominal: return "tolerances nominal · " + Runs(k);
-                case BlockKind.MonteCarlo:
-                    double n = StudyExecutors.Num(P("Runs"));
-                    return $"{P("Runs")} units" + (P("Paired") == "1" ? ", paired" : "") + (n >= 1 ? " · " + Runs((long)n * k) : "");
-                case BlockKind.WorstCase:
-                    string sigma = $"edges ±{(P("Sigma").Length > 0 ? P("Sigma") : "3")}σ";
-                    if (NetlistOf(st) is Netlist nl && ToleranceSites(nl) is int sites && sites > 0 && sites <= WorstCase.MaxCornerSites)
-                        return sigma + " · " + Runs((1L + (1L << sites)) * k);
-                    return sigma;
+                case BlockKind.Tolerances:
+                    Condition c;
+                    try { c = StudyExecutors.ReadTolerances(b); } catch { return "not set up"; }
+                    long u = UnitsOf(c, st);
+                    string what = c.Kind == RunKind.MonteCarlo ? "Monte Carlo" + (c.Paired ? ", paired" : "") : c.Kind == RunKind.WorstCase ? $"worst case ±{c.Sigma:0.###}σ" : "nominal";
+                    return what + (u > 0 ? " · " + N(u, "unit") : "");
                 case BlockKind.Simulate:
-                    int s = SaveList(b).Count;
-                    return s == 0 ? "saves every signal" : $"saves {s} signal{(s == 1 ? "" : "s")}";
+                    // the matrix: every set of tolerances at every temperature
+                    var (tols, temps) = ConditionsOf(st, b);
+                    if (tols.Count == 0) tols.Add(new Condition { Kind = RunKind.Nominal });
+                    int campaigns = tols.Count * Math.Max(1, temps.Count);
+                    long runs = 0;
+                    foreach (var tc in tols)
+                        foreach (var t in temps.DefaultIfEmpty(null))
+                        {
+                            long un = UnitsOf(tc, st);
+                            if (un == 0) { runs = -1; break; }
+                            runs += un * (t?.Count ?? 1);
+                        }
+                    return N(campaigns, "campaign") + (runs > 0 ? " · " + N(runs, "run") : "");
                 default: return b.Spec?.Summary ?? "unknown block";
             }
         }
@@ -565,6 +582,7 @@ namespace Spica.UI
         /// <summary>Settings chosen from a list.</summary>
         static readonly Dictionary<string, string[]> ChoiceProps = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
+            ["Tolerances.Mode"] = new[] { BlockKind.Nominal, BlockKind.MonteCarlo, BlockKind.WorstCase },
             ["Temperature.Mode"] = new[] { BlockKind.TempList, BlockKind.TempCorners, BlockKind.TempRandom },
             ["Temperature.Distribution"] = new[] { BlockKind.Uniform, BlockKind.Normal },
         };
@@ -572,7 +590,7 @@ namespace Spica.UI
         /// <summary>The unit shown after a short field.</summary>
         static readonly Dictionary<string, string> PropUnits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["MonteCarlo.Runs"] = "units", ["MonteCarlo.Seed"] = "(0 = new)", ["WorstCase.Sigma"] = "σ",
+            ["Tolerances.Runs"] = "units", ["Tolerances.Seed"] = "(0 = new)", ["Tolerances.Sigma"] = "σ",
             ["Temperature.Points"] = "°C", ["Temperature.Min"] = "°C", ["Temperature.Nominal"] = "°C", ["Temperature.Max"] = "°C", ["Temperature.Sigma"] = "°C (1σ)",
         };
 
@@ -582,15 +600,17 @@ namespace Spica.UI
         static readonly Dictionary<string, string> PropHints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Schematic.File"] = "The LTspice schematic (.asc). Empty: the project's own.",
+            ["Tolerances.Mode"] = "Nominal: one unit, every tolerance at its nominal value. Monte Carlo: N units drawn from them. Worst Case: the nominal unit, then every combination of their edges.",
             ["Temperature.Mode"] = "List: the temperatures typed. Corners: the edges of a range (and its nominal). Random: one drawn for each Monte Carlo unit.",
             ["Temperature.Distribution"] = "Uniform: any temperature of the range alike. Normal: around a mean, two thirds within ± one sigma.",
             ["Temperature.Points"] = "Separated by ;  (e.g. -55; 25; 85): every unit runs at each.",
+            ["Temperature.Random.Mode"] = "Random: one temperature drawn for each Monte Carlo unit (so it needs Tolerances in Monte Carlo beside it).",
             ["Temperature.Corners.Nominal"] = "Between the two. Empty: the edges only.",
             ["Temperature.Random.Nominal"] = "The mean of the temperatures drawn.",
-            ["MonteCarlo.Runs"] = "How many units are drawn from the tolerances. Each runs at every temperature wired in (or at its own, drawn).",
-            ["MonteCarlo.Seed"] = "0: new units every time. A number: the same units again.",
-            ["MonteCarlo.Paired"] = "SPICA draws the random values itself (mc(), gauss(), flat()): the same units at every temperature, the same again with the same seed. Cleared: LTspice draws them.",
-            ["WorstCase.Sigma"] = "Gaussian tolerances are pushed to ± this many sigma; flat ones to their limits.",
+            ["Tolerances.Runs"] = "How many units are drawn. Each runs at every temperature wired into the Simulate (or at its own, drawn).",
+            ["Tolerances.Seed"] = "0: new units every time. A number: the same units again.",
+            ["Tolerances.Paired"] = "SPICA draws the values itself (mc(), gauss(), flat()): the same units at every temperature, the same again with the same seed. Cleared: LTspice draws them.",
+            ["Tolerances.Sigma"] = "Gaussian tolerances are pushed to ± this many sigma; flat ones to their limits.",
             ["Simulate.Save"] = "The signals kept in the .raw files, to plot on the Results tab. The ones the schematic's .meas read are always kept. None other ticked: every signal (larger files).",
         };
 
@@ -642,7 +662,7 @@ namespace Spica.UI
             if (k == null) Text($"SPICA {AppVersion} has no block \"{b.Kind}\" (a project from another version): remove it (Del).", null, Color.FromArgb(160, 0, 0));
             else Text(k.Summary, null, Win98.Shadow);
             if (b.Kind == BlockKind.Schematic) SchematicInfo(b, Section, s => Text(s, null, Win98.Shadow), ref y, host);
-            if (b.Kind == BlockKind.WorstCase && NetlistOf(st) is Netlist wn)
+            if (b.Kind == BlockKind.Tolerances && b.Get("Mode").Equals(BlockKind.WorstCase, StringComparison.OrdinalIgnoreCase) && NetlistOf(st) is Netlist wn)
             {
                 int n = ToleranceSites(wn);
                 Text(n == 0 ? "The schematic has no tolerance SPICA can drive." : $"{n} tolerance{(n == 1 ? "" : "s")}: 1 + 2^{n} = {1 + (1L << Math.Min(n, 40)):N0} runs per temperature.", null, n == 0 || n > WorstCase.MaxCornerSites ? Color.FromArgb(160, 0, 0) : Win98.Shadow);
@@ -654,7 +674,7 @@ namespace Spica.UI
                 int index = idx;
                 string key = b.Props[idx].Key, val = b.Props[idx].Value, kk = b.Kind + "." + key;
                 void SetVal(string v) { b.Props[index] = new KeyValuePair<string, string>(key, v ?? ""); inspectorChanged(); }
-                if (b.Kind == BlockKind.Temperature && !BlockKind.TempUses(b, key)) continue;
+                if (!BlockKind.Uses(b, key)) continue;
 
                 if (ChoiceProps.TryGetValue(kk, out var options))
                 {
@@ -744,7 +764,7 @@ namespace Spica.UI
                 foreach (var i in k.Inputs)
                 {
                     var from = st.Upstream(b, i.Name).Select(x => x.Spec?.Title ?? x.Kind).ToList();
-                    string none = i.Optional ? (i.Type == PortType.Temperature ? "none (the schematic's own)" : "none") : "not wired";
+                    string none = i.Optional ? "none" : "not wired";
                     Text($"{PortWords(i)} from: " + (from.Count == 0 ? none : string.Join(", ", from)), null, from.Count == 0 && !i.Optional ? Color.FromArgb(160, 0, 0) : Color.Black);
                 }
                 foreach (var o in k.Outputs)

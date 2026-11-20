@@ -25,7 +25,7 @@ namespace Spica.UI
 
         public static readonly Dictionary<PortType, Color> TypeColor = new Dictionary<PortType, Color>
         {
-            [PortType.Circuit] = Color.FromArgb(31, 95, 191), [PortType.Conditions] = Color.FromArgb(184, 134, 11),
+            [PortType.Circuit] = Color.FromArgb(31, 95, 191), [PortType.Tolerances] = Color.FromArgb(184, 134, 11),
             [PortType.Temperature] = Color.FromArgb(200, 60, 40),
         };
 
@@ -40,7 +40,7 @@ namespace Spica.UI
             k == null ? Color.Gray : k.Name == BlockKind.Temperature ? Color.FromArgb(160, 40, 25) : FamilyColor[k.Family];
 
         /// <summary>How a port is named on a block, an input or an output alike: its type, "…" when it takes several wires.</summary>
-        public static string PortText(PortSpec p) => p.Type + (p.Many ? " …" : "");
+        public static string PortText(PortSpec p) => p.Text + (p.Many ? " …" : "");
 
         /// <summary>The app's own 16 px icon for a block kind.</summary>
         public static Image KindIcon(string kind)
@@ -49,9 +49,7 @@ namespace Spica.UI
             {
                 case BlockKind.Schematic: return Win98.Icon("open16");
                 case BlockKind.Temperature: return thermometer ?? (thermometer = Glyphs.Thermometer());
-                case BlockKind.Nominal: return Win98.Icon("check16");
-                case BlockKind.MonteCarlo: return Win98.Icon("clock16");
-                case BlockKind.WorstCase: return Win98.Icon("hw16");
+                case BlockKind.Tolerances: return Win98.Icon("hw16");
                 case BlockKind.Simulate: return Win98.Icon("run16");
                 default: return Win98.Icon("options16");
             }
@@ -402,15 +400,14 @@ namespace Spica.UI
             }
         }
 
-        /// <summary>A port: a dot of its type's colour; an input that may stay empty, a ring of it.</summary>
+        /// <summary>A port: a dot of its type's colour (cut in theirs when it takes several); hollow when it may stay empty.</summary>
         static void DrawPort(Graphics g, PointF p, PortSpec spec, Pen edge)
         {
+            float sweep = 360f / spec.Types.Length;
+            for (int i = 0; i < spec.Types.Length; i++)
+                using (var fill = new SolidBrush(TypeColor[spec.Types[i]])) g.FillPie(fill, p.X - 5, p.Y - 5, 10, 10, -90 + i * sweep, sweep);
             if (spec.Optional)
-            {
-                using (var white = new SolidBrush(Color.White)) g.FillEllipse(white, p.X - 5, p.Y - 5, 10, 10);
-                using (var ring = new Pen(TypeColor[spec.Type], 2.5f)) g.DrawEllipse(ring, p.X - 3.5f, p.Y - 3.5f, 7, 7);
-            }
-            else using (var fill = new SolidBrush(TypeColor[spec.Type])) g.FillEllipse(fill, p.X - 5, p.Y - 5, 10, 10);
+                using (var white = new SolidBrush(Color.White)) g.FillEllipse(white, p.X - 2.5f, p.Y - 2.5f, 5, 5);
             g.DrawEllipse(edge, p.X - 5, p.Y - 5, 10, 10);
         }
 
@@ -549,8 +546,8 @@ namespace Spica.UI
             {
                 var spec = input ? pb.Spec.Inputs[pi] : pb.Spec.Outputs[pi];
                 // a new block of a kind that fits this port, placed beside it and wired
-                var fits = BlockKind.All.Where(k => input ? k.Outputs.Any(o => o.Type == spec.Type) : k.Inputs.Any(i => i.Type == spec.Type)).ToList();
-                menu.Items.Add(new ToolStripMenuItem((input ? "Feed " : "Connect ") + $"{spec.Type} {(input ? "from" : "to")} a new block:") { Enabled = false });
+                var fits = BlockKind.All.Where(k => input ? k.Outputs.Any(o => spec.Takes(o.Type)) : k.Inputs.Any(i => i.Takes(spec.Type))).ToList();
+                menu.Items.Add(new ToolStripMenuItem((input ? "Feed " : "Connect ") + $"{spec.Text} {(input ? "from" : "to")} a new block:") { Enabled = false });
                 foreach (var k in fits)
                 {
                     var kind = k;
