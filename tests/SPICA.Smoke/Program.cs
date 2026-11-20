@@ -76,17 +76,20 @@ static class Program
 
     static int Graph()
     {
-        Check(string.Join(",", BlockKind.All.Select(k => k.Name)) == "Schematic,Nominal,MonteCarlo,WorstCase,Simulate", "the blocks: " + string.Join(", ", BlockKind.All.Select(k => k.Title)));
+        Check(string.Join(",", BlockKind.All.Select(k => k.Name)) == "Schematic,Temperature,Nominal,MonteCarlo,WorstCase,Simulate", "the blocks: " + string.Join(", ", BlockKind.All.Select(k => k.Title)));
 
         // wiring
         var st = new Study { Name = "Hold-up" };
         var sch = st.Add("Schematic").Set("File", "holdup.asc");
-        var nom = st.Add("Nominal").Set("Temperature", "25; 85");
+        var nom = st.Add("Nominal");
+        var temp = st.Add("Temperature").Set("Points", "25; 85");
         var mc = st.Add("MonteCarlo").Set("Runs", "5").Set("Seed", "7");
         var wc = st.Add("WorstCase");
         var sim = st.Add("Simulate").Set("Save", "V(bulk)");
         Check(st.Connect(sch, sim) == null && st.Connect(nom, sim) == null && st.Connect(mc, sim) == null && st.Connect(wc, sim) == null, "a circuit and three analyses into one Simulate");
-        Check(st.Validate().Count == 0, "the study validates: " + string.Join("; ", st.Validate()));
+        Check(st.Validate().Count == 0, "the study validates, the analyses' temperature inputs left empty: " + string.Join("; ", st.Validate()));
+        Check(st.Connect(temp, nom) == null && st.Validate().Count == 0, "a Temperature wired into the Nominal");
+        Check(st.Connect(temp, sim) != null, "a temperature cannot go into Simulate: " + st.Connect(temp, sim));
         Check(st.Connect(nom, sch) != null, "an analysis cannot go into a Schematic: " + st.Connect(nom, sch));
         var sch2 = st.Add("Schematic");
         Check(st.Connect(sch2, sim) == null && st.Wires.Count(w => w.To == sim.Id && w.ToPort == "circuit") == 1, "a second circuit replaces the first (one circuit per Simulate)");
@@ -101,6 +104,31 @@ static class Program
         Check(StudyExecutors.Temps("-55; 25, 85 25").SequenceEqual(new[] { -55.0, 25, 85 }), "temperatures: a list, separated by ; , or spaces, each once");
         try { StudyExecutors.Temps("hot"); Check(false, "a word is not a temperature"); } catch (Exception ex) { Check(ex.Message.Contains("hot"), "a word is not a temperature: " + ex.Message); }
 
+        // the Temperature block's modes
+        TempSpec T(params string[] kv)
+        {
+            var b = new Study().Add("Temperature");
+            for (int i = 0; i < kv.Length; i += 2) b.Set(kv[i], kv[i + 1]);
+            return StudyExecutors.ReadTemperature(b);
+        }
+        string Fails(params string[] kv) { try { T(kv); return null; } catch (Exception ex) { return ex.Message; } }
+        Check(T().Points.SequenceEqual(new[] { -55.0, 25, 85 }) && T().Random == null, "a new Temperature: a list, -55, 25 and 85 °C");
+        Check(T("Mode", "Corners").Points.SequenceEqual(new[] { -40.0, 25, 85 }), "corners: the edges and the nominal between them: " + T("Mode", "Corners").Text);
+        Check(T("Mode", "Corners", "Nominal", "").Points.SequenceEqual(new[] { -40.0, 85 }), "corners without a nominal: the edges only");
+        var tu = T("Mode", "Random");
+        Check(tu.Random != null && !tu.Random.Normal && tu.Random.A == -40 && tu.Random.B == 85 && tu.Count == 1, "random: uniform over the range, one temperature per unit: " + tu.Text);
+        var tn = T("Mode", "Random", "Distribution", "Normal", "Nominal", "30", "Sigma", "10");
+        Check(tn.Random.Normal && tn.Random.A == 30 && tn.Random.B == 10, "random normal: mean and deviation: " + tn.Text);
+        var draws = Enumerable.Range(1, 2000).Select(r => tu.Random.Of(7, r)).ToList();
+        Check(draws.All(x => x >= -40 && x <= 85) && Math.Abs(draws.Average() - 22.5) < 3 && tu.Random.Of(7, 5) == tu.Random.Of(7, 5) && tu.Random.Of(7, 5) != tu.Random.Of(8, 5),
+              $"drawn uniform: within the range, mean {draws.Average():0.0} °C, the same again with the same seed, other with another");
+        var nd = Enumerable.Range(1, 4000).Select(r => tn.Random.Of(3, r)).ToList();
+        double sd = Math.Sqrt(nd.Select(x => (x - nd.Average()) * (x - nd.Average())).Average());
+        Check(Math.Abs(nd.Average() - 30) < 1 && Math.Abs(sd - 10) < 1, $"drawn normal: mean {nd.Average():0.0}, deviation {sd:0.0} °C");
+        Check(Fails("Mode", "Corners", "Min", "90") != null && Fails("Mode", "Corners", "Nominal", "100") != null && Fails("Points", "") != null &&
+              Fails("Mode", "Random", "Distribution", "Normal", "Sigma", "0") != null && Fails("Mode", "Hot") != null,
+              "refused: Max under Min, a nominal outside the range, no point, no deviation, an unknown mode: " + Fails("Mode", "Corners", "Min", "90"));
+
         // the real executors with a fake host: what Simulate asks the queue for, and the cache
         string dir = Path.Combine(Path.GetTempPath(), "spica_graph_test");
         if (Directory.Exists(dir)) Directory.Delete(dir, true);
@@ -114,7 +142,7 @@ static class Program
         var rn = host.Sent.FirstOrDefault(r => r.Kind == RunKind.Nominal);
         var rm = host.Sent.FirstOrDefault(r => r.Kind == RunKind.MonteCarlo);
         var rw = host.Sent.FirstOrDefault(r => r.Kind == RunKind.WorstCase);
-        Check(rn?.Temps != null && rn.Temps.SequenceEqual(new[] { 25.0, 85 }), "Nominal at 25 and 85 °C");
+        Check(rn?.Temps != null && rn.Temps.SequenceEqual(new[] { 25.0, 85 }), "Nominal at 25 and 85 °C, from its Temperature block");
         Check(rm != null && rm.Runs == 5 && rm.Seed == 7 && rm.Temps == null, "Monte Carlo: 5 runs, seed 7, the schematic's temperature");
         Check(rw != null && rw.Sigma == 3 && rw.Save.SequenceEqual(new[] { "V(bulk)" }), "Worst Case at 3 sigma, saving V(bulk)");
         Check(host.Sent.All(r => Path.GetFullPath(r.OutputDir).StartsWith(Path.Combine(dir, "studies", "Hold_up", "s" + sim.Id))), "the campaigns go into the study's folder, under its Simulate");
@@ -133,6 +161,20 @@ static class Program
         Check(!runner.Run(st) && runner.State[mc.Id] == BlockState.Error && runner.State[sim.Id] == BlockState.Skipped, "a block in error stops what it feeds: " + (runner.Message.TryGetValue(mc.Id, out var why) ? why : ""));
         mc.Set("Runs", "5");
 
+        // a temperature drawn at random: with Monte Carlo units, not with Nominal
+        var draw = st.Add("Temperature").Set("Mode", "Random");
+        st.Connect(draw, mc);
+        host.Sent.Clear();
+        runner = StudyExecutors.Register(new StudyRunner(), host);
+        runner.Run(st);
+        var rr = host.Sent.SingleOrDefault();
+        Check(rr != null && rr.Kind == RunKind.MonteCarlo && rr.RandomTemp != null && rr.Temps == null && rr.Runs == 5, "Monte Carlo with a temperature drawn: 5 runs, each at its own");
+        st.Connect(draw, nom);
+        runner = StudyExecutors.Register(new StudyRunner(), host);
+        Check(!runner.Run(st) && runner.State[nom.Id] == BlockState.Error && runner.Message[nom.Id].Contains("Monte Carlo"), "Nominal with a temperature drawn is refused: " + runner.Message[nom.Id]);
+        st.Remove(draw);
+        st.Connect(temp, nom);
+
         // the campaign builder: what each analysis becomes
         string exe = Assembly.GetExecutingAssembly().Location;     // any file: the builder only checks that LTspice is there
         CampaignOptions Build(CampaignRequest r, Netlist nl, out string err)
@@ -149,6 +191,13 @@ static class Program
         Check(o == null && e3.Contains("tolerances"), "worst case without tolerances is refused: " + e3);
         o = Build(new CampaignRequest { Kind = RunKind.MonteCarlo, Runs = 10, Save = new List<string> { "V(nowhere)" } }, host.Net, out var e4);
         Check(o == null && e4.Contains("V(nowhere)"), "a signal the circuit does not have is refused: " + e4);
+        var drawn = new TempDraw { A = -40, B = 85 };
+        o = Build(new CampaignRequest { Kind = RunKind.WorstCase, RandomTemp = drawn }, host.Net, out var e5);
+        Check(o == null && e5.Contains("Monte Carlo"), "a worst case with a temperature drawn is refused: " + e5);
+        o = Build(new CampaignRequest { Kind = RunKind.MonteCarlo, Runs = 4, Seed = 11, Paired = true, RandomTemp = drawn }, host.Net, out var e6);
+        Check(o != null && o.Jobs == 4 && o.TempOf(3, 0) == drawn.Of(11, 3), "Monte Carlo of 4 with a temperature drawn: 4 simulations, each at its own " + e6);
+        string chunk = host.Net.BuildChunk(new ChunkSpec { First = 1, Last = 4, Mc = o.Mc, Seed = 11, TempOfRun = r => o.TempOf(r, 0) });
+        Check(chunk.Contains(".temp {spica_temp}") && chunk.Contains(".param spica_temp = table(run,1,"), "the chunk sets each run's temperature from a table on the run");
 
         // the units of traces, by their dimensions, as LTspice gives them
         foreach (var (expr, unit) in new[] { ("V(out)", "V"), ("I(R1)", "A"), ("2*V(out)", "V"), ("V(a,b)", "V"), ("V(out)*I(R1)", "W"), ("V(out)/I(R1)", "Ω"),
@@ -174,6 +223,14 @@ static class Program
         var old = SpicaProject.Load(f3);
         Check(old.Schematic == p.Schematic && old.Studies.Count == 1 && old.Studies[0].Blocks.Count == 2, "a project of an older version opens: its schematic and its study");
         Check(old.Studies[0].Validate().Any(i => i.Message.Contains("unknown kind 'Limits'")), "a block this version does not have stays, marked unknown");
+        // a temperature typed into an analysis (before the Temperature block) becomes a Temperature block wired into it
+        string f4 = Path.Combine(dir, "temps.spica");
+        File.WriteAllText(f4, "[Project]\nSchematic=holdup.asc\n[Study T]\nWire=1.circuit -> 3.circuit\nWire=2.conditions -> 3.conditions\n[Block 1]\nKind=Schematic\nAt=300,40\n" +
+                              "[Block 2]\nKind=Nominal\nAt=300,170\nTemperature=-55; 25; 85\n[Block 3]\nKind=Simulate\nAt=600,100\nSave=\n");
+        var mig = SpicaProject.Load(f4).Studies.Single();
+        var mt = mig.Blocks.FirstOrDefault(b => b.Kind == "Temperature");
+        Check(mt != null && mt.Get("Points") == "-55; 25; 85" && mig.Upstream(mig[2], "temperature").Single() == mt && mig[2].Get("Temperature", null) == null && mig.Validate().Count == 0,
+              "an older project's temperatures become a Temperature block, wired into the analysis");
         Console.WriteLine(bad == 0 ? "GRAPH: all ok" : $"GRAPH: {bad} wrong");
         return bad;
     }
@@ -265,12 +322,28 @@ static class Program
         w.Shot(w.Form, "schematic");
 
         var nom = st.Blocks.First(b => b.Kind == "Nominal");
-        var wc = st.Add("WorstCase", nom.X, nom.Y + 130).Set("Temperature", "-55; 25; 85");
+        var wc = st.Add("WorstCase", nom.X, nom.Y + 130);
+        var corners = st.Add("Temperature", nom.X - 240, nom.Y + 130).Set("Mode", "Corners");
         st.Connect(wc, sim);
+        st.Connect(corners, wc);
         w.Call("StudyEdited");
         canvas.Select(wc);
         w.Pump(10);
         Check(((List<string>)w.Call("BlockProblems", wc)).Count == 0, "a Worst Case on the holdup's two tolerances is fine");
+        Check((string)w.Call("BlockCaption", wc) == "edges ±3σ · 15 runs" && (string)w.Call("BlockCaption", corners) == "corners -40 / 25 / 85 °C",
+              $"the captions say what each is set to and how many runs: {w.Call("BlockCaption", wc)}; {w.Call("BlockCaption", corners)}");
+        corners.Set("Mode", "Random");
+        w.Call("StudyEdited");
+        Check(((List<string>)w.Call("BlockProblems", wc)).Any(p => p.Contains("Monte Carlo")), "a Worst Case with a temperature drawn is reported");
+        corners.Set("Mode", "Corners");
+        canvas.Select(corners);
+        w.Pump(10);
+        var fields = ((Panel)w.Get("inspectorBody")).Controls;
+        Check(fields.OfType<ComboBox>().Count() == 1 && fields.OfType<Label>().Any(l => l.Text == "Lowest:") && !fields.OfType<Label>().Any(l => l.Text == "Temperatures:"),
+              "the Temperature's settings: its mode chosen from a list, and only the fields the mode uses");
+        w.Shot(w.Form, "temperature");
+        canvas.Select(wc);
+        w.Pump(10);
         w.Shot(w.Form, "worstcase");
 
         st.Wires.RemoveAll(x => x.To == sim.Id && x.ToPort == "conditions");
@@ -310,11 +383,13 @@ static class Program
         var project = (SpicaProject)w.Get("project");
         var st = project.Studies.Single();
         var sim = st.Blocks.First(b => b.Kind == "Simulate");
-        st.Blocks.First(b => b.Kind == "Nominal").Set("Temperature", "25; 85");
-        var mc = st.Add("MonteCarlo", 40, 300).Set("Runs", "5");
+        var nomB = st.Blocks.First(b => b.Kind == "Nominal");
+        st.Connect(st.Add("Temperature", nomB.X - 240, nomB.Y).Set("Points", "25; 85"), nomB);
+        var mc = st.Add("MonteCarlo", 40, 300).Set("Runs", "5").Set("Paired", "1");
         var wc = st.Add("WorstCase", 40, 430);
         st.Connect(mc, sim);
         st.Connect(wc, sim);
+        st.Connect(st.Add("Temperature", -200, 300).Set("Mode", "Random"), mc);
         w.Call("StudyEdited");
         string spq = Path.Combine(Path.GetTempPath(), "spq");
         if (Directory.Exists(spq)) Directory.Delete(spq, true);
@@ -335,13 +410,17 @@ static class Program
             };
             poll.Start();
         }
-        Check(((List<string>)w.Call("StudyProblems")).Count == 0, "the study is ready: nominal at 25 and 85 °C, Monte Carlo of 5, worst case");
+        Check(((List<string>)w.Call("StudyProblems")).Count == 0, "the study is ready: nominal at 25 and 85 °C, Monte Carlo of 5 at temperatures drawn, worst case");
         RunAndWait(() =>
         {
             first = (DateTime.UtcNow - began).TotalSeconds;
             var queue = (CampaignQueue)w.Get("queue");
             Check(queue.Jobs.Count == 3 && queue.Jobs.All(j => j.Status == JobStatus.Finished), "three campaigns ran in the queue: " + string.Join(", ", queue.Jobs.Select(j => $"{j.Name} {j.Status} {j.Done}/{j.Total}")));
             Check(queue.Jobs.Select(j => j.Total).OrderBy(x => x).SequenceEqual(new[] { 2, 5, 5 }), "nominal 1 x 2 temperatures, Monte Carlo 5, worst case 1 + 2^2: " + string.Join(", ", queue.Jobs.Select(j => j.Total)));
+            var mcJob = queue.Jobs.First(j => j.Request.Kind == RunKind.MonteCarlo);
+            var mcRows = ResultSet.Load(mcJob.Options.OutputDir).Rows;
+            Check(mcRows.Count == 5 && mcRows.All(r => r.Status == RunStatus.Ok && r.Temp >= -40 && r.Temp <= 85) && mcRows.Select(r => r.Temp).Distinct().Count() == 5,
+                  "the Monte Carlo units ran each at its own temperature, drawn: " + string.Join(", ", mcRows.Select(r => r.Temp.ToString("0.#") + " °C")));
             var canvas = (Spica.UI.StudyCanvas)w.Get("studyCanvas");
             Check(canvas.States.Values.All(s => s == BlockState.Done), "every block done");
             Check(w.Tab == 2, "the Results tab opens when the study ends");

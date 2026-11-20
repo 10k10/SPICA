@@ -33,6 +33,7 @@ namespace Spica.Core.Graph
         public static StudyRunner Register(StudyRunner r, IStudyHost host)
         {
             r.Register(BlockKind.Schematic, new Exec(ctx => Schematic(ctx, host)));
+            r.Register(BlockKind.Temperature, new Exec(ctx => ctx.Out("temperature", new List<TempSpec> { ReadTemperature(ctx.Block) })));
             r.Register(BlockKind.Nominal, new Exec(Nominal));
             r.Register(BlockKind.MonteCarlo, new Exec(MonteCarlo));
             r.Register(BlockKind.WorstCase, new Exec(WorstCaseBlock));
@@ -68,8 +69,65 @@ namespace Spica.Core.Graph
             return list;
         }
 
-        static string TempText(List<double> t) =>
-            t.Count == 0 ? "" : t.Count == 1 ? $" {t[0].ToString("0.###", Inv)} °C" : $" at {t.Count} temperatures";
+        /// <summary>A Temperature block's temperatures, by its mode; throws with what is wrong in its settings.</summary>
+        public static TempSpec ReadTemperature(Block b)
+        {
+            string mode = b.Get("Mode", BlockKind.TempList);
+            double Field(string key, string what)
+            {
+                double v = Num(b.Get(key));
+                if (double.IsNaN(v)) throw new Exception($"Enter the {what} ({key}).");
+                return v;
+            }
+            string F(double v) => v.ToString("0.###", Inv);
+            if (mode.Equals(BlockKind.TempList, StringComparison.OrdinalIgnoreCase))
+            {
+                var pts = Temps(b.Get("Points"));
+                if (pts.Count == 0) throw new Exception("Enter one temperature or more (Points), e.g. -55; 25; 85.");
+                return new TempSpec { Points = pts, Text = pts.Count == 1 ? $"{F(pts[0])} °C" : string.Join("; ", pts.Select(F)) + " °C" };
+            }
+            bool random = mode.Equals(BlockKind.TempRandom, StringComparison.OrdinalIgnoreCase);
+            if (random && b.Get("Distribution", BlockKind.Uniform).Equals(BlockKind.Normal, StringComparison.OrdinalIgnoreCase))
+            {
+                double mean = Field("Nominal", "mean temperature"), sd = Field("Sigma", "deviation");
+                if (mean < -273 || mean > 1000) throw new Exception("The mean temperature must be within -273 .. 1000 °C.");
+                if (!(sd > 0) || sd > 500) throw new Exception("The deviation (Sigma) must be above 0 °C (and at most 500).");
+                return new TempSpec { Random = new TempDraw { Normal = true, A = mean, B = sd }, Text = $"random {F(mean)} ± {F(sd)} °C" };
+            }
+            double lo = Field("Min", "lowest temperature"), hi = Field("Max", "highest temperature");
+            if (lo < -273 || hi > 1000) throw new Exception("The temperatures must be within -273 .. 1000 °C.");
+            if (!(hi > lo)) throw new Exception("The highest temperature (Max) must be above the lowest (Min).");
+            if (mode.Equals(BlockKind.TempCorners, StringComparison.OrdinalIgnoreCase))
+            {
+                // the edges of the range, and the nominal between them when one is given
+                var pts = new List<double> { lo };
+                double nom = Num(b.Get("Nominal"));
+                if (!double.IsNaN(nom))
+                {
+                    if (!(nom > lo && nom < hi)) throw new Exception("The nominal temperature must be between Min and Max (or left empty).");
+                    pts.Add(nom);
+                }
+                pts.Add(hi);
+                return new TempSpec { Points = pts, Text = $"corners {string.Join(" / ", pts.Select(F))} °C" };
+            }
+            if (random) return new TempSpec { Random = new TempDraw { A = lo, B = hi }, Text = $"random {F(lo)} .. {F(hi)} °C" };
+            throw new Exception($"Unknown mode '{mode}': List, Corners or Random.");
+        }
+
+        /// <summary>The temperature wired into an analysis (null: none, the schematic's own).</summary>
+        static TempSpec TempIn(BlockContext ctx) => ctx.All<TempSpec>("temperature").FirstOrDefault();
+
+        /// <summary>A condition at the temperature wired in: its points, or one drawn per unit (Monte Carlo only).</summary>
+        static Condition At(Condition c, TempSpec t, bool drawn)
+        {
+            if (t == null) return c;
+            if (t.Random != null && !drawn)
+                throw new Exception($"A temperature drawn at random goes with Monte Carlo units only: {c.Name} has none to draw it for. Use a list or the corners.");
+            c.Temps = new List<double>(t.Points);
+            c.RandomTemp = t.Random;
+            c.Name += " at " + t.Text;
+            return c;
+        }
 
         // ------------------------------------------------------------------ circuit
 
@@ -83,11 +141,8 @@ namespace Spica.Core.Graph
 
         // ------------------------------------------------------------------ analyses
 
-        static void Nominal(BlockContext ctx)
-        {
-            var t = Temps(ctx.Block.Get("Temperature"));
-            ctx.Out("conditions", new List<Condition> { new Condition { Name = "Nominal" + TempText(t), Kind = RunKind.Nominal, Temps = t } });
-        }
+        static void Nominal(BlockContext ctx) =>
+            ctx.Out("conditions", new List<Condition> { At(new Condition { Name = "Nominal", Kind = RunKind.Nominal }, TempIn(ctx), false) });
 
         static void MonteCarlo(BlockContext ctx)
         {
@@ -96,10 +151,9 @@ namespace Spica.Core.Graph
             if (!(runs >= 1) || runs > 10_000_000 || runs != Math.Floor(runs)) throw new Exception("Runs must be a whole number from 1 to 10,000,000.");
             double seed = Num(b.Get("Seed"), 0);
             if (!(seed >= 0) || seed > uint.MaxValue || seed != Math.Floor(seed)) throw new Exception("The seed must be a whole number, 0 or more (0 = a new one each time).");
-            var t = Temps(b.Get("Temperature"));
             ctx.Out("conditions", new List<Condition>
             {
-                new Condition { Name = $"Monte Carlo {runs:0}" + TempText(t), Kind = RunKind.MonteCarlo, Runs = (int)runs, Seed = (uint)seed, Paired = b.Get("Paired") == "1", Temps = t },
+                At(new Condition { Name = $"Monte Carlo {runs:0}", Kind = RunKind.MonteCarlo, Runs = (int)runs, Seed = (uint)seed, Paired = b.Get("Paired") == "1" }, TempIn(ctx), true),
             });
         }
 
@@ -107,8 +161,7 @@ namespace Spica.Core.Graph
         {
             double k = Num(ctx.Block.Get("Sigma"), 3);
             if (!(k > 0) || k > 10) throw new Exception("Sigma must be above 0 and at most 10.");
-            var t = Temps(ctx.Block.Get("Temperature"));
-            ctx.Out("conditions", new List<Condition> { new Condition { Name = "Worst Case" + TempText(t), Kind = RunKind.WorstCase, Sigma = k, Temps = t } });
+            ctx.Out("conditions", new List<Condition> { At(new Condition { Name = "Worst Case", Kind = RunKind.WorstCase, Sigma = k }, TempIn(ctx), false) });
         }
 
         // ------------------------------------------------------------------ simulation
@@ -169,6 +222,7 @@ namespace Spica.Core.Graph
                         Netlist = c.Netlist,
                         Kind = cond.Kind, Runs = cond.Runs, Seed = cond.Seed, Paired = cond.Paired, Sigma = cond.Sigma,
                         Temps = cond.Temps.Count > 0 ? new List<double>(cond.Temps) : null,
+                        RandomTemp = cond.RandomTemp,
                         Save = save.Count > 0 ? save : null,
                     };
                     pending++;

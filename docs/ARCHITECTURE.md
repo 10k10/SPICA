@@ -13,20 +13,24 @@ Results tabs are views common to every study.
 | Wire type | Carries | Producer |
 |---|---|---|
 | **Circuit** | a schematic and its netlist | Schematic |
+| **Temperature** | the temperatures an analysis runs at: fixed points, or one drawn per unit | Temperature |
 | **Conditions** | analyses: how the tolerances are set (nominal, N Monte Carlo units, worst-case edges) and at which temperatures | Nominal, Monte Carlo, Worst Case |
 
 A wire only joins ports of the same type, and a graph cannot loop. An input takes one wire unless it says it
-takes several (Simulate's analyses).
+takes several (Simulate's conditions), and must be wired unless it is optional (an analysis's temperature: none
+wired, the schematic's own). Ports are shown by their type, inputs and outputs alike.
 
 | Block | Ports | Properties |
 |---|---|---|
 | Schematic | → Circuit | File (empty: the project's schematic) |
-| Nominal | → Conditions | Temperature |
-| Monte Carlo | → Conditions | Runs, Seed, Paired, Temperature |
-| Worst Case | → Conditions | Sigma, Temperature |
+| Temperature | → Temperature | Mode (List, Corners, Random), Distribution (Uniform, Normal), Points, Min, Nominal, Max, Sigma |
+| Nominal | Temperature (optional) → Conditions | |
+| Monte Carlo | Temperature (optional) → Conditions | Runs, Seed, Paired |
+| Worst Case | Temperature (optional) → Conditions | Sigma |
 | Simulate | Circuit + Conditions (several) → (results) | Save |
 
-Simulate turns each (circuit, analysis) into one campaign in the queue. Its results (the campaign folders) go to
+A temperature drawn at random goes with Monte Carlo units only (each unit at its own); fixed temperatures cross
+with any analysis (every unit at each). Simulate turns each (circuit, analysis) into one campaign in the queue. Its results (the campaign folders) go to
 the Results tab.
 
 ## 2. Principles
@@ -53,6 +57,7 @@ Schematic=holdup.asc
 [Study holdup]
 Wire=1.circuit -> 3.circuit
 Wire=2.conditions -> 3.conditions
+Wire=4.temperature -> 2.temperature
 [Block 1]
 Kind=Schematic
 At=40,40
@@ -60,17 +65,22 @@ File=holdup.asc
 [Block 2]
 Kind=Nominal
 At=40,170
-Temperature=25; 85
 [Block 3]
 Kind=Simulate
 At=320,100
 Save=
+[Block 4]
+Kind=Temperature
+At=-200,170
+Mode=List
+Points=25; 85
 ```
 
 After the studies, a `[Results <study>]` section keeps each study's last run and its view: `Ended`, one `Set=label|
 reused|folder` per campaign (relative to the project when beside it), `Pane=trace|trace...` per pane, `Runs`.
 
-`Kind` and `At` are the block's own keys; every other key is a property. A property may hold several lines
+`Kind` and `At` are the block's own keys; every other key is a property. A temperature typed into an analysis
+(before the Temperature block) is turned into a Temperature block wired into it when the project opens. A property may hold several lines
 (`\n`). A project of an older version opens: its schematic and its studies are read, its other sections are
 skipped, and a block of a kind this version does not have stays in the study, marked unknown, until removed.
 

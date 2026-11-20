@@ -130,6 +130,7 @@ namespace Spica.Core
                     key.Equals("Schematic", StringComparison.OrdinalIgnoreCase))
                     p.Schematic = Absolute(path, val);
             }
+            foreach (var st in p.Studies) st.Migrate();
             p.Dirty = false;
             return p;
         }

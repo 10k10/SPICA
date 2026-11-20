@@ -83,6 +83,26 @@ namespace Spica.UI
             return bmp;
         }
 
+        /// <summary>A thermometer (the Temperature block).</summary>
+        public static Image Thermometer()
+        {
+            var bmp = New16(out var g);
+            using (g)
+            {
+                var red = Color.FromArgb(200, 30, 20);
+                using (var glass = new SolidBrush(Color.White)) { g.FillRectangle(glass, 6, 1.5f, 4, 9); g.FillEllipse(glass, 4, 9, 8, 6.5f); }
+                using (var mercury = new SolidBrush(red)) { g.FillRectangle(mercury, 7.2f, 5, 1.6f, 6); g.FillEllipse(mercury, 5.3f, 10.2f, 5.4f, 4.2f); }
+                using (var edge = new Pen(Color.FromArgb(64, 64, 64), 1f))
+                {
+                    g.DrawArc(edge, 6, 0.5f, 4, 3, 180, 180);
+                    g.DrawLine(edge, 6, 2, 6, 9.6f); g.DrawLine(edge, 10, 2, 10, 9.6f);
+                    g.DrawArc(edge, 4, 9, 8, 6.5f, -55, 290);
+                }
+                using (var tick = new Pen(Color.FromArgb(64, 64, 64), 1f)) for (int y = 3; y <= 8; y += 2) g.DrawLine(tick, 10.5f, y, 12.5f, y);
+            }
+            return bmp;
+        }
+
         /// <summary>A grey ring: set up, not run yet.</summary>
         public static Image Ring()
         {

@@ -120,7 +120,7 @@ namespace Spica.UI
                 Dock = DockStyle.Bottom, Height = 20, ForeColor = Win98.Shadow, BackColor = Win98.Face, UseMnemonic = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true,
                 // the wire colours take the right end
                 Padding = new Padding(0, 0, StudyCanvas.TypeColor.Sum(kv => 18 + TextRenderer.MeasureText(kv.Key.ToString(), Win98.Font).Width) + 16, 0),
-                Text = "Click a block to set it up (red: something missing).  Drag an output to an input of its colour.  Right-click a port for a block that fits.  Space: fit.  Del: remove.",
+                Text = "Click a block to set it up (red: something missing).  Drag an output to an input of its colour (hollow: optional).  Right-click a port for a block that fits.  Space: fit.  Del: remove.",
             };
             hint.Paint += (s, e) =>
             {
@@ -168,7 +168,10 @@ namespace Spica.UI
         }
 
         static string Types(List<PortSpec> ports) =>
-            ports.Count == 0 ? "nothing" : string.Join(", ", ports.Select(p => p.Type.ToString() + (p.Many ? " (several)" : "")).Distinct());
+            ports.Count == 0 ? "nothing" : string.Join(", ", ports.Select(PortWords).Distinct());
+
+        /// <summary>A port in words: its type, and whether it takes several wires or may stay empty.</summary>
+        static string PortWords(PortSpec p) => p.Type + (p.Many ? " (several)" : "") + (p.Optional ? " (optional)" : "");
 
         void ShowBlockInfo(BlockKind k)
         {
@@ -266,7 +269,7 @@ namespace Spica.UI
 
         static readonly (string Title, BlockFamily Family)[] ModelGroups =
         {
-            ("Circuit", BlockFamily.Circuit), ("Analyses", BlockFamily.Analysis), ("Simulation", BlockFamily.Simulation),
+            ("Circuit", BlockFamily.Circuit), ("Conditions", BlockFamily.Conditions), ("Simulation", BlockFamily.Simulation),
         };
 
         /// <summary>A block's state in the tree: missing something, changed since it ran, done, or not run yet.</summary>
@@ -403,20 +406,22 @@ namespace Spica.UI
                     if (file.Length == 0) list.Add("no schematic: choose the .asc (File)");
                     else if (!File.Exists(file)) list.Add("the .asc is not there: " + file);
                     break;
+                case BlockKind.Temperature:
+                    Check(() => StudyExecutors.ReadTemperature(b));
+                    break;
                 case BlockKind.Nominal:
-                    Check(() => StudyExecutors.Temps(b.Get("Temperature")));
+                    if (TempOf(st, b)?.Random != null) list.Add(DrawnNeedsUnits);
                     break;
                 case BlockKind.MonteCarlo:
                     double runs = StudyExecutors.Num(b.Get("Runs"));
                     if (!(runs >= 1) || runs != Math.Floor(runs) || runs > 10_000_000) list.Add("enter the number of runs (a whole number, 1 or more)");
                     double seed = StudyExecutors.Num(b.Get("Seed"), 0);
                     if (!(seed >= 0) || seed != Math.Floor(seed) || seed > uint.MaxValue) list.Add("the seed must be a whole number, 0 or more");
-                    Check(() => StudyExecutors.Temps(b.Get("Temperature")));
                     break;
                 case BlockKind.WorstCase:
                     double k = StudyExecutors.Num(b.Get("Sigma"), 3);
                     if (!(k > 0) || k > 10) list.Add("sigma must be above 0 and at most 10");
-                    Check(() => StudyExecutors.Temps(b.Get("Temperature")));
+                    if (TempOf(st, b)?.Random != null) list.Add(DrawnNeedsUnits);
                     if (nl != null)
                     {
                         int n = ToleranceSites(nl);
@@ -435,25 +440,47 @@ namespace Spica.UI
             return list;
         }
 
+        const string DrawnNeedsUnits = "a temperature drawn at random goes with Monte Carlo units only: wire a list or the corners into it";
+
+        /// <summary>The temperatures wired into an analysis, as its Temperature block reads now (null: none wired, or not set up).</summary>
+        static TempSpec TempOf(Study st, Block b)
+        {
+            var tb = st?.Upstream(b, "temperature").FirstOrDefault();
+            if (tb == null) return null;
+            try { return StudyExecutors.ReadTemperature(tb); } catch { return null; }
+        }
+
         static List<string> SaveList(Block b) => b.Get("Save").Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
 
         // ------------------------------------------------------------------ captions
 
+        /// <summary>The line under a block's title, alike for all: what it is set to, then how many runs it makes.</summary>
         string BlockCaption(Block b)
         {
             string P(string k) => b.Get(k).Trim();
-            string At() => P("Temperature").Length > 0 ? ", " + P("Temperature") + " °C" : "";
+            string Runs(long n) => $"{n:N0} run{(n == 1 ? "" : "s")}";
+            var st = CurrentStudy;
+            var t = TempOf(st, b);
+            int k = t?.Count ?? 1;
             switch (b.Kind)
             {
                 case BlockKind.Schematic:
                     string file = FileOf(b);
                     return file.Length > 0 ? Path.GetFileName(file) : "no file chosen";
-                case BlockKind.Nominal: return "tolerances nominal" + At();
-                case BlockKind.MonteCarlo: return $"{P("Runs")} runs" + (P("Paired") == "1" ? ", paired" : "") + At();
-                case BlockKind.WorstCase: return $"tolerance edges, ±{(P("Sigma").Length > 0 ? P("Sigma") : "3")}σ" + At();
+                case BlockKind.Temperature:
+                    try { return StudyExecutors.ReadTemperature(b).Text; } catch { return "not set up"; }
+                case BlockKind.Nominal: return "tolerances nominal · " + Runs(k);
+                case BlockKind.MonteCarlo:
+                    double n = StudyExecutors.Num(P("Runs"));
+                    return $"{P("Runs")} units" + (P("Paired") == "1" ? ", paired" : "") + (n >= 1 ? " · " + Runs((long)n * k) : "");
+                case BlockKind.WorstCase:
+                    string sigma = $"edges ±{(P("Sigma").Length > 0 ? P("Sigma") : "3")}σ";
+                    if (NetlistOf(st) is Netlist nl && ToleranceSites(nl) is int sites && sites > 0 && sites <= WorstCase.MaxCornerSites)
+                        return sigma + " · " + Runs((1L + (1L << sites)) * k);
+                    return sigma;
                 case BlockKind.Simulate:
-                    int n = SaveList(b).Count;
-                    return n == 0 ? "saves every signal" : $"saves {n} signal{(n == 1 ? "" : "s")}";
+                    int s = SaveList(b).Count;
+                    return s == 0 ? "saves every signal" : $"saves {s} signal{(s == 1 ? "" : "s")}";
                 default: return b.Spec?.Summary ?? "unknown block";
             }
         }
@@ -477,7 +504,7 @@ namespace Spica.UI
             var head = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Win98.Face };
             head.Paint += (s, e) =>
             {
-                var fam = inspected?.Spec == null ? Win98.Shadow : StudyCanvas.FamilyColor[inspected.Spec.Family];
+                var fam = inspected?.Spec == null ? Win98.Shadow : StudyCanvas.HeadColor(inspected.Spec);
                 using (var br = new SolidBrush(fam)) e.Graphics.FillRectangle(br, 2, 6, 4, head.Height - 12);
                 Win98.EtchedHLine(e.Graphics, 2, head.Width - 2, head.Height - 2);
             };
@@ -532,14 +559,21 @@ namespace Spica.UI
         /// <summary>What each setting is called in the inspector, when its key is too terse.</summary>
         static readonly Dictionary<string, string> PropLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Save"] = "Save signals", ["Sigma"] = "Sigma", ["Temperature"] = "Temperature",
+            ["Save"] = "Save signals", ["Sigma"] = "Sigma", ["Points"] = "Temperatures", ["Min"] = "Lowest", ["Max"] = "Highest",
+        };
+
+        /// <summary>Settings chosen from a list.</summary>
+        static readonly Dictionary<string, string[]> ChoiceProps = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Temperature.Mode"] = new[] { BlockKind.TempList, BlockKind.TempCorners, BlockKind.TempRandom },
+            ["Temperature.Distribution"] = new[] { BlockKind.Uniform, BlockKind.Normal },
         };
 
         /// <summary>The unit shown after a short field.</summary>
         static readonly Dictionary<string, string> PropUnits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["MonteCarlo.Runs"] = "runs", ["MonteCarlo.Seed"] = "(0 = new)", ["WorstCase.Sigma"] = "σ",
-            ["Nominal.Temperature"] = "°C", ["MonteCarlo.Temperature"] = "°C", ["WorstCase.Temperature"] = "°C",
+            ["MonteCarlo.Runs"] = "units", ["MonteCarlo.Seed"] = "(0 = new)", ["WorstCase.Sigma"] = "σ",
+            ["Temperature.Points"] = "°C", ["Temperature.Min"] = "°C", ["Temperature.Nominal"] = "°C", ["Temperature.Max"] = "°C", ["Temperature.Sigma"] = "°C (1σ)",
         };
 
         static readonly HashSet<string> BoolProps = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Paired" };
@@ -548,13 +582,15 @@ namespace Spica.UI
         static readonly Dictionary<string, string> PropHints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Schematic.File"] = "The LTspice schematic (.asc). Empty: the project's own.",
-            ["Nominal.Temperature"] = "Empty: as in the schematic. Several, separated by ;  (e.g. -55; 25; 85): one run at each.",
-            ["MonteCarlo.Runs"] = "How many units are drawn from the tolerances.",
+            ["Temperature.Mode"] = "List: the temperatures typed. Corners: the edges of a range (and its nominal). Random: one drawn for each Monte Carlo unit.",
+            ["Temperature.Distribution"] = "Uniform: any temperature of the range alike. Normal: around a mean, two thirds within ± one sigma.",
+            ["Temperature.Points"] = "Separated by ;  (e.g. -55; 25; 85): every unit runs at each.",
+            ["Temperature.Corners.Nominal"] = "Between the two. Empty: the edges only.",
+            ["Temperature.Random.Nominal"] = "The mean of the temperatures drawn.",
+            ["MonteCarlo.Runs"] = "How many units are drawn from the tolerances. Each runs at every temperature wired in (or at its own, drawn).",
             ["MonteCarlo.Seed"] = "0: new units every time. A number: the same units again.",
             ["MonteCarlo.Paired"] = "SPICA draws the random values itself (mc(), gauss(), flat()): the same units at every temperature, the same again with the same seed. Cleared: LTspice draws them.",
-            ["MonteCarlo.Temperature"] = "Empty: as in the schematic. Several, separated by ;  (e.g. -55; 25; 85): every run at each.",
             ["WorstCase.Sigma"] = "Gaussian tolerances are pushed to ± this many sigma; flat ones to their limits.",
-            ["WorstCase.Temperature"] = "Empty: as in the schematic. Several, separated by ;  (e.g. -55; 25; 85): every combination at each.",
             ["Simulate.Save"] = "The signals kept in the .raw files, to plot on the Results tab. The ones the schematic's .meas read are always kept. None other ticked: every signal (larger files).",
         };
 
@@ -590,12 +626,17 @@ namespace Spica.UI
             }
             void Hint(string key, bool underField)
             {
-                if (!PropHints.TryGetValue(b.Kind + "." + key, out var h)) return;
+                // a Temperature block's hint may be its mode's own
+                if (!PropHints.TryGetValue(b.Kind + "." + b.Get("Mode") + "." + key, out var h) && !PropHints.TryGetValue(b.Kind + "." + key, out h)) return;
                 Text(h, null, Win98.Shadow, underField ? LW : 0);
                 y += 4;
             }
-            void RowLabel(string key) =>
-                host.Controls.Add(new Label { Text = (PropLabels.TryGetValue(key, out var n) ? n : key) + ":", Location = new Point(6, y + 3), Width = LW - 4, AutoEllipsis = true, UseMnemonic = false });
+            void RowLabel(string key)
+            {
+                string name = PropLabels.TryGetValue(key, out var n) ? n : key;
+                if (b.Kind == BlockKind.Temperature && key == "Nominal" && b.Get("Mode").Equals(BlockKind.TempRandom, StringComparison.OrdinalIgnoreCase)) name = "Mean";
+                host.Controls.Add(new Label { Text = name + ":", Location = new Point(6, y + 3), Width = LW - 4, AutoEllipsis = true, UseMnemonic = false });
+            }
 
             var k = b.Spec;
             if (k == null) Text($"SPICA {AppVersion} has no block \"{b.Kind}\" (a project from another version): remove it (Del).", null, Color.FromArgb(160, 0, 0));
@@ -613,6 +654,21 @@ namespace Spica.UI
                 int index = idx;
                 string key = b.Props[idx].Key, val = b.Props[idx].Value, kk = b.Kind + "." + key;
                 void SetVal(string v) { b.Props[index] = new KeyValuePair<string, string>(key, v ?? ""); inspectorChanged(); }
+                if (b.Kind == BlockKind.Temperature && !BlockKind.TempUses(b, key)) continue;
+
+                if (ChoiceProps.TryGetValue(kk, out var options))
+                {
+                    // a choice: the fields shown follow it
+                    RowLabel(key);
+                    var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Win98.Font, Location = new Point(fx, y), Width = 110 };
+                    cb.Items.AddRange(options);
+                    cb.SelectedIndex = Math.Max(0, Array.FindIndex(options, o => o.Equals(val, StringComparison.OrdinalIgnoreCase)));
+                    cb.SelectedIndexChanged += (s, e) => { SetVal((string)cb.SelectedItem); host.BeginInvoke(rebuild); };
+                    host.Controls.Add(cb);
+                    y += 26;
+                    Hint(key, true);
+                    continue;
+                }
 
                 if (BoolProps.Contains(key))
                 {
@@ -650,7 +706,7 @@ namespace Spica.UI
 
                 RowLabel(key);
                 bool browse = kk == "Schematic.File";
-                int fw = PropUnits.ContainsKey(kk) ? (key == "Temperature" ? 150 : 80) : fwFull - (browse ? 28 : 0);
+                int fw = PropUnits.ContainsKey(kk) ? (kk == "Temperature.Points" ? 150 : 80) : fwFull - (browse ? 28 : 0);
                 var tf = new Win98TextField { Location = new Point(fx, y), Width = fw, Text = val };
                 tf.Box.TextChanged += (s, e) => SetVal(tf.Text);
                 host.Controls.Add(tf);
@@ -684,15 +740,17 @@ namespace Spica.UI
             if (k != null && (k.Inputs.Count > 0 || k.Outputs.Count > 0))
             {
                 Section("Wiring");
+                // each port by its type, as on the block: where it comes from, where it goes
                 foreach (var i in k.Inputs)
                 {
                     var from = st.Upstream(b, i.Name).Select(x => x.Spec?.Title ?? x.Kind).ToList();
-                    Text($"in   {i.Name} ({i.Type}): " + (from.Count == 0 ? "not wired" : string.Join(", ", from)), null, from.Count == 0 ? Color.FromArgb(160, 0, 0) : Color.Black);
+                    string none = i.Optional ? (i.Type == PortType.Temperature ? "none (the schematic's own)" : "none") : "not wired";
+                    Text($"{PortWords(i)} from: " + (from.Count == 0 ? none : string.Join(", ", from)), null, from.Count == 0 && !i.Optional ? Color.FromArgb(160, 0, 0) : Color.Black);
                 }
                 foreach (var o in k.Outputs)
                 {
                     var to = st.Wires.Where(x => x.From == b.Id && x.FromPort == o.Name).Select(x => st[x.To]).Where(x => x != null).Select(x => x.Spec?.Title ?? x.Kind).ToList();
-                    Text($"out  {o.Name} ({o.Type}): " + (to.Count == 0 ? "-" : string.Join(", ", to)));
+                    Text($"{PortWords(o)} to: " + (to.Count == 0 ? "nothing yet" : string.Join(", ", to)));
                 }
             }
             host.Controls.Add(new Label { Location = new Point(6, y), Size = new Size(1, 10) });

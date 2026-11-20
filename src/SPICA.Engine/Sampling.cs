@@ -185,6 +185,9 @@ namespace Spica.Core
             return ((h >> 11) + 0.5) * (1.0 / 9007199254740992.0);
         }
 
+        /// <summary>Stream used for the per-run random temperature (never collides with a site index).</summary>
+        public const ulong TempStream = 0x7E3D_0000_0001UL;
+
         static ulong Mix(ulong z)
         {
             z += 0x9E3779B97F4A7C15UL;

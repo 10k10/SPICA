@@ -219,7 +219,7 @@ namespace Spica.Core
         {
             var sb = new StringBuilder();
             bool ended = false;
-            bool ownTemp = c.FixedTemp.HasValue;
+            bool ownTemp = c.FixedTemp.HasValue || c.TempOfRun != null;
             foreach (var line in c.Mc != null ? c.Mc.Lines : Lines)
             {
                 var t = line.TrimStart();
@@ -278,6 +278,12 @@ namespace Spica.Core
             sb.Append($".options threads={Math.Max(1, c.Threads)}\r\n");
             c.Mc?.AppendParams(sb, c.Seed, c.First, c.Last);
             if (c.FixedTemp.HasValue) sb.Append(".temp ").Append(c.FixedTemp.Value.ToString("R", inv)).Append("\r\n");
+            else if (c.TempOfRun != null)
+            {
+                // a temperature for each run: a table on the run number, read by .temp
+                McPlan.AppendTable(sb, "spica_temp", c.First, c.Last, c.TempOfRun);
+                sb.Append(".temp {spica_temp}\r\n");
+            }
             if (c.Save != null && c.Save.Count > 0)
             {
                 for (int i = 0; i < c.Save.Count; i += 10)
@@ -336,6 +342,7 @@ namespace Spica.Core
         public IList<string> Save;            // null = no .save (LTspice saves everything)
         public string BaseDir;
         public double? FixedTemp;             // temperature corner of this chunk
+        public Func<int, double> TempOfRun;   // or a temperature for each run (drawn)
         public McPlan Mc;                     // SPICA's sample generator (null = LTspice's own mc())
         public uint Seed;
     }

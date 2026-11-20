@@ -1,8 +1,8 @@
 # SPICA — Simulation Platform for Investigation, Compliance and Analysis
 
 Portable Windows app (C# / .NET Framework 4.8 / WinForms, Windows 98 look) for studying a circuit on LTspice.
-A study is drawn as a graph of blocks: the schematic, the analyses (nominal, Monte Carlo, worst case), and the
-simulation that runs them. SPICA runs it as many parallel LTspice batch instances, tuned to the machine, and shows
+A study is drawn as a graph of blocks: the schematic, the conditions (the temperature; nominal, Monte Carlo or
+worst-case tolerances), and the simulation that runs them. SPICA runs it as many parallel LTspice batch instances, tuned to the machine, and shows
 the waveforms of every run.
 
 `dist/SPICA-<version>.exe` is the whole app. Copy it anywhere; its settings (`SPICA.ini`) and the run times it
@@ -28,6 +28,8 @@ one piece at a time.
   - Drag the empty canvas to pan, use the wheel to zoom, press Space to fit the study.
   - Drag from an output to an input of the same colour to wire them; a wire of the wrong type, or one that would
     make a loop, is refused with the reason. Right-click a port to add a block that fits it, already wired.
+  - Ports are named by what they carry, inputs and outputs alike; "…" takes several wires, a hollow port may stay
+    empty. Under each block's title: what it is set to, and how many runs it makes.
   - Del removes the block or wire selected.
 - **Right:** while a block is selected, its settings. Changes apply at once.
 
@@ -38,13 +40,22 @@ and runs nothing.
 | Family | Block | What it does |
 |---|---|---|
 | Circuit | **Schematic** | An `.asc`, simulated as drawn. Empty: the project's own schematic. |
-| Analysis | **Nominal** | One run, every tolerance at its nominal value. |
+| Conditions | **Temperature** | The temperatures an analysis runs at. *List*: the ones typed (`-55; 25; 85`). *Corners*: the edges of a range and its nominal (empty: the edges only). *Random*: one drawn for each Monte Carlo unit, uniform over a range or normal (mean, sigma). |
+| | **Nominal** | One unit, every tolerance at its nominal value. |
 | | **Monte Carlo** | N units drawn from the tolerances (runs, seed, paired). |
-| | **Worst Case** | The nominal unit, then every combination of the tolerance edges: 1 + 2^n runs. |
-| Simulation | **Simulate** | Runs the circuit under every analysis wired into it, one campaign each. Save: the signals kept in the `.raw`; the ones the schematic's `.meas` read are always kept (ticked, marked `(.meas)`); none other ticked: all. |
+| | **Worst Case** | The nominal unit, then every combination of the tolerance edges: 1 + 2^n units. |
+| Simulation | **Simulate** | Runs the circuit under every condition wired into it, one campaign each. Save: the signals kept in the `.raw`; the ones the schematic's `.meas` read are always kept (ticked, marked `(.meas)`); none other ticked: all. |
 
-Every analysis has a **Temperature**: empty for the schematic's own, one value, or several (`-55; 25; 85`):
-every run at each.
+The tolerance blocks take a **Temperature** (optional: none wired, the schematic's own). How the two combine:
+
+| Tolerances | × fixed temperatures (List, Corners: k) | × drawn (Random) |
+|---|---|---|
+| Nominal | k runs | refused: no units to draw it for |
+| Monte Carlo of N | N × k runs, the same units at each (paired) | N runs, each unit at its own temperature |
+| Worst Case | (1 + 2^n) × k runs: the temperature is one more edge | refused: use Corners |
+
+One Temperature block may feed several analyses. A project of an older version, with the temperatures typed into
+the analyses, opens with a Temperature block wired into each.
 
 Running a study again reuses what already ran: a campaign whose netlist and analysis did not change comes from
 the results on disk at once. Change a block and only what it feeds runs again (the tree marks it ⚡).
@@ -69,7 +80,8 @@ waveforms, in the manner of LTspice:
 - every trace has its unit, from the dimensions of what it reads, as in LTspice: V(out)*I(R1) is in W,
   V(out)/I(R1) in Ω, V(out)*V(out) in V², db() in dB, a sum of different units in none. A pane with two units
   gets a second axis on the right, with its own scale; with more, one axis and no unit;
-- several temperatures of an analysis are drawn in their own colours;
+- several temperatures of an analysis are drawn in their own colours; temperatures drawn per run are not: one run
+  shown has its temperature beside its name;
 - right-click a pane, Style: Pale Yellow (the default), Engineering, Paper, Amber, Recorder, Sepia, Graphite, Slate, LTspice,
   Oscilloscope or Blueprint (kept for next time).
 
@@ -113,7 +125,8 @@ Tools > Options holds what belongs to this PC:
   ± sigma). **Monte Carlo, paired**: SPICA draws the values itself, as a pure function of (seed, tolerance, run),
   so run 37 is the same unit at every temperature and the campaign is reproducible from its seed. Not paired:
   LTspice's own `mc()`.
-- A temperature is set per chunk with `.temp T`.
+- A fixed temperature is set per chunk with `.temp T`; a drawn one with `.temp {spica_temp}` and a table of the
+  temperature of each run, drawn like the tolerances (a pure function of seed and run, reproducible).
 - The scheduler: N instances = physical cores (or the manual value), fewer if free RAM is short; each first
   measures the run time, then chunks of about 2 minutes, never more than an equal share of what is left. The run
   time is remembered per machine and circuit, so the next campaign plans from the start.

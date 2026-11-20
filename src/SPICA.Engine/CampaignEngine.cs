@@ -22,6 +22,7 @@ namespace Spica.Core
         public RunScheduler.Config? Manual;
 
         public List<double> Corners;          // fixed temperatures: every run is simulated at each (null = one pass)
+        public TempDraw RandomTemp;           // or one temperature drawn for each run (Monte Carlo)
         public McPlan Mc;                     // SPICA's paired sample generator (null = LTspice's mc())
         public uint Seed;
         public string Analysis = "";          // what is run, in a few words (logged, and in the queue)
@@ -29,8 +30,30 @@ namespace Spica.Core
         public int CornerCount => Corners != null && Corners.Count > 0 ? Corners.Count : 1;
         public int Jobs => Runs * CornerCount;
 
-        /// <summary>The temperature of a corner (NaN when the schematic's own temperature is used).</summary>
-        public double TempOf(int corner) => Corners != null && Corners.Count > 0 ? Corners[corner] : double.NaN;
+        /// <summary>The temperature of a run at a corner (NaN when the schematic's own temperature is used).</summary>
+        public double TempOf(int run, int corner) =>
+            Corners != null && Corners.Count > 0 ? Corners[corner] : RandomTemp != null ? RandomTemp.Of(Seed, run) : double.NaN;
+    }
+
+    /// <summary>A temperature drawn for each run: uniform between A and B, or normal of mean A and deviation B (°C).</summary>
+    public sealed class TempDraw
+    {
+        public bool Normal;
+        public double A, B;
+
+        /// <summary>The temperature of a run: a pure function of the seed and the run, like the tolerances SPICA draws.</summary>
+        public double Of(uint seed, int run)
+        {
+            double u = McPlan.Uniform01(seed, McPlan.TempStream, run);
+            double t = Normal ? A + B * Stats.NormalInv(u) : A + (B - A) * u;
+            return Math.Round(Math.Max(-273, Math.Min(1000, t)), 3);
+        }
+
+        public string Key => string.Join(";", Normal ? "N" : "U", A.ToString("R", CultureInfo.InvariantCulture), B.ToString("R", CultureInfo.InvariantCulture));
+
+        public override string ToString() =>
+            Normal ? $"normal, {A.ToString("0.###", CultureInfo.InvariantCulture)} ± {B.ToString("0.###", CultureInfo.InvariantCulture)} °C (1σ)"
+                   : $"uniform, {A.ToString("0.###", CultureInfo.InvariantCulture)} .. {B.ToString("0.###", CultureInfo.InvariantCulture)} °C";
     }
 
     public enum RunStatus { Ok, NoData, Failed }
@@ -178,10 +201,11 @@ namespace Spica.Core
             }
             else Log("Generator: LTspice mc(), reseeded from the clock (private ini), launches staggered.");
             if (opt.Corners != null && opt.Corners.Count > 0)
-            {
                 Log("Temperature: " + string.Join(", ", opt.Corners.Select(t => t.ToString("0.###", CultureInfo.InvariantCulture))) + " °C");
+            else if (opt.RandomTemp != null)
+                Log("Temperature: drawn for each run, " + opt.RandomTemp + " (reproducible from the seed).");
+            if ((opt.Corners != null && opt.Corners.Count > 0) || opt.RandomTemp != null)
                 foreach (var t in opt.Netlist.TempLines) Log($"Replaced by SPICA's temperature: {t}");
-            }
             Log(opt.SaveSignals == null ? ".save: everything (no .save directive)"
                                         : $".save: {opt.SaveSignals.Count} signals -> {string.Join(" ", opt.SaveSignals.Take(12))}{(opt.SaveSignals.Count > 12 ? " ..." : "")}");
             foreach (var s in opt.Netlist.RemovedSteps) Log($"Removed from netlist: {s}");
@@ -519,6 +543,7 @@ namespace Spica.Core
                 First = first, Last = last, Threads = p.Threads, Save = opt.SaveSignals, BaseDir = ascDir,
                 Mc = opt.Mc, Seed = opt.Seed,
                 FixedTemp = corners ? opt.Corners[corner] : (double?)null,
+                TempOfRun = !corners && opt.RandomTemp != null ? (Func<int, double>)(r => opt.TempOf(r, 0)) : null,
             };
             File.WriteAllText(net, opt.Netlist.BuildChunk(spec), opt.Netlist.Encoding);
 
@@ -688,7 +713,7 @@ namespace Spica.Core
         RunResult NewResult(int job, int chunk)
         {
             int run = RunOf(job), corner = CornerOf(job);
-            return new RunResult { Run = run, Corner = corner, Temp = opt.TempOf(corner), Chunk = chunk, Values = new Dictionary<string, string>() };
+            return new RunResult { Run = run, Corner = corner, Temp = opt.TempOf(run, corner), Chunk = chunk, Values = new Dictionary<string, string>() };
         }
 
         string Describe(Plan p)
@@ -859,6 +884,7 @@ namespace Spica.Core
             sb.AppendLine($"Seed           : {opt.Seed}{(opt.Mc != null ? " (SPICA paired samples)" : " (LTspice mc())")}");
             if (opt.Analysis.Length > 0) sb.AppendLine($"Analysis       : {opt.Analysis}");
             if (opt.Corners != null && opt.Corners.Count > 0) sb.AppendLine("Temperature    : " + string.Join(", ", opt.Corners.Select(t => t.ToString("0.###", inv))) + " °C");
+            else if (opt.RandomTemp != null) sb.AppendLine("Temperature    : drawn for each run, " + opt.RandomTemp);
             sb.AppendLine($"Completed      : {snap.Ok} ok, {snap.NoData} no data, {snap.Failed} failed" +
                           (stopped ? $" (stopped: {snap.Done} of {snap.Total} simulations)" : ""));
             sb.AppendLine($"Wall time      : {snap.Elapsed:hh\\:mm\\:ss}");

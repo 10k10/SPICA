@@ -311,6 +311,9 @@ namespace Spica.UI
         {
             public RunSet Set;
             public ResultSet.Row Row;
+            public bool Drawn;                           // its temperature was drawn for the run (not one of a few fixed ones)
+            /// <summary>The temperature its traces are grouped by: a fixed one; none when drawn (each run has its own).</summary>
+            public double Group => Drawn ? double.NaN : Row.Temp;
             public double[] X;
             public Dictionary<string, double[]> Y = new Dictionary<string, double[]>(StringComparer.OrdinalIgnoreCase);
         }
@@ -320,7 +323,12 @@ namespace Spica.UI
         {
             var rows = s.Results.Rows.Where(r => r.Status == RunStatus.Ok).ToList();
             string pick = cbRuns.SelectedItem as string ?? "Run 1";
-            if (pick.StartsWith("All")) return rows.GroupBy(r => r.Temp).SelectMany(g => g.Take(Math.Max(1, MaxOverlay / Math.Max(1, rows.Select(r => r.Temp).Distinct().Count())))).ToList();
+            if (pick.StartsWith("All"))
+            {
+                // the first runs of each fixed temperature; with temperatures drawn, simply the first runs
+                if (!RawFile.Chunks(s.Dir).Any(c => !double.IsNaN(c.Temp))) return rows.Take(MaxOverlay).ToList();
+                return rows.GroupBy(r => r.Temp).SelectMany(g => g.Take(Math.Max(1, MaxOverlay / Math.Max(1, rows.Select(r => r.Temp).Distinct().Count())))).ToList();
+            }
             int n = int.TryParse(pick.Substring(4), out var k) ? k : 1;
             return rows.Where(r => r.Run == n).ToList();
         }
@@ -345,7 +353,7 @@ namespace Spica.UI
                         foreach (var x in g)
                         {
                             if (!steps.TryGetValue(x.r.Run - first, out var st)) continue;
-                            var tr = new Trace { Set = s, Row = x.r, X = st.X };
+                            var tr = new Trace { Set = s, Row = x.r, X = st.X, Drawn = double.IsNaN(x.c.Temp) && !double.IsNaN(x.r.Temp) };
                             for (int k = 0; k < signals.Count; k++) if (st.Y[k] != null) tr.Y[signals[k]] = st.Y[k];
                             list.Add(tr);
                         }
@@ -477,12 +485,14 @@ namespace Spica.UI
                     {
                         var mine = traces.Where(t => t.Set == sets[k]).Select(t => (t, y: Evaluate(c, t))).Where(x => x.y != null).ToList();
                         if (mine.Count == 0) { if (c.Error == null) problems.Add($"{expr} is not in the .raw of {sets[k].Label}."); continue; }
-                        bool temps = mine.Select(x => x.t.Row.Temp).Distinct().Count() > 1;
-                        foreach (var g in mine.GroupBy(x => x.t.Row.Temp))
+                        bool temps = mine.Select(x => x.t.Group).Distinct().Count() > 1;
+                        foreach (var g in mine.GroupBy(x => x.t.Group))
                         {
                             var col = Palette[colour++ % Palette.Length];
                             int n = g.Count();
-                            string label = expr + (manySets ? " · " + SetName(sets[k]) : "") + (temps ? " · " + TempText(g.Key) : "") + (n > 1 ? $" ({n} runs)" : "");
+                            // one run at a temperature drawn for it: that temperature with its name
+                            string own = n == 1 && g.First().t.Drawn ? " · " + TempText(g.First().t.Row.Temp) : "";
+                            string label = expr + (manySets ? " · " + SetName(sets[k]) : "") + (temps ? " · " + TempText(g.Key) : "") + own + (n > 1 ? $" ({n} runs)" : "");
                             bool first = true;
                             foreach (var x in g)
                             {

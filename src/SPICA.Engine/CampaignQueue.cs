@@ -84,6 +84,7 @@ namespace Spica.Core
         public bool Paired;                     // Monte Carlo with SPICA's generator: the same units at every temperature
         public double Sigma = 3;                // worst case: gaussian tolerances pushed to +/- this many sigma
         public List<double> Temps;              // null or empty = the schematic's own temperature
+        public TempDraw RandomTemp;             // or one drawn for each run (Monte Carlo only)
         public List<string> Save;               // signals to keep in the .raw; null or empty = everything
     }
 
@@ -105,6 +106,14 @@ namespace Spica.Core
             if (temps != null && temps.Count == 0) temps = null;
             int cc = temps?.Count ?? 1;
             string at = cc > 1 ? $" at {cc} temperatures" : temps != null ? $" at {temps[0].ToString("0.###", CultureInfo.InvariantCulture)} °C" : "";
+            var draw = r.RandomTemp;
+            if (draw != null)
+            {
+                if (temps != null) { error = "A temperature is either fixed or drawn, not both."; return null; }
+                if (r.Kind != RunKind.MonteCarlo) { error = "A temperature drawn at random needs Monte Carlo units to go with: use a list or the corners of the range."; return null; }
+                if (draw.Normal ? !(draw.B > 0) : !(draw.B > draw.A)) { error = draw.Normal ? "The deviation of the temperature must be above 0." : "The highest temperature must be above the lowest."; return null; }
+                at = ", temperature drawn for each: " + draw;
+            }
 
             McPlan plan = null;
             int runs;
@@ -165,6 +174,7 @@ namespace Spica.Core
                 KeepRaw = true,              // the waveforms are what the results show
                 Manual = r.Manual,
                 Corners = temps,
+                RandomTemp = draw,
                 Mc = plan,
                 Seed = seed,
                 Analysis = analysis,

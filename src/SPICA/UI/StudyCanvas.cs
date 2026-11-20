@@ -26,13 +26,21 @@ namespace Spica.UI
         public static readonly Dictionary<PortType, Color> TypeColor = new Dictionary<PortType, Color>
         {
             [PortType.Circuit] = Color.FromArgb(31, 95, 191), [PortType.Conditions] = Color.FromArgb(184, 134, 11),
+            [PortType.Temperature] = Color.FromArgb(200, 60, 40),
         };
 
         public static readonly Dictionary<BlockFamily, Color> FamilyColor = new Dictionary<BlockFamily, Color>
         {
-            [BlockFamily.Circuit] = Color.FromArgb(31, 95, 191), [BlockFamily.Analysis] = Color.FromArgb(138, 109, 0),
+            [BlockFamily.Circuit] = Color.FromArgb(31, 95, 191), [BlockFamily.Conditions] = Color.FromArgb(138, 109, 0),
             [BlockFamily.Simulation] = Color.FromArgb(0, 0, 128),
         };
+
+        /// <summary>A block's title bar: its family's colour, or its own when it makes a wire of its own (Temperature).</summary>
+        public static Color HeadColor(BlockKind k) =>
+            k == null ? Color.Gray : k.Name == BlockKind.Temperature ? Color.FromArgb(160, 40, 25) : FamilyColor[k.Family];
+
+        /// <summary>How a port is named on a block, an input or an output alike: its type, "…" when it takes several wires.</summary>
+        public static string PortText(PortSpec p) => p.Type + (p.Many ? " …" : "");
 
         /// <summary>The app's own 16 px icon for a block kind.</summary>
         public static Image KindIcon(string kind)
@@ -40,6 +48,7 @@ namespace Spica.UI
             switch (kind)
             {
                 case BlockKind.Schematic: return Win98.Icon("open16");
+                case BlockKind.Temperature: return thermometer ?? (thermometer = Glyphs.Thermometer());
                 case BlockKind.Nominal: return Win98.Icon("check16");
                 case BlockKind.MonteCarlo: return Win98.Icon("clock16");
                 case BlockKind.WorstCase: return Win98.Icon("hw16");
@@ -47,6 +56,8 @@ namespace Spica.UI
                 default: return Win98.Icon("options16");
             }
         }
+
+        static Image thermometer;
 
         const int BW = 184, Head = 19, Sub = 16, Row = 17, Pad = 4;
 
@@ -301,7 +312,7 @@ namespace Spica.UI
             bool sel = b == Selected;
             using (var sh = new SolidBrush(Color.FromArgb(128, 128, 128))) g.FillRectangle(sh, r.X + 3, r.Y + 3, r.Width, r.Height);
             using (var body = new SolidBrush(Color.FromArgb(244, 244, 244))) g.FillRectangle(body, r);
-            var headCol = k == null ? Color.Gray : FamilyColor[k.Family];
+            var headCol = HeadColor(k);
             var missing = Problems?.Invoke(b);
             bool bad = missing != null && missing.Count > 0;
             using (var hb = new SolidBrush(headCol)) g.FillRectangle(hb, r.X, r.Y, r.Width, Head);
@@ -378,20 +389,29 @@ namespace Spica.UI
                 {
                     var p = PortPoint(b, true, i);
                     var spec = k.Inputs[i];
-                    using (var fill = new SolidBrush(TypeColor[spec.Type])) g.FillEllipse(fill, p.X - 5, p.Y - 5, 10, 10);
-                    g.DrawEllipse(edge, p.X - 5, p.Y - 5, 10, 10);
-                    string label = spec.Name + (spec.Many ? "…" : "");
-                    g.DrawString(label, Win98.Font, black, new RectangleF(p.X + 8, p.Y - 7, BW - 16, Row), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
+                    DrawPort(g, p, spec, edge);
+                    g.DrawString(PortText(spec), Win98.Font, black, new RectangleF(p.X + 8, p.Y - 7, BW / 2f - 8, Row), new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
                 }
                 for (int i = 0; i < k.Outputs.Count; i++)
                 {
                     var p = PortPoint(b, false, i);
                     var spec = k.Outputs[i];
-                    using (var fill = new SolidBrush(TypeColor[spec.Type])) g.FillEllipse(fill, p.X - 5, p.Y - 5, 10, 10);
-                    g.DrawEllipse(edge, p.X - 5, p.Y - 5, 10, 10);
-                    g.DrawString(spec.Type.ToString(), Win98.Font, black, new RectangleF(p.X - BW / 2f, p.Y - 7, BW / 2f - 8, Row), right);
+                    DrawPort(g, p, spec, edge);
+                    g.DrawString(PortText(spec), Win98.Font, black, new RectangleF(p.X - BW / 2f, p.Y - 7, BW / 2f - 8, Row), right);
                 }
             }
+        }
+
+        /// <summary>A port: a dot of its type's colour; an input that may stay empty, a ring of it.</summary>
+        static void DrawPort(Graphics g, PointF p, PortSpec spec, Pen edge)
+        {
+            if (spec.Optional)
+            {
+                using (var white = new SolidBrush(Color.White)) g.FillEllipse(white, p.X - 5, p.Y - 5, 10, 10);
+                using (var ring = new Pen(TypeColor[spec.Type], 2.5f)) g.DrawEllipse(ring, p.X - 3.5f, p.Y - 3.5f, 7, 7);
+            }
+            else using (var fill = new SolidBrush(TypeColor[spec.Type])) g.FillEllipse(fill, p.X - 5, p.Y - 5, 10, 10);
+            g.DrawEllipse(edge, p.X - 5, p.Y - 5, 10, 10);
         }
 
         // ------------------------------------------------------------------ mouse and keys
